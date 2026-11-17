@@ -31,3 +31,7 @@ windows-agent/build/
 .venv/
 __pycache__/
 *.pyc
+
+# .NET Windows client build artifacts
+apps/windows-client/bin/
+apps/windows-client/obj/
