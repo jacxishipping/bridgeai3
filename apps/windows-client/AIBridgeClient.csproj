@@ -7,6 +7,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
     <UseWindowsForms>true</UseWindowsForms>
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
     <AssemblyName>AIBridgeClient</AssemblyName>
     <RootNamespace>AIBridgeClient</RootNamespace>
     <Version>0.3.0</Version>

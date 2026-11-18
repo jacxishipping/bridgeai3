@@ -44,7 +44,16 @@ DESKTOP_TOOLS = {
     "keyboard_type",
     "keyboard_press",
     "list_desktop_windows",
+    "get_active_window",
     "focus_window",
+    "maximize_window",
+    "minimize_window",
+    "restore_window",
+    "close_window",
+    "move_resize_window",
+    "invoke_element",
+    "set_element_value",
+    "focus_element",
     "get_screen_size",
     "ocr_screen",
     "click_text",
@@ -84,6 +93,78 @@ TOOL_CATALOG: dict[str, dict[str, Any]] = {
                 "timeout": {"type": "integer", "description": "Execution timeout in seconds.", "default": 60},
             },
             "required": ["command"],
+        },
+    },
+    "run_powershell": {
+        "description": "Execute a PowerShell command anywhere on the target Windows PC (requires Full PC Access).",
+        "category": "shell",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "command": {"type": "string", "description": "PowerShell script or command to run."},
+                "working_directory": {"type": "string", "description": "Optional working directory path."},
+                "timeout": {"type": "integer", "description": "Timeout in seconds.", "default": 60},
+                "device": {"type": "string", "description": "Target Windows device."},
+            },
+            "required": ["command"],
+        },
+    },
+    "list_drives": {
+        "description": "List all local drives, volume labels, and free/total storage on the Windows PC (requires Full PC Access).",
+        "category": "files",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "device": {"type": "string", "description": "Target Windows device."},
+            },
+        },
+    },
+    "list_directory": {
+        "description": "List files and folders at any path on the Windows PC when Full PC Access is allowed.",
+        "category": "files",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Absolute or environment path (e.g. C:\\\\Users, %USERPROFILE%\\\\Desktop)."},
+                "device": {"type": "string", "description": "Target Windows device."},
+            },
+        },
+    },
+    "read_pc_file": {
+        "description": "Read any accessible text file anywhere on the Windows PC (requires Full PC Access).",
+        "category": "files",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Full file path on the PC."},
+                "device": {"type": "string", "description": "Target Windows device."},
+            },
+            "required": ["path"],
+        },
+    },
+    "write_pc_file": {
+        "description": "Write or update any file anywhere on the Windows PC (requires Full PC Access).",
+        "category": "files",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Full file path on the PC."},
+                "content": {"type": "string", "description": "Text content to write."},
+                "device": {"type": "string", "description": "Target Windows device."},
+            },
+            "required": ["path", "content"],
+        },
+    },
+    "kill_process": {
+        "description": "Terminate a running process on the Windows PC by PID or process name (requires Full PC Access).",
+        "category": "system",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "pid": {"type": "integer", "description": "Process ID to terminate."},
+                "name": {"type": "string", "description": "Process name (e.g. 'notepad')."},
+                "device": {"type": "string", "description": "Target Windows device."},
+            },
         },
     },
     "take_screenshot": {
@@ -328,6 +409,121 @@ TOOL_CATALOG: dict[str, dict[str, Any]] = {
                 "device": {"type": "string", "description": "Target device."},
             },
             "required": ["title"],
+        },
+    },
+    "get_active_window": {
+        "description": "Get details (handle, title, process, bounds) of the currently active foreground window.",
+        "category": "desktop",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "device": {"type": "string", "description": "Target device."},
+            },
+        },
+    },
+    "maximize_window": {
+        "description": "Maximize an open application window by title substring or handle.",
+        "category": "desktop",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "title": {"type": "string", "description": "Window title substring."},
+                "device": {"type": "string", "description": "Target device."},
+            },
+            "required": ["title"],
+        },
+    },
+    "minimize_window": {
+        "description": "Minimize an open application window by title substring or handle.",
+        "category": "desktop",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "title": {"type": "string", "description": "Window title substring."},
+                "device": {"type": "string", "description": "Target device."},
+            },
+            "required": ["title"],
+        },
+    },
+    "restore_window": {
+        "description": "Restore a minimized or maximized window to normal state.",
+        "category": "desktop",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "title": {"type": "string", "description": "Window title substring."},
+                "device": {"type": "string", "description": "Target device."},
+            },
+            "required": ["title"],
+        },
+    },
+    "close_window": {
+        "description": "Send WM_CLOSE to close a window cleanly by title substring or handle.",
+        "category": "desktop",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "title": {"type": "string", "description": "Window title substring."},
+                "device": {"type": "string", "description": "Target device."},
+            },
+            "required": ["title"],
+        },
+    },
+    "move_resize_window": {
+        "description": "Move and/or resize a desktop window cleanly via SetWindowPos.",
+        "category": "desktop",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "title": {"type": "string", "description": "Window title substring."},
+                "x": {"type": "integer", "description": "Optional target X position."},
+                "y": {"type": "integer", "description": "Optional target Y position."},
+                "width": {"type": "integer", "description": "Optional target width."},
+                "height": {"type": "integer", "description": "Optional target height."},
+                "device": {"type": "string", "description": "Target device."},
+            },
+            "required": ["title"],
+        },
+    },
+    "invoke_element": {
+        "description": "Invoke, toggle, select, or expand a native Windows UI Automation control by name/automation_id.",
+        "category": "desktop",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "Control name or AutomationId."},
+                "window": {"type": "string", "description": "Optional target window title."},
+                "device": {"type": "string", "description": "Target device."},
+            },
+            "required": ["name"],
+        },
+    },
+    "set_element_value": {
+        "description": "Set text or input value directly on a native Windows UI Automation control by name/automation_id.",
+        "category": "desktop",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "Input field name or AutomationId."},
+                "value": {"type": "string", "description": "Text/value to enter."},
+                "submit": {"type": "boolean", "description": "Press Enter after setting value.", "default": False},
+                "window": {"type": "string", "description": "Optional target window title."},
+                "device": {"type": "string", "description": "Target device."},
+            },
+            "required": ["name", "value"],
+        },
+    },
+    "focus_element": {
+        "description": "Set keyboard focus onto a specific Windows UI element.",
+        "category": "desktop",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "Element name or AutomationId."},
+                "window": {"type": "string", "description": "Optional target window title."},
+                "device": {"type": "string", "description": "Target device."},
+            },
+            "required": ["name"],
         },
     },
     "get_screen_size": {

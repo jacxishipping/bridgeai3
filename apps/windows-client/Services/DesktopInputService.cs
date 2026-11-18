@@ -19,7 +19,10 @@ public static class DesktopInputService
     private const uint MouseEventLeftUp = 0x0004;
     private const uint MouseEventRightDown = 0x0008;
     private const uint MouseEventRightUp = 0x0010;
+    private const uint MouseEventMiddleDown = 0x0020;
+    private const uint MouseEventMiddleUp = 0x0040;
     private const uint MouseEventWheel = 0x0800;
+    private const uint MouseEventHWheel = 0x1000;
     private const uint MouseEventVirtualDesk = 0x4000;
     private const uint MouseEventAbsolute = 0x8000;
 
@@ -89,12 +92,18 @@ public static class DesktopInputService
         SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<Input>());
     }
 
+    private static (uint Down, uint Up) ResolveMouseButtons(string button) =>
+        button.Trim().ToLowerInvariant() switch
+        {
+            "right" or "r" => (MouseEventRightDown, MouseEventRightUp),
+            "middle" or "m" => (MouseEventMiddleDown, MouseEventMiddleUp),
+            _ => (MouseEventLeftDown, MouseEventLeftUp),
+        };
+
     public static void DragMouse(int startX, int startY, int endX, int endY, string button = "left", int steps = 12)
     {
         MoveMouse(startX, startY);
-        var (down, up) = button.Equals("right", StringComparison.OrdinalIgnoreCase)
-            ? (MouseEventRightDown, MouseEventRightUp)
-            : (MouseEventLeftDown, MouseEventLeftUp);
+        var (down, up) = ResolveMouseButtons(button);
 
         SendInput(1, new[] { new Input { Type = InputMouse, U = new InputUnion { Mi = new MouseInput { DwFlags = down } } } }, Marshal.SizeOf<Input>());
         steps = Math.Clamp(steps, 1, 60);
@@ -111,9 +120,7 @@ public static class DesktopInputService
     public static void ClickMouse(int x, int y, string button = "left", bool doubleClick = false)
     {
         MoveMouse(x, y);
-        var (down, up) = button.Equals("right", StringComparison.OrdinalIgnoreCase)
-            ? (MouseEventRightDown, MouseEventRightUp)
-            : (MouseEventLeftDown, MouseEventLeftUp);
+        var (down, up) = ResolveMouseButtons(button);
 
         int count = doubleClick ? 2 : 1;
         for (int i = 0; i < count; i++)
@@ -127,8 +134,12 @@ public static class DesktopInputService
         }
     }
 
-    public static void ScrollMouse(int delta)
+    public static void ScrollMouse(int delta, int? x = null, int? y = null, bool horizontal = false)
     {
+        if (x.HasValue && y.HasValue)
+        {
+            MoveMouse(x.Value, y.Value);
+        }
         var inputs = new[]
         {
             new Input
@@ -139,7 +150,7 @@ public static class DesktopInputService
                     Mi = new MouseInput
                     {
                         MouseData = unchecked((uint)delta),
-                        DwFlags = MouseEventWheel,
+                        DwFlags = horizontal ? MouseEventHWheel : MouseEventWheel,
                     },
                 },
             },
@@ -151,28 +162,48 @@ public static class DesktopInputService
     {
         if (string.IsNullOrEmpty(text)) return;
 
-        var inputs = new Input[text.Length * 2];
+        var inputs = new List<Input>(text.Length * 2);
         for (int i = 0; i < text.Length; i++)
         {
-            ushort ch = text[i];
-            inputs[i * 2] = new Input
+            char ch = text[i];
+            if (ch == '\r')
+            {
+                if (i + 1 < text.Length && text[i + 1] == '\n') i++;
+                inputs.Add(new Input { Type = InputKeyboard, U = new InputUnion { Ki = new KeyboardInput { WVk = 0x0D } } });
+                inputs.Add(new Input { Type = InputKeyboard, U = new InputUnion { Ki = new KeyboardInput { WVk = 0x0D, DwFlags = KeyEventKeyUp } } });
+                continue;
+            }
+            if (ch == '\n')
+            {
+                inputs.Add(new Input { Type = InputKeyboard, U = new InputUnion { Ki = new KeyboardInput { WVk = 0x0D } } });
+                inputs.Add(new Input { Type = InputKeyboard, U = new InputUnion { Ki = new KeyboardInput { WVk = 0x0D, DwFlags = KeyEventKeyUp } } });
+                continue;
+            }
+            if (ch == '\t')
+            {
+                inputs.Add(new Input { Type = InputKeyboard, U = new InputUnion { Ki = new KeyboardInput { WVk = 0x09 } } });
+                inputs.Add(new Input { Type = InputKeyboard, U = new InputUnion { Ki = new KeyboardInput { WVk = 0x09, DwFlags = KeyEventKeyUp } } });
+                continue;
+            }
+
+            inputs.Add(new Input
             {
                 Type = InputKeyboard,
                 U = new InputUnion
                 {
                     Ki = new KeyboardInput { WScan = ch, DwFlags = KeyEventUnicode },
                 },
-            };
-            inputs[i * 2 + 1] = new Input
+            });
+            inputs.Add(new Input
             {
                 Type = InputKeyboard,
                 U = new InputUnion
                 {
                     Ki = new KeyboardInput { WScan = ch, DwFlags = KeyEventUnicode | KeyEventKeyUp },
                 },
-            };
+            });
         }
-        SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<Input>());
+        SendInput((uint)inputs.Count, inputs.ToArray(), Marshal.SizeOf<Input>());
     }
 
     public static void PressKey(ushort virtualKey)
@@ -257,6 +288,22 @@ public static class DesktopInputService
             "down" => 0x28,
             "prtsc" or "printscreen" or "snapshot" => 0x2C,
             "capslock" => 0x14,
+            "numlock" => 0x90,
+            "scrolllock" => 0x91,
+            "pause" or "break" => 0x13,
+            "apps" or "contextmenu" => 0x5D,
+            "rctrl" => 0xA3,
+            "rshift" => 0xA1,
+            "ralt" => 0xA5,
+            "rwin" => 0x5C,
+            "plus" or "equal" => 0xBB,
+            "minus" or "dash" => 0xBD,
+            "volumeup" or "vol_up" => 0xAF,
+            "volumedown" or "vol_down" => 0xAE,
+            "mute" or "volumemute" or "vol_mute" => 0xAD,
+            "medianext" or "media_next" => 0xB0,
+            "mediaprev" or "media_prev" => 0xB1,
+            "mediaplay" or "media_play" => 0xB3,
             _ => throw new ArgumentException($"Unsupported key token '{token}'."),
         };
     }

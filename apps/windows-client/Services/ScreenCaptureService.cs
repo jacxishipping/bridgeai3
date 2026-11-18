@@ -4,6 +4,7 @@ using System.Drawing;
 using System.Drawing.Imaging;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Windows.Forms;
 
 namespace AIBridgeClient.Services;
@@ -55,6 +56,9 @@ public static class ScreenCaptureService
         return CaptureBounds(outputDir, vs, -1, "screenshot_desktop");
     }
 
+    [DllImport("user32.dll")]
+    private static extern bool PrintWindow(IntPtr hwnd, IntPtr hdcBlt, uint nFlags);
+
     public static ScreenshotResult CaptureWindow(string outputDir, string? titleQuery = null, long? handle = null)
     {
         DesktopWindowInfo win = (string.IsNullOrWhiteSpace(titleQuery) && (handle is null || handle <= 0))
@@ -62,7 +66,33 @@ public static class ScreenCaptureService
             : WindowManagementService.FocusWindow(titleQuery, handle);
 
         var rect = new Rectangle(win.X, win.Y, Math.Max(1, win.Width), Math.Max(1, win.Height));
-        return CaptureBounds(outputDir, rect, -2, $"screenshot_win_{win.Pid}");
+        try
+        {
+            return CaptureBounds(outputDir, rect, -2, $"screenshot_win_{win.Pid}");
+        }
+        catch
+        {
+            Directory.CreateDirectory(outputDir);
+            using var bitmap = new Bitmap(rect.Width, rect.Height, PixelFormat.Format32bppArgb);
+            using (var g = Graphics.FromImage(bitmap))
+            {
+                var hdc = g.GetHdc();
+                try
+                {
+                    PrintWindow(new IntPtr(win.Handle), hdc, 2);
+                }
+                finally
+                {
+                    g.ReleaseHdc(hdc);
+                }
+            }
+            var filePath = Path.Combine(outputDir, $"screenshot_win_{win.Pid}_{DateTimeOffset.Now:yyyyMMdd_HHmmss_fff}.png");
+            using var ms = new MemoryStream();
+            bitmap.Save(ms, ImageFormat.Png);
+            var bytes = ms.ToArray();
+            File.WriteAllBytes(filePath, bytes);
+            return new ScreenshotResult(filePath, -2, rect.Width, rect.Height, bytes.Length, Convert.ToBase64String(bytes));
+        }
     }
 
     private static ScreenshotResult CaptureBounds(string outputDir, Rectangle bounds, int monitorIndex, string prefix)

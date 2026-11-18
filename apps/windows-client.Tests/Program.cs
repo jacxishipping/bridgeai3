@@ -366,5 +366,98 @@ await RunTest("ControlPlaneClient: Auth login->enroll, policy schema & token rot
     try { await serverTask; } catch { }
 });
 
+// 13. Full Windows UI tool parity, aliases, virtual keys, and policy gating
+await RunTest("Full Windows UI tools: window/UI aliases, virtual keys & desktop gating", async () =>
+{
+    var exec = new NativeToolExecutor(new SystemMonitorService(), Path.GetTempPath());
+    var roCfg = new AgentGuiConfig
+    {
+        Workspace = Path.GetTempPath(),
+        Policy = new AgentPolicyConfig { AllowDesktopControl = false },
+    };
+
+    var (okWinAlias, winAliasJson) = await exec.ExecuteAsync("desktop_get_windows", "{\"limit\":10}", roCfg, CancellationToken.None);
+    Assert(okWinAlias && winAliasJson.Contains("windows"), "Expected desktop_get_windows alias to succeed");
+
+    var (okActive, _) = await exec.ExecuteAsync("get_active_window", "{}", roCfg, CancellationToken.None);
+    Assert(okActive, "Expected get_active_window to succeed");
+
+    var (okUi, uiJson) = await exec.ExecuteAsync("desktop_get_ui_elements", "{\"limit\":15}", roCfg, CancellationToken.None);
+    Assert(okUi && uiJson.Contains("elements"), "Expected desktop_get_ui_elements to succeed");
+
+    var (okWait, waitJson) = await exec.ExecuteAsync("desktop_wait", "{\"ms\":50}", roCfg, CancellationToken.None);
+    Assert(okWait && waitJson.Contains("waited"), "Expected desktop_wait to succeed");
+
+    var (okVerify, verifyJson) = await exec.ExecuteAsync("desktop_verify_action", "{\"text\":\"Program Manager\"}", roCfg, CancellationToken.None);
+    Assert(okVerify && verifyJson.Contains("verified"), "Expected desktop_verify_action to succeed");
+
+    var (okMaxBlocked, _) = await exec.ExecuteAsync("maximize_window", "{\"title\":\"NonExistent\"}", roCfg, CancellationToken.None);
+    Assert(!okMaxBlocked, "maximize_window must block when AllowDesktopControl=false");
+
+    var (okSetBlocked, _) = await exec.ExecuteAsync("set_element_value", "{\"name\":\"X\",\"value\":\"Y\"}", roCfg, CancellationToken.None);
+    Assert(!okSetBlocked, "set_element_value must block when AllowDesktopControl=false");
+
+    Assert(DesktopInputService.ResolveVirtualKey("apps") == 0x5D, "VK apps mismatch");
+    Assert(DesktopInputService.ResolveVirtualKey("volumeup") == 0xAF, "VK volumeup mismatch");
+    Assert(DesktopInputService.ResolveVirtualKey("rctrl") == 0xA3, "VK rctrl mismatch");
+});
+
+// 14. Full PC Access opt-in gating: blocked when false, allowed across PC when true
+await RunTest("Full PC Access gating: drives, directories, PowerShell & kill_process require explicit opt-in", async () =>
+{
+    var tempRoot = Path.Combine(Path.GetTempPath(), $"aib-test-fullpc-{Guid.NewGuid():N}");
+    var tempWs = Path.Combine(tempRoot, "ws");
+    var outsideFile = Path.Combine(tempRoot, "outside.txt");
+    Directory.CreateDirectory(tempWs);
+    File.WriteAllText(outsideFile, "outside pc data");
+    try
+    {
+        var exec = new NativeToolExecutor(new SystemMonitorService(), tempWs);
+        var restrictedCfg = new AgentGuiConfig
+        {
+            Workspace = tempWs,
+            Policy = new AgentPolicyConfig
+            {
+                AllowFullPcAccess = false,
+                AllowWrites = true,
+                AllowTier3 = true,
+                AllowTier4 = true,
+                AllowShell = true,
+                MaxTierUnattended = 4,
+            },
+        };
+
+        var (okDrvDenied, _) = await exec.ExecuteAsync("list_drives", "{}", restrictedCfg, CancellationToken.None);
+        Assert(!okDrvDenied, "list_drives must fail unless AllowFullPcAccess=true");
+
+        var (okDirDenied, _) = await exec.ExecuteAsync("list_directory", JsonSerializer.Serialize(new { path = tempRoot }), restrictedCfg, CancellationToken.None);
+        Assert(!okDirDenied, "list_directory must fail unless AllowFullPcAccess=true");
+
+        var (okReadDenied, _) = await exec.ExecuteAsync("read_pc_file", JsonSerializer.Serialize(new { path = outsideFile }), restrictedCfg, CancellationToken.None);
+        Assert(!okReadDenied, "read_pc_file must fail unless AllowFullPcAccess=true");
+
+        var (okPsDenied, _) = await exec.ExecuteAsync("run_powershell", "{\"command\":\"Write-Output hi\"}", restrictedCfg, CancellationToken.None);
+        Assert(!okPsDenied, "run_powershell must fail unless AllowFullPcAccess=true");
+
+        restrictedCfg.Policy.AllowFullPcAccess = true;
+
+        var (okDrv, drvJson) = await exec.ExecuteAsync("list_drives", "{}", restrictedCfg, CancellationToken.None);
+        Assert(okDrv && drvJson.Contains("drives"), "list_drives must succeed when AllowFullPcAccess=true");
+
+        var (okDir, dirJson) = await exec.ExecuteAsync("list_directory", JsonSerializer.Serialize(new { path = tempRoot }), restrictedCfg, CancellationToken.None);
+        Assert(okDir && dirJson.Contains("outside.txt"), "list_directory must list outside folder when AllowFullPcAccess=true");
+
+        var (okRead, readJson) = await exec.ExecuteAsync("read_pc_file", JsonSerializer.Serialize(new { path = outsideFile }), restrictedCfg, CancellationToken.None);
+        Assert(okRead && readJson.Contains("outside pc data"), "read_pc_file must read outside file when AllowFullPcAccess=true");
+
+        var (okKillSelf, _) = await exec.ExecuteAsync("kill_process", JsonSerializer.Serialize(new { pid = Environment.ProcessId }), restrictedCfg, CancellationToken.None);
+        Assert(!okKillSelf, "kill_process must refuse terminating active client self PID even when AllowFullPcAccess=true");
+    }
+    finally
+    {
+        Directory.Delete(tempRoot, recursive: true);
+    }
+});
+
 Console.WriteLine($"\nSummary: {passed} passed, {failed} failed ({passed + failed} total)");
 return failed > 0 ? 1 : 0;

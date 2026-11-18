@@ -111,6 +111,8 @@ public static class NamedPipeBridge
             allow_desktop_control = policy.AllowDesktopControl,
             allow_clipboard = policy.AllowClipboard,
             allow_package_install = policy.AllowPackageInstall,
+            allow_unrestricted_apps = policy.AllowUnrestrictedApps,
+            allow_full_pc_access = policy.AllowFullPcAccess,
             max_tier_unattended = policy.MaxTierUnattended,
             allowed_apps = policy.AllowedApps,
             allowed_commands = policy.AllowedCommands,

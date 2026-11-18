@@ -45,6 +45,11 @@ public sealed class NativeToolExecutor
                 "get_service_status" or "windows_service_status" => await GetServiceStatusAsync(args, ct),
                 "get_recent_logs" or "windows_event_logs" => await GetEventLogsAsync(args, ct),
                 "list_processes" => ListProcesses(args),
+                "kill_process" or "stop_process" => KillProcess(config, args),
+                "list_drives" or "get_drives" => ListDrives(config),
+                "list_directory" or "browse_pc" => ListDirectory(config, args),
+                "read_pc_file" => ReadPcFile(config, args),
+                "write_pc_file" => WritePcFile(config, args),
                 "list_workspace" => ListWorkspace(config, args),
                 "read_workspace_file" or "read_file" => ReadWorkspaceFile(config, args),
                 "search_workspace" => SearchWorkspace(config, args),
@@ -59,20 +64,35 @@ public sealed class NativeToolExecutor
                     pipe_available = NamedPipeBridge.IsDesktopAgentAvailable(config.DesktopPipeName),
                     pipe_name = string.IsNullOrWhiteSpace(config.DesktopPipeName) ? NamedPipeBridge.PipeName : config.DesktopPipeName,
                     desktop_control_enabled = config.Policy.AllowDesktopControl,
+                    unrestricted_apps_enabled = config.Policy.AllowUnrestrictedApps,
                     clipboard_enabled = config.Policy.AllowClipboard,
                     max_tier_unattended = config.Policy.MaxTierUnattended,
                     allowed_apps = config.Policy.AllowedApps,
+                    active_window = WindowManagementService.GetActiveWindowInfo(),
                 },
-                "list_desktop_windows" => ListDesktopWindows(args),
+                "list_desktop_windows" or "desktop_get_windows" => ListDesktopWindows(args),
+                "get_active_window" => new { window = WindowManagementService.GetActiveWindowInfo() },
                 "focus_window" => FocusDesktopWindow(config, args),
-                "launch_approved_application" => LaunchApprovedApplication(config, args),
+                "maximize_window" => ManageDesktopWindow(config, args, "maximize"),
+                "minimize_window" => ManageDesktopWindow(config, args, "minimize"),
+                "restore_window" => ManageDesktopWindow(config, args, "restore"),
+                "close_window" => ManageDesktopWindow(config, args, "close"),
+                "move_resize_window" => MoveResizeDesktopWindow(config, args),
+                "launch_approved_application" or "desktop_open_application" or "open_application" => LaunchApprovedApplication(config, args),
                 "get_clipboard" or "desktop_clipboard_get" => GetClipboard(config),
                 "set_clipboard" or "desktop_clipboard_set" => SetClipboard(config, args),
-                "get_ui_tree" or "find_elements" or "list_ui_elements" => FindUiElements(args),
+                "get_ui_tree" or "find_elements" or "list_ui_elements" or "desktop_get_ui_elements" => FindUiElements(args),
                 "click_element" or "click_text" => ClickUiElement(config, args),
+                "invoke_element" => InvokeUiElement(config, args),
+                "set_element_value" or "type_into_element" => SetUiElementValue(config, args),
+                "focus_element" => FocusUiElement(config, args),
+                "perform_approved_ui_action" => PerformUiAction(config, args),
+                "desktop_wait" => await DesktopWaitAsync(args, ct),
+                "desktop_verify_action" or "verify_screen_contains" => VerifyUiCondition(args),
                 "start_webrtc_stream" => await SendPipeStreamCommandAsync(config, "START_WEBRTC_SESSION", args, ct),
                 "stop_webrtc_stream" => await SendPipeStreamCommandAsync(config, "STOP_WEBRTC_SESSION", args, ct),
                 "capture_desktop_screenshot" or "take_screenshot" or "capture_desktop_frame" or "desktop_get_screenshot" => CaptureScreenshot(config, args),
+                "set_of_marks_screenshot" => CaptureSetOfMarksScreenshot(config, args),
                 "desktop_get_window_screenshot" => CaptureWindowScreenshot(config, args),
                 "mouse_move" or "desktop_mouse_move" => MouseMove(config, args),
                 "mouse_click" or "desktop_click" => MouseClick(config, args),
@@ -81,7 +101,8 @@ public sealed class NativeToolExecutor
                 "keyboard_type" or "desktop_keyboard" => KeyboardType(config, args),
                 "key_press" or "keyboard_press" => KeyPress(config, args),
                 "press_hotkey" => PressHotkey(config, args),
-                "run_shell" => await RunShellAsync(config, args, ct),
+                "run_shell" or "desktop_execute_command" => await RunShellAsync(config, args, ct, usePowerShell: false),
+                "run_powershell" or "powershell" => await RunShellAsync(config, args, ct, usePowerShell: true),
                 _ => throw new InvalidOperationException($"Tool '{tool}' is not supported by native C# executor."),
             };
 
@@ -225,10 +246,192 @@ public sealed class NativeToolExecutor
         return candidate;
     }
 
+    private static string ResolveAccessiblePath(AgentGuiConfig config, string requestedPath, bool requireFullPcFlag = false)
+    {
+        if (requestedPath.Contains('\0'))
+        {
+            throw new UnauthorizedAccessException("Invalid path: NUL byte not allowed.");
+        }
+
+        if (!config.Policy.AllowFullPcAccess)
+        {
+            if (requireFullPcFlag)
+            {
+                throw new UnauthorizedAccessException("Permission required: Full PC Access is disabled. Allow 'Full PC Access' to browse or modify files outside the workspace.");
+            }
+            return ConfineWorkspacePath(config.Workspace, requestedPath);
+        }
+
+        var expanded = Environment.ExpandEnvironmentVariables(requestedPath.Trim());
+        if (string.IsNullOrWhiteSpace(expanded))
+        {
+            return !string.IsNullOrWhiteSpace(config.Workspace)
+                ? Path.GetFullPath(config.Workspace)
+                : Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        }
+
+        if (Path.IsPathRooted(expanded))
+        {
+            return Path.GetFullPath(expanded);
+        }
+
+        var baseDir = !string.IsNullOrWhiteSpace(config.Workspace)
+            ? Path.GetFullPath(config.Workspace)
+            : Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        return Path.GetFullPath(Path.Combine(baseDir, expanded));
+    }
+
+    private static void RequireFullPcAccess(AgentGuiConfig config, string operation)
+    {
+        if (!config.Policy.AllowFullPcAccess)
+        {
+            throw new UnauthorizedAccessException($"Permission required: '{operation}' requires Full PC Access to be explicitly allowed by the user.");
+        }
+    }
+
+    private static object ListDrives(AgentGuiConfig config)
+    {
+        RequireFullPcAccess(config, "list_drives");
+        var drives = DriveInfo.GetDrives()
+            .Select(d =>
+            {
+                long totalGb = 0;
+                long freeGb = 0;
+                string label = "";
+                try
+                {
+                    if (d.IsReady)
+                    {
+                        totalGb = d.TotalSize / (1024 * 1024 * 1024);
+                        freeGb = d.AvailableFreeSpace / (1024 * 1024 * 1024);
+                        label = d.VolumeLabel;
+                    }
+                }
+                catch { }
+                return new
+                {
+                    name = d.Name,
+                    drive_type = d.DriveType.ToString(),
+                    is_ready = d.IsReady,
+                    label,
+                    free_gb = freeGb,
+                    total_gb = totalGb,
+                };
+            })
+            .ToList();
+        return new { count = drives.Count, drives };
+    }
+
+    private static object ListDirectory(AgentGuiConfig config, JsonElement args)
+    {
+        RequireFullPcAccess(config, "list_directory");
+        var requested = args.TryGetProperty("path", out var p) ? p.GetString() ?? "" : "";
+        var target = string.IsNullOrWhiteSpace(requested)
+            ? Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)
+            : ResolveAccessiblePath(config, requested, requireFullPcFlag: true);
+
+        if (!Directory.Exists(target))
+        {
+            throw new DirectoryNotFoundException($"Directory not found: {target}");
+        }
+
+        int maxList = Math.Clamp(config.MaxListEntries, 10, 1000);
+        var entries = Directory.EnumerateFileSystemEntries(target)
+            .Take(maxList)
+            .Select(e =>
+            {
+                long size = 0;
+                try { if (File.Exists(e)) size = new FileInfo(e).Length; } catch { }
+                return new
+                {
+                    name = Path.GetFileName(e),
+                    full_path = e,
+                    is_dir = Directory.Exists(e),
+                    size,
+                };
+            })
+            .ToList();
+
+        return new { path = target, count = entries.Count, entries };
+    }
+
+    private static object ReadPcFile(AgentGuiConfig config, JsonElement args)
+    {
+        var requested = args.TryGetProperty("path", out var p) ? p.GetString() ?? "" : "";
+        var target = ResolveAccessiblePath(config, requested, requireFullPcFlag: true);
+        if (!File.Exists(target)) throw new FileNotFoundException($"File not found: {target}");
+        var content = File.ReadAllText(target);
+        int maxRead = Math.Clamp(config.MaxReadBytes, 1024, 2_000_000);
+        if (content.Length > maxRead)
+        {
+            content = content[..maxRead] + "\n...[truncated]";
+        }
+        return new { path = target, content };
+    }
+
+    private static object WritePcFile(AgentGuiConfig config, JsonElement args)
+    {
+        RequireFullPcAccess(config, "write_pc_file");
+        if (!config.Policy.AllowWrites || config.Policy.MaxTierUnattended < 2)
+        {
+            throw new UnauthorizedAccessException("Policy denied: Writes are disabled.");
+        }
+        var requested = args.TryGetProperty("path", out var p) ? p.GetString() ?? "" : "";
+        var content = args.TryGetProperty("content", out var c) ? c.GetString() ?? "" : "";
+        var target = ResolveAccessiblePath(config, requested, requireFullPcFlag: true);
+        var dir = Path.GetDirectoryName(target);
+        if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+        File.WriteAllText(target, content);
+        return new { path = target, bytes_written = content.Length, status = "written" };
+    }
+
+    private static object KillProcess(AgentGuiConfig config, JsonElement args)
+    {
+        RequireFullPcAccess(config, "kill_process");
+        if (!config.Policy.AllowTier4 || config.Policy.MaxTierUnattended < 4)
+        {
+            throw new UnauthorizedAccessException("Policy denied: Tier 4 process termination is disabled.");
+        }
+
+        int? pid = args.TryGetProperty("pid", out var pidEl) && pidEl.TryGetInt32(out var pv) ? pv : null;
+        string? name = args.TryGetProperty("name", out var nEl) ? nEl.GetString() : null;
+
+        if (pid.HasValue)
+        {
+            if (pid.Value == Environment.ProcessId)
+            {
+                throw new UnauthorizedAccessException("Refusing to terminate the active AI Bridge client process.");
+            }
+            using var proc = Process.GetProcessById(pid.Value);
+            var procName = proc.ProcessName;
+            proc.Kill(entireProcessTree: true);
+            return new { status = "killed", pid = pid.Value, name = procName };
+        }
+
+        if (!string.IsNullOrWhiteSpace(name))
+        {
+            var clean = Path.GetFileNameWithoutExtension(name.Trim());
+            var killedPids = new List<int>();
+            foreach (var proc in Process.GetProcessesByName(clean))
+            {
+                using (proc)
+                {
+                    if (proc.Id == Environment.ProcessId) continue;
+                    proc.Kill(entireProcessTree: true);
+                    killedPids.Add(proc.Id);
+                }
+            }
+            if (killedPids.Count == 0) throw new InvalidOperationException($"No running process matched '{name}'.");
+            return new { status = "killed", name = clean, pids = killedPids };
+        }
+
+        throw new ArgumentException("Either 'pid' or 'name' is required.");
+    }
+
     private static object ListWorkspace(AgentGuiConfig config, JsonElement args)
     {
         var rel = args.TryGetProperty("path", out var p) ? p.GetString() ?? "" : "";
-        var target = ConfineWorkspacePath(config.Workspace, rel);
+        var target = ResolveAccessiblePath(config, rel);
         if (!Directory.Exists(target))
         {
             throw new DirectoryNotFoundException($"Directory not found: {rel}");
@@ -251,7 +454,7 @@ public sealed class NativeToolExecutor
     private static object ReadWorkspaceFile(AgentGuiConfig config, JsonElement args)
     {
         var rel = args.TryGetProperty("path", out var p) ? p.GetString() ?? "" : "";
-        var target = ConfineWorkspacePath(config.Workspace, rel);
+        var target = ResolveAccessiblePath(config, rel);
         var fileName = Path.GetFileName(target);
         if (fileName.StartsWith(".env", StringComparison.OrdinalIgnoreCase) ||
             fileName.EndsWith(".pem", StringComparison.OrdinalIgnoreCase) ||
@@ -276,7 +479,8 @@ public sealed class NativeToolExecutor
             throw new ArgumentException("Search query is required.");
         }
 
-        var root = ConfineWorkspacePath(config.Workspace, "");
+        var pathArg = args.TryGetProperty("path", out var pEl) ? pEl.GetString() ?? "" : "";
+        var root = ResolveAccessiblePath(config, pathArg);
         int maxMatches = Math.Clamp(config.MaxListEntries, 10, 1000);
         var matches = new List<object>();
         foreach (var file in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories).Take(500))
@@ -306,7 +510,7 @@ public sealed class NativeToolExecutor
         }
         var rel = args.TryGetProperty("path", out var p) ? p.GetString() ?? "" : "";
         var content = args.TryGetProperty("content", out var c) ? c.GetString() ?? "" : "";
-        var target = ConfineWorkspacePath(config.Workspace, rel);
+        var target = ResolveAccessiblePath(config, rel);
         EnsureNotSecretFile(target);
         var dir = Path.GetDirectoryName(target);
         if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
@@ -321,7 +525,7 @@ public sealed class NativeToolExecutor
             throw new UnauthorizedAccessException("Policy denied: Tier 3 sensitive operations are disabled.");
         }
         var rel = args.TryGetProperty("path", out var p) ? p.GetString() ?? "" : "";
-        var target = ConfineWorkspacePath(config.Workspace, rel);
+        var target = ResolveAccessiblePath(config, rel);
         EnsureNotSecretFile(target);
         if (!File.Exists(target)) throw new FileNotFoundException($"File not found: {rel}");
 
@@ -359,8 +563,8 @@ public sealed class NativeToolExecutor
         var dstRel = args.TryGetProperty("destination", out var dEl) ? dEl.GetString() ?? ""
             : args.TryGetProperty("dst", out var d2) ? d2.GetString() ?? "" : "";
 
-        var srcFull = ConfineWorkspacePath(config.Workspace, srcRel);
-        var dstFull = ConfineWorkspacePath(config.Workspace, dstRel);
+        var srcFull = ResolveAccessiblePath(config, srcRel);
+        var dstFull = ResolveAccessiblePath(config, dstRel);
         EnsureNotSecretFile(srcFull);
         EnsureNotSecretFile(dstFull);
 
@@ -377,7 +581,7 @@ public sealed class NativeToolExecutor
             throw new UnauthorizedAccessException("Policy denied: Tier 4 high-risk operations are disabled.");
         }
         var rel = args.TryGetProperty("path", out var p) ? p.GetString() ?? "" : "";
-        var target = ConfineWorkspacePath(config.Workspace, rel);
+        var target = ResolveAccessiblePath(config, rel);
         EnsureNotSecretFile(target);
         if (!File.Exists(target)) throw new FileNotFoundException($"File not found: {rel}");
         File.Delete(target);
@@ -469,39 +673,114 @@ public sealed class NativeToolExecutor
     private static object FocusDesktopWindow(AgentGuiConfig config, JsonElement args)
     {
         RequireDesktopControl(config);
-        var title = args.TryGetProperty("title", out var tEl) ? tEl.GetString()
-            : args.TryGetProperty("query", out var qEl) ? qEl.GetString() : null;
+        var title = GetTitleArg(args);
         long? hwnd = args.TryGetProperty("handle", out var hEl) && hEl.TryGetInt64(out var h) ? h : null;
         var win = WindowManagementService.FocusWindow(title, hwnd);
         return new { status = "focused", window = win };
+    }
+
+    private static string? GetTitleArg(JsonElement args) =>
+        args.TryGetProperty("title", out var tEl) ? tEl.GetString()
+            : args.TryGetProperty("window", out var wEl) ? wEl.GetString()
+            : args.TryGetProperty("query", out var qEl) ? qEl.GetString() : null;
+
+    private static object ManageDesktopWindow(AgentGuiConfig config, JsonElement args, string action)
+    {
+        RequireDesktopControl(config);
+        var title = GetTitleArg(args);
+        long? hwnd = args.TryGetProperty("handle", out var hEl) && hEl.TryGetInt64(out var h) ? h : null;
+        var win = action switch
+        {
+            "maximize" => WindowManagementService.MaximizeWindow(title, hwnd),
+            "minimize" => WindowManagementService.MinimizeWindow(title, hwnd),
+            "restore" => WindowManagementService.RestoreWindow(title, hwnd),
+            "close" => WindowManagementService.CloseWindow(title, hwnd),
+            _ => throw new ArgumentException($"Unsupported window action: {action}"),
+        };
+        return new { status = action, window = win };
+    }
+
+    private static object MoveResizeDesktopWindow(AgentGuiConfig config, JsonElement args)
+    {
+        RequireDesktopControl(config);
+        var title = GetTitleArg(args);
+        long? hwnd = args.TryGetProperty("handle", out var hEl) && hEl.TryGetInt64(out var h) ? h : null;
+        int? x = args.TryGetProperty("x", out var xEl) && xEl.TryGetInt32(out var xv) ? xv : null;
+        int? y = args.TryGetProperty("y", out var yEl) && yEl.TryGetInt32(out var yv) ? yv : null;
+        int? w = args.TryGetProperty("width", out var wEl) && wEl.TryGetInt32(out var wv) ? wv : null;
+        int? height = args.TryGetProperty("height", out var htEl) && htEl.TryGetInt32(out var hv) ? hv : null;
+        var win = WindowManagementService.MoveResizeWindow(title, hwnd, x, y, w, height);
+        return new { status = "moved_resized", window = win };
+    }
+
+    private object CaptureSetOfMarksScreenshot(AgentGuiConfig config, JsonElement args)
+    {
+        if (!config.Policy.AllowTier3 || config.Policy.MaxTierUnattended < 3)
+        {
+            throw new UnauthorizedAccessException("Policy denied: Tier 3 sensitive operations are disabled.");
+        }
+        int maxMarks = args.TryGetProperty("max_marks", out var mEl) && mEl.TryGetInt32(out var m) ? m : 40;
+        var window = GetTitleArg(args);
+        var (shot, marks) = UiAutomationService.CaptureSetOfMarks(ResolveScreenshotDir(config), maxMarks, window);
+        return new
+        {
+            path = shot.FilePath,
+            width = shot.Width,
+            height = shot.Height,
+            size_bytes = shot.SizeBytes,
+            base64_data = shot.Base64Png,
+            image_base64 = shot.Base64Png,
+            marks = marks.Select(x => new
+            {
+                mark_id = x.Mark.ToString(),
+                name = x.Element.Name,
+                control_type = x.Element.ControlType,
+                center_x = x.Element.CenterX,
+                center_y = x.Element.CenterY,
+            }).ToList(),
+        };
     }
 
     private static object LaunchApprovedApplication(AgentGuiConfig config, JsonElement args)
     {
         RequireDesktopControl(config);
         var requested = args.TryGetProperty("app", out var aEl) ? aEl.GetString() ?? ""
+            : args.TryGetProperty("app_name", out var anEl) ? anEl.GetString() ?? ""
             : args.TryGetProperty("name", out var nEl) ? nEl.GetString() ?? ""
             : args.TryGetProperty("application", out var apEl) ? apEl.GetString() ?? "" : "";
-        var clean = Path.GetFileName(requested.Trim());
-        if (string.IsNullOrWhiteSpace(clean) ||
-            requested.Contains('/') || requested.Contains('\\') ||
-            !config.Policy.AllowedApps.Contains(clean, StringComparer.OrdinalIgnoreCase))
+        requested = requested.Trim();
+        if (string.IsNullOrWhiteSpace(requested) || requested.Contains('\0'))
         {
-            throw new UnauthorizedAccessException($"Policy denied: application '{requested}' is not in the AllowedApps matrix.");
+            throw new ArgumentException("Application name or path is required.");
+        }
+
+        string launchTarget = requested;
+        if (!config.Policy.AllowUnrestrictedApps)
+        {
+            var clean = Path.GetFileName(requested);
+            if (string.IsNullOrWhiteSpace(clean) ||
+                requested.Contains('/') || requested.Contains('\\') ||
+                !config.Policy.AllowedApps.Contains(clean, StringComparer.OrdinalIgnoreCase))
+            {
+                throw new UnauthorizedAccessException($"Policy denied: application '{requested}' is not in the AllowedApps matrix.");
+            }
+            launchTarget = clean;
         }
 
         var psi = new ProcessStartInfo
         {
-            FileName = clean,
+            FileName = launchTarget,
             UseShellExecute = true,
         };
-        if (args.TryGetProperty("arguments", out var argEl) && argEl.GetString() is { Length: > 0 } appArgs)
+        var argStr = args.TryGetProperty("arguments", out var argEl) ? argEl.GetString()
+            : args.TryGetProperty("url", out var urlEl) ? urlEl.GetString() : null;
+        if (!string.IsNullOrWhiteSpace(argStr))
         {
-            if (appArgs.Contains('\0')) throw new ArgumentException("Invalid arguments.");
-            psi.Arguments = appArgs;
+            if (argStr.Contains('\0')) throw new ArgumentException("Invalid arguments.");
+            psi.Arguments = argStr;
         }
-        using var proc = Process.Start(psi) ?? throw new InvalidOperationException($"Failed to launch '{clean}'.");
-        return new { status = "launched", app = clean, pid = proc.Id };
+        using var proc = Process.Start(psi);
+        return new { status = "launched", app = launchTarget, pid = proc?.Id ?? 0 };
     }
 
     private static object GetClipboard(AgentGuiConfig config)
@@ -548,7 +827,8 @@ public sealed class NativeToolExecutor
         int x = args.TryGetProperty("x", out var xEl) ? xEl.GetInt32() : 0;
         int y = args.TryGetProperty("y", out var yEl) ? yEl.GetInt32() : 0;
         string button = args.TryGetProperty("button", out var bEl) ? bEl.GetString() ?? "left" : "left";
-        bool dbl = args.TryGetProperty("double_click", out var dEl) && dEl.GetBoolean();
+        bool dbl = (args.TryGetProperty("double_click", out var dEl) && dEl.ValueKind == JsonValueKind.True) ||
+                   (args.TryGetProperty("clicks", out var cEl) && cEl.TryGetInt32(out var clicks) && clicks >= 2);
         DesktopInputService.ClickMouse(x, y, button, dbl);
         return new { status = "ok", x, y, button, double_click = dbl };
     }
@@ -557,8 +837,11 @@ public sealed class NativeToolExecutor
     {
         RequireDesktopControl(config);
         int delta = args.TryGetProperty("delta", out var dEl) ? dEl.GetInt32() : -120;
-        DesktopInputService.ScrollMouse(delta);
-        return new { status = "ok", delta };
+        int? x = args.TryGetProperty("x", out var xEl) && xEl.TryGetInt32(out var xv) ? xv : null;
+        int? y = args.TryGetProperty("y", out var yEl) && yEl.TryGetInt32(out var yv) ? yv : null;
+        bool horizontal = args.TryGetProperty("horizontal", out var hEl) && hEl.ValueKind == JsonValueKind.True;
+        DesktopInputService.ScrollMouse(delta, x, y, horizontal);
+        return new { status = "ok", delta, x, y, horizontal };
     }
 
     private static object KeyboardType(AgentGuiConfig config, JsonElement args)
@@ -611,9 +894,13 @@ public sealed class NativeToolExecutor
     private static object FindUiElements(JsonElement args)
     {
         string? query = args.TryGetProperty("query", out var qEl) ? qEl.GetString() : null;
-        int limit = args.TryGetProperty("limit", out var lEl) && lEl.TryGetInt32(out var l) ? Math.Clamp(l, 1, 150) : 60;
-        var elements = UiAutomationService.FindVisibleElements(query, limit);
-        return new { count = elements.Count, elements };
+        string? window = args.TryGetProperty("window", out var wEl) ? wEl.GetString()
+            : args.TryGetProperty("window_title", out var wtEl) ? wtEl.GetString() : null;
+        string? controlType = args.TryGetProperty("control_type", out var ctEl) ? ctEl.GetString() : null;
+        int maxDepth = args.TryGetProperty("max_depth", out var dEl) && dEl.TryGetInt32(out var d) ? Math.Clamp(d, 2, 10) : 6;
+        int limit = args.TryGetProperty("limit", out var lEl) && lEl.TryGetInt32(out var l) ? Math.Clamp(l, 1, 200) : 80;
+        var elements = UiAutomationService.FindVisibleElements(query, limit, window, controlType, maxDepth);
+        return new { count = elements.Count, window = window ?? "desktop", elements };
     }
 
     private static object ClickUiElement(AgentGuiConfig config, JsonElement args)
@@ -622,9 +909,78 @@ public sealed class NativeToolExecutor
         string query = args.TryGetProperty("query", out var qEl) ? qEl.GetString() ?? ""
             : args.TryGetProperty("text", out var tEl) ? tEl.GetString() ?? ""
             : args.TryGetProperty("name", out var nEl) ? nEl.GetString() ?? "" : "";
+        string? markId = args.TryGetProperty("mark_id", out var mEl) ? mEl.GetString() : null;
+        string? window = args.TryGetProperty("window", out var wEl) ? wEl.GetString() : null;
         string button = args.TryGetProperty("button", out var bEl) ? bEl.GetString() ?? "left" : "left";
-        var clicked = UiAutomationService.ClickElement(query, button);
+        bool dbl = (args.TryGetProperty("double_click", out var dEl) && dEl.ValueKind == JsonValueKind.True) ||
+                   (args.TryGetProperty("clicks", out var cEl) && cEl.TryGetInt32(out var clicks) && clicks >= 2);
+        var clicked = UiAutomationService.ClickElement(query, button, dbl, window, markId);
         return new { status = "clicked", element = clicked };
+    }
+
+    private static object InvokeUiElement(AgentGuiConfig config, JsonElement args)
+    {
+        RequireDesktopControl(config);
+        string query = args.TryGetProperty("query", out var qEl) ? qEl.GetString() ?? ""
+            : args.TryGetProperty("name", out var nEl) ? nEl.GetString() ?? "" : "";
+        string? window = args.TryGetProperty("window", out var wEl) ? wEl.GetString() : null;
+        var invoked = UiAutomationService.InvokeElement(query, window);
+        return new { status = "invoked", element = invoked };
+    }
+
+    private static object SetUiElementValue(AgentGuiConfig config, JsonElement args)
+    {
+        RequireDesktopControl(config);
+        string query = args.TryGetProperty("query", out var qEl) ? qEl.GetString() ?? ""
+            : args.TryGetProperty("name", out var nEl) ? nEl.GetString() ?? "" : "";
+        string value = args.TryGetProperty("value", out var vEl) ? vEl.GetString() ?? ""
+            : args.TryGetProperty("text", out var tEl) ? tEl.GetString() ?? "" : "";
+        bool submit = args.TryGetProperty("submit", out var sEl) && sEl.ValueKind == JsonValueKind.True;
+        string? window = args.TryGetProperty("window", out var wEl) ? wEl.GetString() : null;
+        var updated = UiAutomationService.SetElementValue(query, value, submit, window);
+        return new { status = "updated", element = updated, length = value.Length };
+    }
+
+    private static object FocusUiElement(AgentGuiConfig config, JsonElement args)
+    {
+        RequireDesktopControl(config);
+        string query = args.TryGetProperty("query", out var qEl) ? qEl.GetString() ?? ""
+            : args.TryGetProperty("name", out var nEl) ? nEl.GetString() ?? "" : "";
+        string? window = args.TryGetProperty("window", out var wEl) ? wEl.GetString() : null;
+        var focused = UiAutomationService.FocusElement(query, window);
+        return new { status = "focused", element = focused };
+    }
+
+    private static object PerformUiAction(AgentGuiConfig config, JsonElement args)
+    {
+        var action = (args.TryGetProperty("action", out var aEl) ? aEl.GetString() ?? "invoke" : "invoke").Trim().ToLowerInvariant();
+        return action switch
+        {
+            "click" or "right_click" or "double_click" => ClickUiElement(config, args),
+            "set_value" or "type" => SetUiElementValue(config, args),
+            "focus" => FocusUiElement(config, args),
+            _ => InvokeUiElement(config, args),
+        };
+    }
+
+    private static async Task<object> DesktopWaitAsync(JsonElement args, CancellationToken ct)
+    {
+        int ms = args.TryGetProperty("ms", out var msEl) && msEl.TryGetInt32(out var mv) ? mv
+            : args.TryGetProperty("milliseconds", out var m2) && m2.TryGetInt32(out var m2v) ? m2v : 500;
+        ms = Math.Clamp(ms, 50, 10000);
+        await Task.Delay(ms, ct);
+        return new { status = "waited", ms };
+    }
+
+    private static object VerifyUiCondition(JsonElement args)
+    {
+        string text = args.TryGetProperty("text", out var tEl) ? tEl.GetString() ?? ""
+            : args.TryGetProperty("expected", out var eEl) ? eEl.GetString() ?? "" : "";
+        string? window = args.TryGetProperty("window", out var wEl) ? wEl.GetString() : null;
+        var matches = UiAutomationService.FindVisibleElements(text, 10, window);
+        var winMatches = WindowManagementService.ListVisibleWindows(text, 10);
+        bool visible = matches.Count > 0 || winMatches.Count > 0;
+        return new { verified = visible, ui_matches = matches.Count, window_matches = winMatches.Count };
     }
 
     private static async Task<object> SendPipeStreamCommandAsync(
@@ -645,8 +1001,16 @@ public sealed class NativeToolExecutor
         return new { status = "ok", pipe_response = reply };
     }
 
-    private static async Task<object> RunShellAsync(AgentGuiConfig config, JsonElement args, CancellationToken ct)
+    private static async Task<object> RunShellAsync(
+        AgentGuiConfig config,
+        JsonElement args,
+        CancellationToken ct,
+        bool usePowerShell = false)
     {
+        if (usePowerShell)
+        {
+            RequireFullPcAccess(config, "run_powershell");
+        }
         if (!config.Policy.AllowTier4 || config.Policy.MaxTierUnattended < 4 || !config.Policy.AllowShell)
         {
             throw new UnauthorizedAccessException("Policy denied: Tier 4 shell execution is disabled.");
@@ -674,11 +1038,20 @@ public sealed class NativeToolExecutor
             ? Math.Clamp(t, 1, maxSec)
             : defaultSec;
 
-        var cwd = ConfineWorkspacePath(config.Workspace, "");
+        var requestedCwd = args.TryGetProperty("working_directory", out var wdEl) ? wdEl.GetString()
+            : args.TryGetProperty("cwd", out var cwdEl) ? cwdEl.GetString() : null;
+        var cwd = !string.IsNullOrWhiteSpace(requestedCwd)
+            ? ResolveAccessiblePath(config, requestedCwd, requireFullPcFlag: true)
+            : (config.Policy.AllowFullPcAccess && string.IsNullOrWhiteSpace(config.Workspace)
+                ? Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)
+                : ConfineWorkspacePath(config.Workspace, ""));
+
         var psi = new ProcessStartInfo
         {
-            FileName = "cmd.exe",
-            Arguments = $"/c {command}",
+            FileName = usePowerShell ? "powershell.exe" : "cmd.exe",
+            Arguments = usePowerShell
+                ? $"-NoProfile -NonInteractive -ExecutionPolicy Bypass -Command \"{command.Replace("\"", "\\\"")}\""
+                : $"/c {command}",
             WorkingDirectory = cwd,
             RedirectStandardOutput = true,
             RedirectStandardError = true,

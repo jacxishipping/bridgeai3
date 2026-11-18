@@ -24,7 +24,13 @@ public sealed record DesktopWindowInfo(
 /// </summary>
 public static class WindowManagementService
 {
+    private const int SwMaximize = 3;
+    private const int SwMinimize = 6;
     private const int SwRestore = 9;
+    private const uint WmClose = 0x0010;
+    private const uint SwpNoZOrder = 0x0004;
+    private const uint SwpNoMove = 0x0002;
+    private const uint SwpNoSize = 0x0001;
 
     private delegate bool EnumWindowsProc(IntPtr hwnd, IntPtr lParam);
 
@@ -63,6 +69,21 @@ public static class WindowManagementService
 
     [DllImport("user32.dll")]
     private static extern IntPtr GetForegroundWindow();
+
+    [DllImport("user32.dll")]
+    private static extern bool BringWindowToTop(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    private static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
+
+    [DllImport("kernel32.dll")]
+    private static extern uint GetCurrentThreadId();
+
+    [DllImport("user32.dll")]
+    private static extern bool PostMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int x, int y, int cx, int cy, uint uFlags);
 
     public static List<DesktopWindowInfo> ListVisibleWindows(string? query = null, int limit = 60)
     {
@@ -148,8 +169,91 @@ public static class WindowManagementService
         {
             ShowWindow(hwnd, SwRestore);
         }
-        SetForegroundWindow(hwnd);
+
+        var fg = GetForegroundWindow();
+        uint curTid = GetCurrentThreadId();
+        uint fgTid = fg != IntPtr.Zero ? GetWindowThreadProcessId(fg, out _) : 0;
+        bool attached = false;
+        try
+        {
+            if (fgTid != 0 && fgTid != curTid)
+            {
+                attached = AttachThreadInput(curTid, fgTid, true);
+            }
+            BringWindowToTop(hwnd);
+            SetForegroundWindow(hwnd);
+        }
+        finally
+        {
+            if (attached)
+            {
+                AttachThreadInput(curTid, fgTid, false);
+            }
+        }
         return target;
+    }
+
+    public static DesktopWindowInfo MaximizeWindow(string? titleQuery, long? handle = null)
+    {
+        var target = FocusWindow(titleQuery, handle);
+        ShowWindow(new IntPtr(target.Handle), SwMaximize);
+        return ResolveWindow(null, target.Handle);
+    }
+
+    public static DesktopWindowInfo MinimizeWindow(string? titleQuery, long? handle = null)
+    {
+        var target = ResolveWindow(titleQuery, handle);
+        ShowWindow(new IntPtr(target.Handle), SwMinimize);
+        return target;
+    }
+
+    public static DesktopWindowInfo RestoreWindow(string? titleQuery, long? handle = null)
+    {
+        var target = ResolveWindow(titleQuery, handle);
+        ShowWindow(new IntPtr(target.Handle), SwRestore);
+        return FocusWindow(null, target.Handle);
+    }
+
+    public static DesktopWindowInfo CloseWindow(string? titleQuery, long? handle = null)
+    {
+        var target = ResolveWindow(titleQuery, handle);
+        PostMessage(new IntPtr(target.Handle), WmClose, IntPtr.Zero, IntPtr.Zero);
+        return target;
+    }
+
+    public static DesktopWindowInfo MoveResizeWindow(
+        string? titleQuery,
+        long? handle,
+        int? x,
+        int? y,
+        int? width,
+        int? height)
+    {
+        var target = ResolveWindow(titleQuery, handle);
+        var hwnd = new IntPtr(target.Handle);
+        if (target.IsMinimized)
+        {
+            ShowWindow(hwnd, SwRestore);
+        }
+        uint flags = SwpNoZOrder;
+        if (!x.HasValue && !y.HasValue) flags |= SwpNoMove;
+        if (!width.HasValue && !height.HasValue) flags |= SwpNoSize;
+        SetWindowPos(
+            hwnd,
+            IntPtr.Zero,
+            x ?? target.X,
+            y ?? target.Y,
+            width ?? target.Width,
+            height ?? target.Height,
+            flags);
+        return ResolveWindow(null, target.Handle);
+    }
+
+    public static DesktopWindowInfo? GetActiveWindowInfo()
+    {
+        var fg = GetForegroundWindow();
+        if (fg == IntPtr.Zero) return null;
+        return ListVisibleWindows(null, 200).FirstOrDefault(w => w.Handle == fg.ToInt64());
     }
 
     public static IntPtr GetActiveWindowHandle() => GetForegroundWindow();

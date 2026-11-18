@@ -759,6 +759,419 @@ public sealed class ControlPlaneClient : IDisposable
 
     public static string NormalizeUrl(string url) => url.Trim().TrimEnd('/');
 
+    public async Task<(bool Ok, string Token, bool IsAdminToken, string Detail)> LoginOperatorAsync(
+        string controlUrl,
+        string username,
+        string password,
+        string adminToken,
+        CancellationToken ct = default)
+    {
+        var baseUrl = NormalizeUrl(controlUrl);
+        try
+        {
+            if (!string.IsNullOrWhiteSpace(adminToken))
+            {
+                using var req = new HttpRequestMessage(HttpMethod.Get, $"{baseUrl}/api/auth/me");
+                req.Headers.Add("X-Admin-Token", adminToken.Trim());
+                using var resp = await _http.SendAsync(req, ct);
+                var body = await resp.Content.ReadAsStringAsync(ct);
+                if (!resp.IsSuccessStatusCode)
+                {
+                    return (false, "", true, ExtractApiDetail(body, $"HTTP {(int)resp.StatusCode}"));
+                }
+                return (true, adminToken.Trim(), true, "Authenticated via Admin Token.");
+            }
+
+            var payload = JsonSerializer.Serialize(new { username = username.Trim(), password });
+            using var loginReq = new HttpRequestMessage(HttpMethod.Post, $"{baseUrl}/api/auth/login");
+            loginReq.Content = new StringContent(payload, Encoding.UTF8, "application/json");
+            using var loginResp = await _http.SendAsync(loginReq, ct);
+            var loginBody = await loginResp.Content.ReadAsStringAsync(ct);
+            if (!loginResp.IsSuccessStatusCode)
+            {
+                return (false, "", false, ExtractApiDetail(loginBody, $"HTTP {(int)loginResp.StatusCode}"));
+            }
+            using var doc = JsonDocument.Parse(loginBody);
+            var tok = doc.RootElement.TryGetProperty("session_token", out var st) ? st.GetString() ?? "" : "";
+            return (!string.IsNullOrEmpty(tok), tok, false, string.IsNullOrEmpty(tok) ? "No session token returned." : "Operator session active.");
+        }
+        catch (Exception ex)
+        {
+            return (false, "", false, ex.Message);
+        }
+    }
+
+    private async Task AddOperatorHeadersAsync(
+        HttpRequestMessage req,
+        string baseUrl,
+        string operatorToken,
+        bool isAdminToken,
+        bool includeCsrf,
+        CancellationToken ct)
+    {
+        if (isAdminToken)
+        {
+            req.Headers.Add("X-Admin-Token", operatorToken);
+            return;
+        }
+        req.Headers.Add("X-Session-Token", operatorToken);
+        if (includeCsrf)
+        {
+            using var csrfReq = new HttpRequestMessage(HttpMethod.Get, $"{baseUrl}/api/auth/csrf-token");
+            csrfReq.Headers.Add("X-Session-Token", operatorToken);
+            using var csrfResp = await _http.SendAsync(csrfReq, ct);
+            if (csrfResp.IsSuccessStatusCode)
+            {
+                var csrfBody = await csrfResp.Content.ReadAsStringAsync(ct);
+                using var csrfDoc = JsonDocument.Parse(csrfBody);
+                if (csrfDoc.RootElement.TryGetProperty("csrf_token", out var cEl) && cEl.GetString() is { Length: > 0 } csrfTok)
+                {
+                    req.Headers.Add("X-CSRF-Token", csrfTok);
+                }
+            }
+        }
+    }
+
+    public async Task<(bool Ok, System.Collections.Generic.List<CustomAgentItem> CustomAgents, System.Collections.Generic.List<RoleAgentItem> Roles, System.Collections.Generic.List<string> Profiles, string Detail)> FetchAgentsAndRolesAsync(
+        string controlUrl,
+        string operatorToken,
+        bool isAdminToken,
+        string localDeviceId,
+        CancellationToken ct = default)
+    {
+        var baseUrl = NormalizeUrl(controlUrl);
+        var customList = new System.Collections.Generic.List<CustomAgentItem>();
+        var roleList = new System.Collections.Generic.List<RoleAgentItem>();
+        var profileList = new System.Collections.Generic.List<string>();
+        var targetDevice = localDeviceId.Trim();
+        if (string.IsNullOrWhiteSpace(targetDevice))
+        {
+            return (false, customList, roleList, profileList, "Device ID is not configured. Enroll this Windows device first.");
+        }
+        try
+        {
+            using (var aReq = new HttpRequestMessage(HttpMethod.Get, $"{baseUrl}/api/agents"))
+            {
+                await AddOperatorHeadersAsync(aReq, baseUrl, operatorToken, isAdminToken, false, ct);
+                using var aResp = await _http.SendAsync(aReq, ct);
+                var aBody = await aResp.Content.ReadAsStringAsync(ct);
+                if (!aResp.IsSuccessStatusCode)
+                {
+                    return (false, customList, roleList, profileList, ExtractApiDetail(aBody, $"GET /api/agents HTTP {(int)aResp.StatusCode}"));
+                }
+                using var aDoc = JsonDocument.Parse(aBody);
+                if (aDoc.RootElement.TryGetProperty("agents", out var arr) && arr.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var el in arr.EnumerateArray())
+                    {
+                        bool boundToThisDevice = false;
+                        if (el.TryGetProperty("device_ids", out var devIdsEl) && devIdsEl.ValueKind == JsonValueKind.Array)
+                        {
+                            foreach (var did in devIdsEl.EnumerateArray())
+                            {
+                                if (string.Equals(did.GetString()?.Trim(), targetDevice, StringComparison.OrdinalIgnoreCase))
+                                {
+                                    boundToThisDevice = true;
+                                    break;
+                                }
+                            }
+                        }
+                        if (!boundToThisDevice) continue;
+
+                        customList.Add(new CustomAgentItem
+                        {
+                            Id = el.TryGetProperty("id", out var v) ? v.GetString() ?? "" : "",
+                            Name = el.TryGetProperty("name", out var n) ? n.GetString() ?? "" : "",
+                            Instruction = el.TryGetProperty("instruction", out var ins) ? ins.GetString() ?? "" : "",
+                            Provider = el.TryGetProperty("provider", out var pr) ? pr.GetString() ?? "openai" : "openai",
+                            Model = el.TryGetProperty("model", out var mo) ? mo.GetString() ?? "" : "",
+                            IntervalSeconds = el.TryGetProperty("interval_seconds", out var iv) && iv.TryGetInt32(out var ivVal) ? ivVal : 300,
+                            Enabled = el.TryGetProperty("enabled", out var en) && (en.ValueKind == JsonValueKind.True || (en.ValueKind == JsonValueKind.Number && en.GetInt32() != 0)),
+                            Status = el.TryGetProperty("status", out var st) ? st.GetString() ?? "idle" : "idle",
+                        });
+                    }
+                }
+            }
+
+            using (var rReq = new HttpRequestMessage(HttpMethod.Get, $"{baseUrl}/api/roles"))
+            {
+                await AddOperatorHeadersAsync(rReq, baseUrl, operatorToken, isAdminToken, false, ct);
+                using var rResp = await _http.SendAsync(rReq, ct);
+                if (rResp.IsSuccessStatusCode)
+                {
+                    var rBody = await rResp.Content.ReadAsStringAsync(ct);
+                    using var rDoc = JsonDocument.Parse(rBody);
+                    if (rDoc.RootElement.TryGetProperty("roles", out var rArr) && rArr.ValueKind == JsonValueKind.Array)
+                    {
+                        foreach (var el in rArr.EnumerateArray())
+                        {
+                            roleList.Add(new RoleAgentItem
+                            {
+                                Role = el.TryGetProperty("role", out var rv) ? rv.GetString() ?? "" : "",
+                                Name = el.TryGetProperty("name", out var rn) ? rn.GetString() ?? "" : "",
+                                Description = el.TryGetProperty("description", out var rd) ? rd.GetString() ?? "" : "",
+                                Enabled = el.TryGetProperty("enabled", out var re) && (re.ValueKind == JsonValueKind.True || (re.ValueKind == JsonValueKind.Number && re.GetInt32() != 0)),
+                            });
+                        }
+                    }
+                    if (rDoc.RootElement.TryGetProperty("profiles", out var pArr) && pArr.ValueKind == JsonValueKind.Array)
+                    {
+                        foreach (var p in pArr.EnumerateArray())
+                        {
+                            if (p.GetString() is { Length: > 0 } ps) profileList.Add(ps);
+                        }
+                    }
+                }
+            }
+
+            return (true, customList, roleList, profileList, $"Loaded {customList.Count} agent(s) bound to '{targetDevice}'.");
+        }
+        catch (Exception ex)
+        {
+            return (false, customList, roleList, profileList, ex.Message);
+        }
+    }
+
+    public async Task<(bool Ok, string Detail)> CreateCustomAgentAsync(
+        string controlUrl,
+        string operatorToken,
+        bool isAdminToken,
+        string name,
+        string instruction,
+        string provider,
+        string model,
+        int intervalSeconds,
+        string deviceId,
+        CancellationToken ct = default)
+    {
+        var baseUrl = NormalizeUrl(controlUrl);
+        if (string.IsNullOrWhiteSpace(deviceId))
+        {
+            return (false, "Cannot create agent: this Windows workstation has no enrolled Device ID.");
+        }
+        try
+        {
+            var payload = JsonSerializer.Serialize(new
+            {
+                name = name.Trim(),
+                instruction = instruction.Trim(),
+                provider = provider.Trim().ToLowerInvariant(),
+                model = string.IsNullOrWhiteSpace(model) ? null : model.Trim(),
+                device_ids = new[] { deviceId.Trim() },
+                interval_seconds = Math.Clamp(intervalSeconds, 60, 86400),
+                enabled = true,
+            });
+            using var req = new HttpRequestMessage(HttpMethod.Post, $"{baseUrl}/api/agents");
+            await AddOperatorHeadersAsync(req, baseUrl, operatorToken, isAdminToken, true, ct);
+            req.Content = new StringContent(payload, Encoding.UTF8, "application/json");
+            using var resp = await _http.SendAsync(req, ct);
+            var body = await resp.Content.ReadAsStringAsync(ct);
+            return resp.IsSuccessStatusCode
+                ? (true, $"Created custom agent '{name.Trim()}'.")
+                : (false, ExtractApiDetail(body, $"HTTP {(int)resp.StatusCode}"));
+        }
+        catch (Exception ex)
+        {
+            return (false, ex.Message);
+        }
+    }
+
+    public async Task<(bool Ok, string Detail)> SetCustomAgentEnabledAsync(
+        string controlUrl,
+        string operatorToken,
+        bool isAdminToken,
+        string agentId,
+        bool enabled,
+        CancellationToken ct = default)
+    {
+        var baseUrl = NormalizeUrl(controlUrl);
+        try
+        {
+            using var req = new HttpRequestMessage(HttpMethod.Patch, $"{baseUrl}/api/agents/{Uri.EscapeDataString(agentId)}");
+            await AddOperatorHeadersAsync(req, baseUrl, operatorToken, isAdminToken, true, ct);
+            req.Content = new StringContent(JsonSerializer.Serialize(new { enabled }), Encoding.UTF8, "application/json");
+            using var resp = await _http.SendAsync(req, ct);
+            var body = await resp.Content.ReadAsStringAsync(ct);
+            return resp.IsSuccessStatusCode
+                ? (true, $"Agent {agentId} {(enabled ? "enabled" : "paused")}.")
+                : (false, ExtractApiDetail(body, $"HTTP {(int)resp.StatusCode}"));
+        }
+        catch (Exception ex)
+        {
+            return (false, ex.Message);
+        }
+    }
+
+    public async Task<(bool Ok, string Detail)> RunCustomAgentNowAsync(
+        string controlUrl,
+        string operatorToken,
+        bool isAdminToken,
+        string agentId,
+        CancellationToken ct = default)
+    {
+        var baseUrl = NormalizeUrl(controlUrl);
+        try
+        {
+            using var req = new HttpRequestMessage(HttpMethod.Post, $"{baseUrl}/api/agents/{Uri.EscapeDataString(agentId)}/run");
+            await AddOperatorHeadersAsync(req, baseUrl, operatorToken, isAdminToken, true, ct);
+            req.Content = new StringContent("{}", Encoding.UTF8, "application/json");
+            using var resp = await _http.SendAsync(req, ct);
+            var body = await resp.Content.ReadAsStringAsync(ct);
+            return resp.IsSuccessStatusCode
+                ? (true, $"Queued immediate run for {agentId}.")
+                : (false, ExtractApiDetail(body, $"HTTP {(int)resp.StatusCode}"));
+        }
+        catch (Exception ex)
+        {
+            return (false, ex.Message);
+        }
+    }
+
+    public async Task<(bool Ok, string Detail)> SetRoleEnabledAsync(
+        string controlUrl,
+        string operatorToken,
+        bool isAdminToken,
+        string roleId,
+        bool enabled,
+        CancellationToken ct = default)
+    {
+        var baseUrl = NormalizeUrl(controlUrl);
+        try
+        {
+            using var req = new HttpRequestMessage(HttpMethod.Post, $"{baseUrl}/api/roles/{Uri.EscapeDataString(roleId)}/enable?enabled={(enabled ? "true" : "false")}");
+            await AddOperatorHeadersAsync(req, baseUrl, operatorToken, isAdminToken, true, ct);
+            req.Content = new StringContent("{}", Encoding.UTF8, "application/json");
+            using var resp = await _http.SendAsync(req, ct);
+            var body = await resp.Content.ReadAsStringAsync(ct);
+            return resp.IsSuccessStatusCode
+                ? (true, $"Role {roleId} {(enabled ? "enabled" : "disabled")}.")
+                : (false, ExtractApiDetail(body, $"HTTP {(int)resp.StatusCode}"));
+        }
+        catch (Exception ex)
+        {
+            return (false, ex.Message);
+        }
+    }
+
+    public async Task<(bool Ok, string Detail)> DispatchSupervisorHandoffAsync(
+        string controlUrl,
+        string operatorToken,
+        bool isAdminToken,
+        string deviceId,
+        string goal,
+        string profile,
+        CancellationToken ct = default)
+    {
+        var baseUrl = NormalizeUrl(controlUrl);
+        try
+        {
+            var payload = JsonSerializer.Serialize(new
+            {
+                device_id = deviceId.Trim(),
+                goal = goal.Trim(),
+                profile = string.IsNullOrWhiteSpace(profile) ? "balanced" : profile.Trim(),
+            });
+            using var req = new HttpRequestMessage(HttpMethod.Post, $"{baseUrl}/api/supervisor/handoff");
+            await AddOperatorHeadersAsync(req, baseUrl, operatorToken, isAdminToken, true, ct);
+            req.Content = new StringContent(payload, Encoding.UTF8, "application/json");
+            using var resp = await _http.SendAsync(req, ct);
+            var body = await resp.Content.ReadAsStringAsync(ct);
+            return resp.IsSuccessStatusCode
+                ? (true, "Supervisor handoff dispatched.")
+                : (false, ExtractApiDetail(body, $"HTTP {(int)resp.StatusCode}"));
+        }
+        catch (Exception ex)
+        {
+            return (false, ex.Message);
+        }
+    }
+
+    public async Task<(bool Ok, string ReplyText, string ToolsSummary, string? ScreenshotBase64, string Detail)> SendDeviceAgentChatAsync(
+        string controlUrl,
+        string operatorToken,
+        bool isAdminToken,
+        string localDeviceId,
+        System.Collections.Generic.IEnumerable<(string Role, string Content)> messages,
+        string? provider = null,
+        string? model = null,
+        string? apiKey = null,
+        string tenant = "default",
+        CancellationToken ct = default)
+    {
+        var baseUrl = NormalizeUrl(controlUrl);
+        if (string.IsNullOrWhiteSpace(localDeviceId))
+        {
+            return (false, "", "", null, "Device ID is not configured.");
+        }
+
+        try
+        {
+            var msgArray = new System.Collections.Generic.List<object>();
+            foreach (var (r, c) in messages)
+            {
+                msgArray.Add(new { role = r, content = c });
+            }
+
+            var payload = JsonSerializer.Serialize(new
+            {
+                messages = msgArray,
+                provider = string.IsNullOrWhiteSpace(provider) ? "auto" : provider.Trim(),
+                model = string.IsNullOrWhiteSpace(model) ? null : model.Trim(),
+                api_key = string.IsNullOrWhiteSpace(apiKey) ? null : apiKey.Trim(),
+                device = localDeviceId.Trim(),
+                tenant = string.IsNullOrWhiteSpace(tenant) ? "default" : tenant.Trim(),
+            });
+
+            using var req = new HttpRequestMessage(HttpMethod.Post, $"{baseUrl}/api/ai/chat");
+            await AddOperatorHeadersAsync(req, baseUrl, operatorToken, isAdminToken, true, ct);
+            req.Content = new StringContent(payload, Encoding.UTF8, "application/json");
+            using var resp = await _http.SendAsync(req, ct);
+            var body = await resp.Content.ReadAsStringAsync(ct);
+
+            if (!resp.IsSuccessStatusCode)
+            {
+                return (false, "", "", null, ExtractApiDetail(body, $"POST /api/ai/chat HTTP {(int)resp.StatusCode}"));
+            }
+
+            using var doc = JsonDocument.Parse(body);
+            var root = doc.RootElement;
+            string reply = "";
+            if (root.TryGetProperty("message", out var msgEl) && msgEl.ValueKind == JsonValueKind.Object)
+            {
+                reply = msgEl.TryGetProperty("content", out var cEl) ? cEl.GetString() ?? "" : "";
+            }
+            if (string.IsNullOrWhiteSpace(reply) && root.TryGetProperty("response", out var rEl))
+            {
+                reply = rEl.GetString() ?? "";
+            }
+
+            var toolsUsed = new System.Collections.Generic.List<string>();
+            if (root.TryGetProperty("steps", out var stepsEl) && stepsEl.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var st in stepsEl.EnumerateArray())
+                {
+                    if (st.TryGetProperty("tool", out var tEl) && tEl.GetString() is { Length: > 0 } tName)
+                    {
+                        toolsUsed.Add(tName);
+                    }
+                }
+            }
+
+            string? screenshot = null;
+            if (root.TryGetProperty("screenshot", out var sEl) && sEl.ValueKind == JsonValueKind.String)
+            {
+                screenshot = sEl.GetString();
+            }
+
+            var summary = toolsUsed.Count > 0 ? $"Tools ({localDeviceId}): {string.Join(", ", toolsUsed)}" : "";
+            return (true, string.IsNullOrWhiteSpace(reply) ? "Completed." : reply, summary, screenshot, "OK");
+        }
+        catch (Exception ex)
+        {
+            return (false, "", "", null, ex.Message);
+        }
+    }
+
     public void Dispose()
     {
         _cts?.Cancel();

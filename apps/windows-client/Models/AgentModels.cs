@@ -33,6 +33,12 @@ public sealed class AgentPolicyConfig
     [JsonPropertyName("allow_clipboard")]
     public bool AllowClipboard { get; set; } = true;
 
+    [JsonPropertyName("allow_unrestricted_apps")]
+    public bool AllowUnrestrictedApps { get; set; } = false;
+
+    [JsonPropertyName("allow_full_pc_access")]
+    public bool AllowFullPcAccess { get; set; } = false;
+
     [JsonPropertyName("allowed_apps")]
     public List<string> AllowedApps { get; set; } = new()
     {
@@ -249,3 +255,63 @@ public sealed record HardwareInfo(
     string GpuName,
     string OsVersion,
     string MachineName);
+
+public sealed class CustomAgentItem
+{
+    public string Id { get; set; } = "";
+    public string Name { get; set; } = "";
+    public string Instruction { get; set; } = "";
+    public string Provider { get; set; } = "openai";
+    public string Model { get; set; } = "";
+    public int IntervalSeconds { get; set; } = 300;
+    public bool Enabled { get; set; }
+    public string Status { get; set; } = "idle";
+    public string ToggleLabel => Enabled ? "Pause" : "Enable";
+}
+
+public sealed class RoleAgentItem
+{
+    public string Role { get; set; } = "";
+    public string Name { get; set; } = "";
+    public string Description { get; set; } = "";
+    public bool Enabled { get; set; }
+    public string StateLabel => Enabled ? "Enabled" : "Disabled";
+    public string ToggleLabel => Enabled ? "Disable" : "Enable";
+}
+
+public sealed class AgentChatMessage
+{
+    public string Role { get; set; } = "assistant";
+    public string Content { get; set; } = "";
+    public string ToolsSummary { get; set; } = "";
+    public string Timestamp { get; set; } = "";
+    public System.Windows.Media.ImageSource? ScreenshotImage { get; set; }
+
+    public System.Windows.Visibility UserBubbleVisibility =>
+        string.Equals(Role, "user", StringComparison.OrdinalIgnoreCase)
+            ? System.Windows.Visibility.Visible
+            : System.Windows.Visibility.Collapsed;
+
+    public System.Windows.Visibility AssistantBubbleVisibility =>
+        !string.Equals(Role, "user", StringComparison.OrdinalIgnoreCase)
+            ? System.Windows.Visibility.Visible
+            : System.Windows.Visibility.Collapsed;
+
+    public System.Windows.Visibility ToolsVisibility =>
+        string.IsNullOrWhiteSpace(ToolsSummary)
+            ? System.Windows.Visibility.Collapsed
+            : System.Windows.Visibility.Visible;
+
+    public System.Windows.Visibility ScreenshotVisibility =>
+        ScreenshotImage is not null
+            ? System.Windows.Visibility.Visible
+            : System.Windows.Visibility.Collapsed;
+}
+
+public sealed class AgentChatThread
+{
+    public string Id { get; set; } = Guid.NewGuid().ToString("N")[..8];
+    public string Title { get; set; } = "New Chat";
+    public string Preview { get; set; } = "Scoped to this Windows PC";
+    public System.Collections.ObjectModel.ObservableCollection<AgentChatMessage> Messages { get; } = new();
+}

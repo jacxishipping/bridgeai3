@@ -40,6 +40,12 @@ public partial class MainWindow : Window
     private readonly ObservableCollection<CaptureHistoryItem> _captureHistory = new();
     private readonly ObservableCollection<string> _policyAuditHistory = new();
     private readonly ObservableCollection<string> _deviceTags = new();
+    private readonly ObservableCollection<CustomAgentItem> _customAgents = new();
+    private readonly ObservableCollection<AgentChatThread> _chatThreads = new();
+    private AgentChatThread _activeThread = new() { Title = "New Chat", Preview = "Ready on this Windows PC" };
+    private bool _isChatBusy;
+    private string _operatorToken = "";
+    private bool _operatorIsAdminToken;
 
     private string _logFilter = "ALL";
     private string _taskFilter = "all";
@@ -76,19 +82,25 @@ public partial class MainWindow : Window
         ("Desktop Vision", "Multi-monitor Windows GDI+ desktop screenshot capture"),
         ("Security & Policy", "4-tier guardrails, allowlist matrix & policy audit"),
         ("Settings", "Control Plane endpoint, DPAPI token, updates & appearance"),
+        ("Agents", "Local runtimes, Named-Pipe bridge & agents scoped exclusively to this device"),
     };
 
     public MainWindow(int initialTab = 0, bool suppressAutoSignIn = false)
     {
         InitializeComponent();
 
-        _navButtons = new[] { NavOverviewBtn, NavTasksBtn, NavMonitorBtn, NavVisionBtn, NavSecurityBtn, NavSettingsBtn };
-        _navIcons = new[] { NavIcon0, NavIcon1, NavIcon2, NavIcon3, NavIcon4, NavIcon5 };
+        _navButtons = new[] { NavOverviewBtn, NavTasksBtn, NavMonitorBtn, NavVisionBtn, NavSecurityBtn, NavSettingsBtn, NavAgentsBtn };
+        _navIcons = new[] { NavIcon0, NavIcon1, NavIcon2, NavIcon3, NavIcon4, NavIcon5, NavIcon6 };
 
         ActivityLogList.ItemsSource = _visibleLogs;
         CaptureHistoryList.ItemsSource = _captureHistory;
         PolicyAuditList.ItemsSource = _policyAuditHistory;
         SetTagsItems.ItemsSource = _deviceTags;
+        AgCustomGrid.ItemsSource = _customAgents;
+        _chatThreads.Add(_activeThread);
+        AgThreadsList.ItemsSource = _chatThreads;
+        AgThreadsList.SelectedItem = _activeThread;
+        AgMessagesList.ItemsSource = _activeThread.Messages;
 
         _config = _configService.LoadConfig();
         _deviceToken = _configService.LoadToken();
@@ -238,6 +250,7 @@ public partial class MainWindow : Window
         NavLblVision.Visibility = labelVis;
         NavLblSecurity.Visibility = labelVis;
         NavLblSettings.Visibility = labelVis;
+        NavLblAgents.Visibility = labelVis;
 
         if (width < 980)
         {
@@ -257,6 +270,7 @@ public partial class MainWindow : Window
         }
 
         OverviewKpiGrid.Columns = width >= 1060 ? 4 : (width >= 720 ? 2 : 1);
+        AgLeftRailCol.Width = width < 920 ? new GridLength(0) : new GridLength(228);
 
         if (width < 960)
         {
@@ -307,6 +321,7 @@ public partial class MainWindow : Window
             new PaletteCommand("Task Explorer", () => SelectTab(1)),
             new PaletteCommand("System Monitor", () => SelectTab(2)),
             new PaletteCommand("Desktop Vision", () => SelectTab(3)),
+            new PaletteCommand("Agents", () => SelectTab(6)),
             new PaletteCommand("Security & Policy", () => SelectTab(4)),
             new PaletteCommand("Settings", () => SelectTab(5)),
             new PaletteCommand("Action: Start / Stop Agent", () => OnToggleAgentClick(this, new RoutedEventArgs())),
@@ -605,6 +620,10 @@ public partial class MainWindow : Window
             _navButtons[i].Style = i == idx ? activeStyle : normalStyle;
             _navIcons[i].Foreground = i == idx ? activeAccent : mutedBrush;
         }
+        if (idx == 6)
+        {
+            RefreshLocalAgentsSummary();
+        }
     }
 
     private void LoadConfigIntoUi()
@@ -628,6 +647,7 @@ public partial class MainWindow : Window
         PolAllowDesktopChk.IsChecked = _config.Policy.AllowDesktopControl;
         PolAllowPackageInstallChk.IsChecked = _config.Policy.AllowPackageInstall;
         PolAllowClipboardChk.IsChecked = _config.Policy.AllowClipboard;
+        PolAllowFullPcChk.IsChecked = _config.Policy.AllowFullPcAccess;
         PolRequireLocalApprovalChk.IsChecked = _config.Policy.RequireLocalApproval;
 
         int maxTierIdx = Math.Clamp(_config.Policy.MaxTierUnattended, 1, 4) - 1;
@@ -803,6 +823,7 @@ public partial class MainWindow : Window
         TopStatusText.Foreground = tone == "muted" ? mutedTextBrush : brush;
         UpdatePulseBeacon(tone == "ok");
         SetAgentButtonState(_client.IsRunning, _client.IsPaused);
+        RefreshLocalAgentsSummary();
 
         if (_trayIcon is not null)
         {
@@ -1773,10 +1794,16 @@ public partial class MainWindow : Window
         _config.Policy.AllowDesktopControl = PolAllowDesktopChk.IsChecked == true;
         _config.Policy.AllowPackageInstall = PolAllowPackageInstallChk.IsChecked == true;
         _config.Policy.AllowClipboard = PolAllowClipboardChk.IsChecked == true;
+        _config.Policy.AllowFullPcAccess = PolAllowFullPcChk.IsChecked == true;
+        if (_config.Policy.AllowFullPcAccess)
+        {
+            _config.Policy.AllowUnrestrictedApps = true;
+        }
         _config.Policy.RequireLocalApproval = PolRequireLocalApprovalChk.IsChecked == true;
         _config.Policy.MaxTierUnattended = Math.Clamp(PolMaxTierCombo.SelectedIndex + 1, 1, 4);
         _configService.SaveConfig(_config);
         UpdateSecurityPostureSummary();
+        RefreshLocalAgentsSummary();
         if (NamedPipeBridge.IsDesktopAgentAvailable())
         {
             _ = Task.Run(() => NamedPipeBridge.UpdateSessionPermissionsAsync(_config.Policy));
@@ -2172,5 +2199,928 @@ public partial class MainWindow : Window
         LoadConfigIntoUi();
         AppendLog("warn", "Configuration reset to defaults.");
         ShowToast("Defaults restored");
+    }
+
+    // ==================== AGENTS PAGE (CHATGPT UI · THIS DEVICE ONLY) ====================
+
+    private void RefreshLocalAgentsSummary()
+    {
+        var workerState = !_client.IsRunning ? "Stopped" : (_client.IsPaused ? "Paused" : "Running");
+        AgPollerStateText.Text = $"Worker: {workerState}";
+        AgPollerStateText.Foreground = (System.Windows.Media.Brush)FindResource(
+            !_client.IsRunning ? "TextMuted" : (_client.IsPaused ? "WarningText" : "SuccessText"));
+
+        var pipeName = string.IsNullOrWhiteSpace(_config.DesktopPipeName) ? NamedPipeBridge.PipeName : _config.DesktopPipeName;
+        bool pipeUp = NamedPipeBridge.IsDesktopAgentAvailable(pipeName);
+        AgPipeStateText.Text = $"Desktop Pipe: {(pipeUp ? "Available" : "Not Running")}";
+        AgPipeStateText.Foreground = (System.Windows.Media.Brush)FindResource(pipeUp ? "SuccessText" : "WarningText");
+
+        var hasHmac = !string.IsNullOrWhiteSpace(NamedPipeBridge.ActiveHmacSecret);
+        var devLabel = string.IsNullOrWhiteSpace(_config.DeviceId) ? "Unenrolled" : _config.DeviceId;
+        AgPollerMetaText.Text = $"{devLabel} · Poll {_config.PollIntervalSeconds}s";
+        AgPipeMetaText.Text = $@"\\.\pipe\{pipeName} · {(hasHmac ? "HMAC Sealed" : "Open")}";
+
+        if (AgScopedDeviceBadgeText is not null)
+        {
+            AgScopedDeviceBadgeText.Text = string.IsNullOrWhiteSpace(_config.DeviceId)
+                ? "Local PC (Unenrolled)"
+                : $"Scoped to: {_config.DeviceId}";
+        }
+
+        if (AgWelcomeSubText is not null)
+        {
+            AgWelcomeSubText.Text = string.IsNullOrWhiteSpace(_config.DeviceId)
+                ? $"Scoped exclusively to {Environment.MachineName} — offline Windows tools ready."
+                : $"Scoped exclusively to installed device '{_config.DeviceId}' — never dispatches to other hosts.";
+        }
+
+        if (AgChatStatusPillText is not null)
+        {
+            var cloudStatus = !string.IsNullOrWhiteSpace(_operatorToken) && !string.IsNullOrWhiteSpace(_config.DeviceId)
+                ? "Cloud LLM Ready"
+                : "Local Ready · Cloud Auth Optional";
+            AgChatStatusPillText.Text = cloudStatus;
+        }
+
+        if (AgFullUiBtn is not null)
+        {
+            bool uiOn = _config.Policy.AllowDesktopControl;
+            AgFullUiBtn.Content = uiOn ? "Full UI: ON" : "Full UI: Off";
+            AgFullUiBtn.Foreground = (System.Windows.Media.Brush)FindResource(uiOn ? "SuccessText" : "WarningText");
+        }
+
+        if (AgFullPcBtn is not null)
+        {
+            bool pcOn = _config.Policy.AllowFullPcAccess;
+            AgFullPcBtn.Content = pcOn ? "Full PC: ALLOWED" : "Full PC: Off";
+            AgFullPcBtn.Foreground = (System.Windows.Media.Brush)FindResource(pcOn ? "SuccessText" : "TextSecondary");
+        }
+
+        if (!string.IsNullOrWhiteSpace(_config.SignedInUser) && string.IsNullOrWhiteSpace(AgUserBox.Text))
+        {
+            AgUserBox.Text = _config.SignedInUser;
+        }
+    }
+
+    private bool PromptAndEnableFullPcAccess(string? requestedAction = null)
+    {
+        var actionLine = string.IsNullOrWhiteSpace(requestedAction)
+            ? ""
+            : $"Requested action: {requestedAction}\n\n";
+        var res = System.Windows.MessageBox.Show(
+            this,
+            actionLine +
+            "Allow AI Bridge Agents on this device full access to your entire Windows PC?\n\n" +
+            "When allowed, this device agent can:\n" +
+            "• Read, write, edit, move & delete files across all drives (C:\\, D:\\, user folders)\n" +
+            "• Run CMD & PowerShell commands anywhere on this PC\n" +
+            "• Launch any installed Windows application and terminate processes\n" +
+            "• Control mouse, keyboard, windows, clipboard & screen captures\n\n" +
+            "You can revoke this permission anytime using 'Full PC: ALLOWED' in the header or Security & Policy.",
+            "Allow Full PC Access?",
+            System.Windows.MessageBoxButton.YesNo,
+            System.Windows.MessageBoxImage.Warning,
+            System.Windows.MessageBoxResult.No);
+
+        if (res != System.Windows.MessageBoxResult.Yes)
+        {
+            return false;
+        }
+
+        _config.Policy.AllowFullPcAccess = true;
+        _config.Policy.AllowWrites = true;
+        _config.Policy.AllowTier3 = true;
+        _config.Policy.AllowTier4 = true;
+        _config.Policy.AllowShell = true;
+        _config.Policy.AllowDesktopControl = true;
+        _config.Policy.AllowClipboard = true;
+        _config.Policy.AllowPackageInstall = true;
+        _config.Policy.AllowUnrestrictedApps = true;
+        _config.Policy.MaxTierUnattended = 4;
+
+        LoadPolicyIntoUi();
+        _configService.SaveConfig(_config);
+        UpdateSecurityPostureSummary();
+        RefreshLocalAgentsSummary();
+        if (NamedPipeBridge.IsDesktopAgentAvailable())
+        {
+            _ = Task.Run(() => NamedPipeBridge.UpdateSessionPermissionsAsync(_config.Policy));
+        }
+        RecordPolicyAudit("User allowed Full PC Access");
+        AppendLog("ok", "Full PC Access ALLOWED by user (all drives, PowerShell/CMD, processes, unrestricted apps & Windows UI).");
+        ShowToast("Full PC access allowed");
+        return true;
+    }
+
+    private void OnAgToggleFullPcClick(object sender, RoutedEventArgs e)
+    {
+        if (!_config.Policy.AllowFullPcAccess)
+        {
+            PromptAndEnableFullPcAccess();
+            return;
+        }
+
+        _config.Policy.AllowFullPcAccess = false;
+        _config.Policy.AllowUnrestrictedApps = false;
+        _config.Policy.AllowShell = false;
+        _config.Policy.AllowTier4 = false;
+        _config.Policy.MaxTierUnattended = Math.Min(3, Math.Max(1, _config.Policy.MaxTierUnattended));
+
+        LoadPolicyIntoUi();
+        _configService.SaveConfig(_config);
+        UpdateSecurityPostureSummary();
+        RefreshLocalAgentsSummary();
+        if (NamedPipeBridge.IsDesktopAgentAvailable())
+        {
+            _ = Task.Run(() => NamedPipeBridge.UpdateSessionPermissionsAsync(_config.Policy));
+        }
+        RecordPolicyAudit("User revoked Full PC Access");
+        AppendLog("warn", "Full PC Access REVOKED by user (returned to confined workspace mode).");
+        ShowToast("Full PC access revoked");
+    }
+
+    private void OnAgToggleFullUiClick(object sender, RoutedEventArgs e)
+    {
+        bool enable = !_config.Policy.AllowDesktopControl;
+        _config.Policy.AllowDesktopControl = enable;
+        if (enable)
+        {
+            _config.Policy.AllowTier3 = true;
+            _config.Policy.AllowClipboard = true;
+            _config.Policy.AllowUnrestrictedApps = true;
+            _config.Policy.MaxTierUnattended = Math.Max(3, _config.Policy.MaxTierUnattended);
+        }
+        else
+        {
+            _config.Policy.AllowUnrestrictedApps = false;
+        }
+
+        LoadPolicyIntoUi();
+        _configService.SaveConfig(_config);
+        UpdateSecurityPostureSummary();
+        RefreshLocalAgentsSummary();
+        if (NamedPipeBridge.IsDesktopAgentAvailable())
+        {
+            _ = Task.Run(() => NamedPipeBridge.UpdateSessionPermissionsAsync(_config.Policy));
+        }
+
+        AppendLog(enable ? "ok" : "warn", enable
+            ? "Full Windows UI control ENABLED (mouse, keyboard, UI Automation, window manager & app launching)."
+            : "Full Windows UI control DISABLED (read-only UI inspection only).");
+        ShowToast(enable ? "Full Windows UI access enabled" : "Full Windows UI access disabled");
+    }
+
+    private void SyncChatStreamVisibility()
+    {
+        bool hasMessages = _activeThread.Messages.Count > 0;
+        AgWelcomePanel.Visibility = hasMessages ? Visibility.Collapsed : Visibility.Visible;
+        AgMessagesList.Visibility = hasMessages ? Visibility.Visible : Visibility.Collapsed;
+        if (hasMessages)
+        {
+            AgChatScroll.ScrollToEnd();
+        }
+    }
+
+    private void OnAgNewChatClick(object sender, RoutedEventArgs e)
+    {
+        if (_activeThread.Messages.Count == 0)
+        {
+            AgPromptBox.Focus();
+            return;
+        }
+
+        var next = new AgentChatThread
+        {
+            Title = "New Chat",
+            Preview = string.IsNullOrWhiteSpace(_config.DeviceId)
+                ? "Ready on this Windows PC"
+                : $"Scoped to {_config.DeviceId}",
+        };
+        _chatThreads.Insert(0, next);
+        _activeThread = next;
+        AgThreadsList.SelectedItem = next;
+        AgMessagesList.ItemsSource = _activeThread.Messages;
+        SyncChatStreamVisibility();
+        AgPromptBox.Focus();
+    }
+
+    private void OnAgToggleDrawerClick(object sender, RoutedEventArgs e)
+    {
+        AgSidePanel.Visibility = AgSidePanel.Visibility == Visibility.Visible
+            ? Visibility.Collapsed
+            : Visibility.Visible;
+    }
+
+    private void OnAgThreadSelected(object sender, SelectionChangedEventArgs e)
+    {
+        if (AgThreadsList.SelectedItem is AgentChatThread selected && !ReferenceEquals(selected, _activeThread))
+        {
+            _activeThread = selected;
+            AgMessagesList.ItemsSource = _activeThread.Messages;
+            SyncChatStreamVisibility();
+        }
+    }
+
+    private async void OnAgStarterClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is System.Windows.Controls.Button btn && btn.Tag is string prompt && !string.IsNullOrWhiteSpace(prompt))
+        {
+            await SendAgentPromptAsync(prompt);
+        }
+    }
+
+    private async void OnAgPromptKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        if (e.Key == Key.Enter && (Keyboard.Modifiers & ModifierKeys.Shift) == 0)
+        {
+            e.Handled = true;
+            var text = AgPromptBox.Text.Trim();
+            if (!string.IsNullOrWhiteSpace(text))
+            {
+                AgPromptBox.Clear();
+                await SendAgentPromptAsync(text);
+            }
+        }
+    }
+
+    private async void OnAgSendChatClick(object sender, RoutedEventArgs e)
+    {
+        var text = AgPromptBox.Text.Trim();
+        if (string.IsNullOrWhiteSpace(text)) return;
+        AgPromptBox.Clear();
+        await SendAgentPromptAsync(text);
+    }
+
+    private async Task SendAgentPromptAsync(string prompt)
+    {
+        if (_isChatBusy || string.IsNullOrWhiteSpace(prompt)) return;
+        _isChatBusy = true;
+        AgSendBtn.IsEnabled = false;
+        AgSendBtn.Content = "Thinking...";
+
+        try
+        {
+            if (_activeThread.Messages.Count == 0)
+            {
+                _activeThread.Title = prompt.Length > 34 ? prompt[..34] + "..." : prompt;
+            }
+            _activeThread.Preview = prompt.Length > 48 ? prompt[..48] + "..." : prompt;
+            AgThreadsList.Items.Refresh();
+
+            _activeThread.Messages.Add(new AgentChatMessage
+            {
+                Role = "user",
+                Content = prompt,
+                Timestamp = DateTime.Now.ToString("HH:mm:ss"),
+            });
+            SyncChatStreamVisibility();
+
+            var modeTag = (AgChatModeCombo.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "auto";
+            var isSlashCommand = prompt.StartsWith('/');
+
+            if (!isSlashCommand &&
+                !string.Equals(modeTag, "local", StringComparison.OrdinalIgnoreCase) &&
+                !string.IsNullOrWhiteSpace(_operatorToken) &&
+                !string.IsNullOrWhiteSpace(_config.DeviceId))
+            {
+                var provider = string.Equals(modeTag, "auto", StringComparison.OrdinalIgnoreCase) ? "auto" : modeTag;
+                var apiKey = AgApiKeyBox.Password.Trim();
+                var historyPayload = _activeThread.Messages
+                    .TakeLast(16)
+                    .Select(m => (m.Role, m.Content))
+                    .ToList();
+                var (ok, reply, toolsSummary, screenshotB64, err) = await _client.SendDeviceAgentChatAsync(
+                    _config.ControlUrl,
+                    _operatorToken,
+                    _operatorIsAdminToken,
+                    _config.DeviceId,
+                    historyPayload,
+                    provider,
+                    null,
+                    string.IsNullOrWhiteSpace(apiKey) ? null : apiKey,
+                    _config.TenantId);
+
+                if (ok)
+                {
+                    _activeThread.Messages.Add(new AgentChatMessage
+                    {
+                        Role = "assistant",
+                        Content = reply,
+                        ToolsSummary = !string.IsNullOrWhiteSpace(toolsSummary) ? toolsSummary : $"Device: {_config.DeviceId}",
+                        Timestamp = DateTime.Now.ToString("HH:mm:ss"),
+                        ScreenshotImage = DecodeBase64Image(screenshotB64),
+                    });
+                    _activeThread.Preview = reply.Length > 48 ? reply[..48] + "..." : reply;
+                    AgThreadsList.Items.Refresh();
+                    SyncChatStreamVisibility();
+                    return;
+                }
+
+                // Fallback gracefully to local tools if the user asked for local inspection or cloud key isn't set
+                var (localOk, localReply, localTool, localShot) = await TryExecuteLocalDevicePromptAsync(prompt);
+                if (localOk)
+                {
+                    _activeThread.Messages.Add(new AgentChatMessage
+                    {
+                        Role = "assistant",
+                        Content = $"{localReply}\n\n(Note: Cloud LLM returned \"{err}\" so local on-device execution ran instead.)",
+                        ToolsSummary = $"Local Tool: {localTool}",
+                        Timestamp = DateTime.Now.ToString("HH:mm:ss"),
+                        ScreenshotImage = localShot,
+                    });
+                }
+                else
+                {
+                    _activeThread.Messages.Add(new AgentChatMessage
+                    {
+                        Role = "assistant",
+                        Content = $"Cloud agent request could not complete: {err}\n\nTip: Open 'Tools & Agents' to configure your Operator Auth / LLM API Key, or use slash commands like /sysinfo, /windows, /monitor, /screenshot, or /pipe.",
+                        ToolsSummary = $"Device: {_config.DeviceId}",
+                        Timestamp = DateTime.Now.ToString("HH:mm:ss"),
+                    });
+                }
+                AgThreadsList.Items.Refresh();
+                SyncChatStreamVisibility();
+                return;
+            }
+
+            // Local-only mode, slash command, or unauthenticated offline execution strictly on this Windows PC
+            var (handled, answer, toolLabel, shot) = await TryExecuteLocalDevicePromptAsync(prompt, allowDefaultSummary: true);
+            var cloudHint = string.Equals(modeTag, "local", StringComparison.OrdinalIgnoreCase)
+                ? ""
+                : (string.IsNullOrWhiteSpace(_operatorToken)
+                    ? "\n\n(Running local Windows device tools. For full LLM reasoning, click 'Tools & Agents' to sign in to Control Plane.)"
+                    : "");
+
+            _activeThread.Messages.Add(new AgentChatMessage
+            {
+                Role = "assistant",
+                Content = (handled ? answer : "Ready on this Windows PC.") + cloudHint,
+                ToolsSummary = toolLabel,
+                Timestamp = DateTime.Now.ToString("HH:mm:ss"),
+                ScreenshotImage = shot,
+            });
+            _activeThread.Preview = answer.Split('\n')[0];
+            if (_activeThread.Preview.Length > 48) _activeThread.Preview = _activeThread.Preview[..48] + "...";
+            AgThreadsList.Items.Refresh();
+            SyncChatStreamVisibility();
+        }
+        finally
+        {
+            _isChatBusy = false;
+            AgSendBtn.IsEnabled = true;
+            AgSendBtn.Content = "Send ↑";
+            AgPromptBox.Focus();
+        }
+    }
+
+    private async Task<(bool Handled, string Reply, string ToolLabel, ImageSource? Screenshot)> TryExecuteLocalDevicePromptAsync(
+        string prompt,
+        bool allowDefaultSummary = false)
+    {
+        var trimmed = prompt.Trim();
+
+        // Multi-step chaining (e.g. "open notepad and type Hello" or "focus chrome then hotkey ctrl+l")
+        if (!trimmed.StartsWith('/') &&
+            (trimmed.Contains(" and then ", StringComparison.OrdinalIgnoreCase) ||
+             trimmed.Contains(" then ", StringComparison.OrdinalIgnoreCase) ||
+             (trimmed.Contains(" and ", StringComparison.OrdinalIgnoreCase) &&
+              (trimmed.StartsWith("open ", StringComparison.OrdinalIgnoreCase) ||
+               trimmed.StartsWith("focus ", StringComparison.OrdinalIgnoreCase) ||
+               trimmed.StartsWith("click ", StringComparison.OrdinalIgnoreCase)))))
+        {
+            var parts = trimmed.Split(new[] { " and then ", " then ", " and " }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            if (parts.Length > 1 && parts.Length <= 6)
+            {
+                var stepLogs = new List<string>();
+                var stepTools = new List<string>();
+                ImageSource? lastShot = null;
+                foreach (var step in parts)
+                {
+                    var (sOk, sReply, sTool, sShot) = await ExecuteSingleLocalUiPromptAsync(step, allowDefaultSummary: false);
+                    stepLogs.Add($"• {step}: {(sOk ? sReply : "Unrecognized action")}");
+                    if (!string.IsNullOrWhiteSpace(sTool)) stepTools.Add(sTool);
+                    if (sShot is not null) lastShot = sShot;
+                    if (!sOk) break;
+                    await Task.Delay(250);
+                }
+                if (stepTools.Count > 0)
+                {
+                    return (true, string.Join("\n\n", stepLogs), string.Join(" -> ", stepTools), lastShot);
+                }
+            }
+        }
+
+        return await ExecuteSingleLocalUiPromptAsync(trimmed, allowDefaultSummary);
+    }
+
+    private async Task<(bool Handled, string Reply, string ToolLabel, ImageSource? Screenshot)> ExecuteSingleLocalUiPromptAsync(
+        string rawPrompt,
+        bool allowDefaultSummary = false)
+    {
+        var trimmed = rawPrompt.Trim();
+        var lower = trimmed.ToLowerInvariant();
+
+        if (lower.StartsWith("/pipe") || (lower.Contains("pipe") && !lower.Contains("screenshot")))
+        {
+            var (pingOk, pingResp) = await NamedPipeBridge.PingHeartbeatAsync();
+            var (statusOk, statusResp) = await NamedPipeBridge.RequestDesktopStatusAsync();
+            var pipeName = string.IsNullOrWhiteSpace(_config.DesktopPipeName) ? NamedPipeBridge.PipeName : _config.DesktopPipeName;
+            var summary = $"Desktop Pipe Bridge (\\\\.\\pipe\\{pipeName}):\n" +
+                          $"• Heartbeat: {(pingOk ? "OK" : "Unavailable")}\n" +
+                          $"• Ping Response: {pingResp}\n" +
+                          $"• Status ({(statusOk ? "OK" : "Unavailable")}): {statusResp}";
+            return (true, summary, "Local Tool: named_pipe_bridge", null);
+        }
+
+        if (lower.StartsWith("/som") || lower.Contains("set of marks") || lower.Contains("set-of-marks"))
+        {
+            var winFilter = lower.StartsWith("/som") ? trimmed[4..].Trim() : "";
+            var argsJson = JsonSerializer.Serialize(new { window = string.IsNullOrWhiteSpace(winFilter) ? null : winFilter, max_marks = 40 });
+            var (ok, json) = await _executor.ExecuteAsync("set_of_marks_screenshot", argsJson, _config, default);
+            if (ok)
+            {
+                try
+                {
+                    using var doc = JsonDocument.Parse(json);
+                    var b64 = doc.RootElement.TryGetProperty("image_base64", out var bProp) ? bProp.GetString() : null;
+                    var path = doc.RootElement.TryGetProperty("path", out var pProp) ? pProp.GetString() : "";
+                    var marksSummary = doc.RootElement.TryGetProperty("marks", out var mProp)
+                        ? string.Join("\n", mProp.EnumerateArray().Take(20).Select(m =>
+                            $"[{m.GetProperty("mark_id").GetString()}] {m.GetProperty("control_type").GetString()} \"{m.GetProperty("name").GetString()}\" ({m.GetProperty("center_x").GetInt32()}, {m.GetProperty("center_y").GetInt32()})"))
+                        : "";
+                    return (true, $"Captured Set-of-Marks UI map ({path}). Use `/click #<mark_id>` to click any badge:\n{marksSummary}", "Local Tool: set_of_marks_screenshot", DecodeBase64Image(b64));
+                }
+                catch { }
+            }
+            return (true, $"Set-of-Marks failed:\n{FormatJsonForChat(json)}", "Local Tool: set_of_marks_screenshot", null);
+        }
+
+        if (lower.StartsWith("/ui") || lower.Contains("ui element") || lower.Contains("ui tree") || lower.Contains("clickable"))
+        {
+            var argPart = lower.StartsWith("/ui") ? trimmed[3..].Trim() : "";
+            var argsJson = string.IsNullOrWhiteSpace(argPart)
+                ? "{\"limit\":60}"
+                : JsonSerializer.Serialize(new { query = argPart, limit = 60 });
+            var (_, json) = await _executor.ExecuteAsync("list_ui_elements", argsJson, _config, default);
+            return (true, $"Interactive Windows UI Elements on {Environment.MachineName}:\n{FormatJsonForChat(json, maxLen: 2600)}", "Local Tool: list_ui_elements", null);
+        }
+
+        if (lower.StartsWith("/active") || lower.Contains("active window"))
+        {
+            var (_, json) = await _executor.ExecuteAsync("get_active_window", "{}", _config, default);
+            return (true, $"Active foreground window:\n{FormatJsonForChat(json)}", "Local Tool: get_active_window", null);
+        }
+
+        if (lower.StartsWith("/focus ") || lower.StartsWith("focus "))
+        {
+            var target = lower.StartsWith("/focus ") ? trimmed[7..].Trim() : trimmed[6..].Trim();
+            return await ExecuteUiToolWithPolicyHintAsync("focus_window", new { title = target }, $"Focused window matching '{target}'");
+        }
+
+        if (lower.StartsWith("/max ") || lower.StartsWith("maximize "))
+        {
+            var target = lower.StartsWith("/max ") ? trimmed[5..].Trim() : trimmed[9..].Trim();
+            return await ExecuteUiToolWithPolicyHintAsync("maximize_window", new { title = target }, $"Maximized window matching '{target}'");
+        }
+
+        if (lower.StartsWith("/min ") || lower.StartsWith("minimize "))
+        {
+            var target = lower.StartsWith("/min ") ? trimmed[5..].Trim() : trimmed[9..].Trim();
+            return await ExecuteUiToolWithPolicyHintAsync("minimize_window", new { title = target }, $"Minimized window matching '{target}'");
+        }
+
+        if (lower.StartsWith("/restore ") || lower.StartsWith("restore "))
+        {
+            var target = lower.StartsWith("/restore ") ? trimmed[9..].Trim() : trimmed[8..].Trim();
+            return await ExecuteUiToolWithPolicyHintAsync("restore_window", new { title = target }, $"Restored window matching '{target}'");
+        }
+
+        if (lower.StartsWith("/close ") || lower.StartsWith("close window "))
+        {
+            var target = lower.StartsWith("/close ") ? trimmed[7..].Trim() : trimmed[13..].Trim();
+            return await ExecuteUiToolWithPolicyHintAsync("close_window", new { title = target }, $"Sent close signal to '{target}'");
+        }
+
+        if (lower.StartsWith("/open ") || lower.StartsWith("/launch ") || lower.StartsWith("open ") || lower.StartsWith("launch "))
+        {
+            var appTarget = lower.StartsWith("/open ") ? trimmed[6..].Trim()
+                : lower.StartsWith("/launch ") ? trimmed[8..].Trim()
+                : lower.StartsWith("open ") ? trimmed[5..].Trim()
+                : trimmed[7..].Trim();
+            return await ExecuteUiToolWithPolicyHintAsync("desktop_open_application", new { app = appTarget }, $"Launched '{appTarget}'");
+        }
+
+        if (lower.StartsWith("/click ") || lower.StartsWith("/dblclick ") || lower.StartsWith("/rclick ") ||
+            lower.StartsWith("click ") || lower.StartsWith("double click ") || lower.StartsWith("right click "))
+        {
+            string button = (lower.StartsWith("/rclick ") || lower.StartsWith("right click ")) ? "right" : "left";
+            bool dbl = lower.StartsWith("/dblclick ") || lower.StartsWith("double click ");
+            int offset = lower.StartsWith("/dblclick ") ? 10
+                : lower.StartsWith("/rclick ") ? 8
+                : lower.StartsWith("/click ") ? 7
+                : lower.StartsWith("double click ") ? 13
+                : lower.StartsWith("right click ") ? 12 : 6;
+            var target = trimmed[offset..].Trim();
+            var coords = target.Split(',', StringSplitOptions.TrimEntries);
+            if (coords.Length == 2 && int.TryParse(coords[0], out int cx) && int.TryParse(coords[1], out int cy))
+            {
+                return await ExecuteUiToolWithPolicyHintAsync("mouse_click", new { x = cx, y = cy, button, double_click = dbl }, $"Clicked ({cx}, {cy})");
+            }
+            if (target.StartsWith('#'))
+            {
+                var mark = target[1..].Trim();
+                return await ExecuteUiToolWithPolicyHintAsync("click_element", new { mark_id = mark, button, double_click = dbl }, $"Clicked mark #{mark}");
+            }
+            return await ExecuteUiToolWithPolicyHintAsync("click_element", new { query = target, button, double_click = dbl }, $"Clicked UI element '{target}'");
+        }
+
+        if (lower.StartsWith("/invoke ") || lower.StartsWith("invoke "))
+        {
+            var target = lower.StartsWith("/invoke ") ? trimmed[8..].Trim() : trimmed[7..].Trim();
+            return await ExecuteUiToolWithPolicyHintAsync("invoke_element", new { name = target }, $"Invoked UI element '{target}'");
+        }
+
+        if (lower.StartsWith("/set ") || lower.StartsWith("set "))
+        {
+            var body = lower.StartsWith("/set ") ? trimmed[5..].Trim() : trimmed[4..].Trim();
+            var eqIdx = body.IndexOf('=');
+            if (eqIdx > 0)
+            {
+                var elem = body[..eqIdx].Trim();
+                var val = body[(eqIdx + 1)..].Trim();
+                return await ExecuteUiToolWithPolicyHintAsync("set_element_value", new { name = elem, value = val }, $"Set '{elem}' value");
+            }
+        }
+
+        if (lower.StartsWith("/type ") || lower.StartsWith("type "))
+        {
+            var text = lower.StartsWith("/type ") ? trimmed[6..] : trimmed[5..];
+            return await ExecuteUiToolWithPolicyHintAsync("keyboard_type", new { text }, $"Typed {text.Length} characters");
+        }
+
+        if (lower.StartsWith("/hotkey ") || lower.StartsWith("hotkey ") || lower.StartsWith("press "))
+        {
+            var combo = lower.StartsWith("/hotkey ") ? trimmed[8..].Trim()
+                : lower.StartsWith("hotkey ") ? trimmed[7..].Trim() : trimmed[6..].Trim();
+            return await ExecuteUiToolWithPolicyHintAsync("press_hotkey", new { combo }, $"Pressed hotkey '{combo}'");
+        }
+
+        if (lower.StartsWith("/scroll"))
+        {
+            var arg = trimmed.Length > 7 ? trimmed[7..].Trim() : "-240";
+            int delta = arg.Equals("up", StringComparison.OrdinalIgnoreCase) ? 240
+                : arg.Equals("down", StringComparison.OrdinalIgnoreCase) ? -240
+                : (int.TryParse(arg, out var d) ? d : -240);
+            return await ExecuteUiToolWithPolicyHintAsync("mouse_scroll", new { delta }, $"Scrolled wheel ({delta})");
+        }
+
+        if (lower.StartsWith("/clipboard"))
+        {
+            var arg = trimmed.Length > 10 ? trimmed[10..].Trim() : "";
+            if (string.IsNullOrWhiteSpace(arg))
+            {
+                var (_, json) = await _executor.ExecuteAsync("get_clipboard", "{}", _config, default);
+                return (true, $"Windows clipboard:\n{FormatJsonForChat(json)}", "Local Tool: get_clipboard", null);
+            }
+            return await ExecuteUiToolWithPolicyHintAsync("set_clipboard", new { text = arg }, "Updated Windows clipboard");
+        }
+
+        if (lower.StartsWith("/drives") || lower.Contains("list drives") || lower.Contains("all drives"))
+        {
+            return await ExecuteFullPcToolWithPermissionPromptAsync("list_drives", new { }, "Local drives on this PC");
+        }
+
+        if (lower.StartsWith("/dir") || lower.StartsWith("/ls") || lower.StartsWith("browse "))
+        {
+            var path = lower.StartsWith("/dir") ? trimmed[4..].Trim()
+                : lower.StartsWith("/ls") ? trimmed[3..].Trim()
+                : trimmed[7..].Trim();
+            return await ExecuteFullPcToolWithPermissionPromptAsync("list_directory", new { path }, $"Directory listing ({(string.IsNullOrWhiteSpace(path) ? "User Profile" : path)})");
+        }
+
+        if (lower.StartsWith("/read "))
+        {
+            var path = trimmed[6..].Trim();
+            return await ExecuteFullPcToolWithPermissionPromptAsync("read_pc_file", new { path }, $"File contents ({path})");
+        }
+
+        if (lower.StartsWith("/ps ") || lower.StartsWith("powershell "))
+        {
+            var cmd = lower.StartsWith("/ps ") ? trimmed[4..].Trim() : trimmed[11..].Trim();
+            return await ExecuteFullPcToolWithPermissionPromptAsync("run_powershell", new { command = cmd }, $"PowerShell output");
+        }
+
+        if (lower.StartsWith("/shell ") || lower.StartsWith("run command "))
+        {
+            var cmd = lower.StartsWith("/shell ") ? trimmed[7..].Trim() : trimmed[12..].Trim();
+            return await ExecuteFullPcToolWithPermissionPromptAsync("run_shell", new { command = cmd }, $"Shell output");
+        }
+
+        if (lower.StartsWith("/kill ") || lower.StartsWith("kill process "))
+        {
+            var target = lower.StartsWith("/kill ") ? trimmed[6..].Trim() : trimmed[13..].Trim();
+            object argsObj = int.TryParse(target, out int pid) ? new { pid } : new { name = target };
+            return await ExecuteFullPcToolWithPermissionPromptAsync("kill_process", argsObj, $"Process terminated ({target})");
+        }
+
+        if (lower.StartsWith("/screenshot") || lower.Contains("screenshot") || lower.Contains("capture") || lower.Contains("screen"))
+        {
+            var (ok, json) = await _executor.ExecuteAsync("capture_desktop_screenshot", "{}", _config, default);
+            if (ok)
+            {
+                try
+                {
+                    using var doc = JsonDocument.Parse(json);
+                    var b64 = doc.RootElement.TryGetProperty("image_base64", out var bProp) ? bProp.GetString() : null;
+                    var path = doc.RootElement.TryGetProperty("path", out var pProp) ? pProp.GetString() : "";
+                    var shot = DecodeBase64Image(b64);
+                    return (true, $"Captured live screenshot from primary display on {Environment.MachineName}.\nSaved path: {path}", "Local Tool: capture_desktop_screenshot", shot);
+                }
+                catch { }
+            }
+            return (true, $"Screenshot result:\n{FormatJsonForChat(json)}", "Local Tool: capture_desktop_screenshot", null);
+        }
+
+        if (lower.StartsWith("/windows") || lower.Contains("open window") || lower.Contains("windows") || lower.Contains("handles"))
+        {
+            var (_, json) = await _executor.ExecuteAsync("list_desktop_windows", "{}", _config, default);
+            return (true, $"Visible desktop windows on {Environment.MachineName}:\n{FormatJsonForChat(json)}", "Local Tool: list_desktop_windows", null);
+        }
+
+        if (lower.StartsWith("/monitor") || lower.Contains("monitor") || lower.Contains("display"))
+        {
+            var (_, json) = await _executor.ExecuteAsync("get_monitors", "{}", _config, default);
+            return (true, $"Attached monitors on {Environment.MachineName}:\n{FormatJsonForChat(json)}", "Local Tool: get_monitors", null);
+        }
+
+        if (lower.StartsWith("/workspace") || lower.Contains("workspace") || lower.Contains("files"))
+        {
+            var (_, json) = await _executor.ExecuteAsync("list_workspace", "{}", _config, default);
+            return (true, $"Workspace contents ({_config.Workspace}):\n{FormatJsonForChat(json)}", "Local Tool: list_workspace", null);
+        }
+
+        if (lower.StartsWith("/sysinfo") || allowDefaultSummary ||
+            lower.Contains("cpu") || lower.Contains("memory") || lower.Contains("health") ||
+            lower.Contains("system") || lower.Contains("process") || lower.Contains("disk"))
+        {
+            var (_, sysJson) = await _executor.ExecuteAsync("get_system_info", "{}", _config, default);
+            var (_, resJson) = await _executor.ExecuteAsync("get_resource_usage", "{}", _config, default);
+            var (_, procJson) = await _executor.ExecuteAsync("list_processes", "{}", _config, default);
+            var msg = $"Device Health Snapshot ({Environment.MachineName}):\n\n" +
+                      $"System Info:\n{FormatJsonForChat(sysJson)}\n\n" +
+                      $"Resource Usage:\n{FormatJsonForChat(resJson)}\n\n" +
+                      $"Top Processes:\n{FormatJsonForChat(procJson, maxLen: 1400)}";
+            return (true, msg, "Local Tools: get_system_info, get_resource_usage, list_processes", null);
+        }
+
+        return (false, "", "", null);
+    }
+
+    private async Task<(bool Handled, string Reply, string ToolLabel, ImageSource? Screenshot)> ExecuteUiToolWithPolicyHintAsync(
+        string toolName,
+        object argsObj,
+        string successTitle)
+    {
+        var argsJson = JsonSerializer.Serialize(argsObj);
+        var (ok, resultJson) = await _executor.ExecuteAsync(toolName, argsJson, _config, default);
+        if (!ok && resultJson.Contains("interactive desktop control is disabled", StringComparison.OrdinalIgnoreCase))
+        {
+            return (
+                true,
+                $"Interactive Windows UI control is currently OFF.\n\nClick the **Full UI: Off** button in the top-right header of the Agents bar above to enable full mouse, keyboard, UI Automation, window control, and app launching.",
+                $"Policy Guard: {toolName}",
+                null);
+        }
+        var prefix = ok ? $"{successTitle}:\n" : $"Tool '{toolName}' failed:\n";
+        return (true, prefix + FormatJsonForChat(resultJson), $"Local Tool: {toolName}", null);
+    }
+
+    private async Task<(bool Handled, string Reply, string ToolLabel, ImageSource? Screenshot)> ExecuteFullPcToolWithPermissionPromptAsync(
+        string toolName,
+        object argsObj,
+        string successTitle)
+    {
+        if (!_config.Policy.AllowFullPcAccess ||
+            ((toolName is "run_powershell" or "run_shell" or "kill_process") &&
+             (!_config.Policy.AllowTier4 || _config.Policy.MaxTierUnattended < 4 || (toolName != "kill_process" && !_config.Policy.AllowShell))))
+        {
+            var granted = PromptAndEnableFullPcAccess($"{toolName} ({JsonSerializer.Serialize(argsObj)})");
+            if (!granted)
+            {
+                return (
+                    true,
+                    $"Permission denied by user: '{toolName}' was not executed.\nClick **Full PC: Off** in the header anytime if you want to allow PC-wide access.",
+                    $"Denied by User: {toolName}",
+                    null);
+            }
+        }
+
+        var argsJson = JsonSerializer.Serialize(argsObj);
+        var (ok, resultJson) = await _executor.ExecuteAsync(toolName, argsJson, _config, default);
+        var prefix = ok ? $"{successTitle}:\n" : $"Tool '{toolName}' failed:\n";
+        return (true, prefix + FormatJsonForChat(resultJson, maxLen: 2800), $"Local Tool: {toolName}", null);
+    }
+
+    private static string FormatJsonForChat(string json, int maxLen = 2000)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return "(empty)";
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            var pretty = JsonSerializer.Serialize(doc, new JsonSerializerOptions { WriteIndented = true });
+            return pretty.Length > maxLen ? pretty[..maxLen] + "\n... (truncated)" : pretty;
+        }
+        catch
+        {
+            return json.Length > maxLen ? json[..maxLen] + "..." : json;
+        }
+    }
+
+    private static ImageSource? DecodeBase64Image(string? base64)
+    {
+        if (string.IsNullOrWhiteSpace(base64)) return null;
+        try
+        {
+            var clean = base64.Contains(',') ? base64[(base64.IndexOf(',') + 1)..] : base64;
+            var bytes = Convert.FromBase64String(clean);
+            using var ms = new MemoryStream(bytes);
+            var bmp = new BitmapImage();
+            bmp.BeginInit();
+            bmp.CacheOption = BitmapCacheOption.OnLoad;
+            bmp.StreamSource = ms;
+            bmp.EndInit();
+            bmp.Freeze();
+            return bmp;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private async void OnAgentPipePingClick(object sender, RoutedEventArgs e)
+    {
+        var (ok, resp) = await NamedPipeBridge.PingHeartbeatAsync();
+        AgPipeConsoleBox.Text = $"[HEARTBEAT_PING -> {(ok ? "OK" : "UNAVAILABLE")}]\n{resp}";
+        RefreshLocalAgentsSummary();
+    }
+
+    private async void OnAgentPipeStatusClick(object sender, RoutedEventArgs e)
+    {
+        var (ok, resp) = await NamedPipeBridge.RequestDesktopStatusAsync();
+        AgPipeConsoleBox.Text = $"[DESKTOP_STATUS_REPORT -> {(ok ? "OK" : "UNAVAILABLE")}]\n{resp}";
+        RefreshLocalAgentsSummary();
+    }
+
+    private async void OnAgentPipePushPolicyClick(object sender, RoutedEventArgs e)
+    {
+        var (ok, resp) = await NamedPipeBridge.UpdateSessionPermissionsAsync(_config.Policy);
+        AgPipeConsoleBox.Text = $"[UPDATE_SESSION_PERMISSIONS -> {(ok ? "OK" : "UNAVAILABLE")}]\n{resp}";
+        ShowToast(ok ? "Session policy pushed to pipe" : "Desktop pipe not running");
+    }
+
+    private async void OnAgentPipeReleaseInputClick(object sender, RoutedEventArgs e)
+    {
+        var (ok, resp) = await NamedPipeBridge.ReleaseAllInputAsync();
+        AgPipeConsoleBox.Text = $"[RELEASE_ALL_INPUT -> {(ok ? "OK" : "UNAVAILABLE")}]\n{resp}";
+        ShowToast(ok ? "Released all held input" : "Desktop pipe not running");
+    }
+
+    private void OnAgentAuthModeChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (AgCredsPanel is null || AgTokenPanel is null) return;
+        bool isToken = AgAuthModeCombo.SelectedIndex == 1;
+        AgCredsPanel.Visibility = isToken ? Visibility.Collapsed : Visibility.Visible;
+        AgTokenPanel.Visibility = isToken ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private async void OnAgentsAuthenticateAndLoadClick(object sender, RoutedEventArgs e)
+    {
+        bool isTokenMode = AgAuthModeCombo.SelectedIndex == 1;
+        var adminTok = isTokenMode ? AgAdminTokenBox.Password.Trim() : "";
+        var user = AgUserBox.Text.Trim();
+        var pass = AgPassBox.Password;
+
+        if (isTokenMode && string.IsNullOrWhiteSpace(adminTok))
+        {
+            ShowToast("Enter X-Admin-Token first");
+            return;
+        }
+        if (!isTokenMode && (string.IsNullOrWhiteSpace(user) || string.IsNullOrWhiteSpace(pass)))
+        {
+            ShowToast("Enter username and password");
+            return;
+        }
+
+        AgAuthStatusText.Text = "Authenticating with Control Plane...";
+        var (ok, tok, isAdmin, detail) = await _client.LoginOperatorAsync(_config.ControlUrl, user, pass, adminTok);
+        if (!ok)
+        {
+            AgAuthStatusText.Text = detail;
+            AppendLog("err", $"Agents auth failed: {detail}");
+            return;
+        }
+
+        _operatorToken = tok;
+        _operatorIsAdminToken = isAdmin;
+        AgAuthStatusText.Text = detail;
+        RefreshLocalAgentsSummary();
+        await LoadFleetAgentsAndRolesAsync();
+    }
+
+    private async void OnAgentsRefreshClick(object sender, RoutedEventArgs e)
+    {
+        if (string.IsNullOrWhiteSpace(_operatorToken))
+        {
+            ShowToast("Authenticate above to load scheduled device agents");
+            return;
+        }
+        await LoadFleetAgentsAndRolesAsync();
+    }
+
+    private async Task LoadFleetAgentsAndRolesAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_deviceToken) || string.IsNullOrWhiteSpace(_config.DeviceId))
+        {
+            AgAuthStatusText.Text = "Device must be enrolled first — agents are restricted to this installed device.";
+            _customAgents.Clear();
+            return;
+        }
+        var (ok, custom, _, _, detail) = await _client.FetchAgentsAndRolesAsync(
+            _config.ControlUrl,
+            _operatorToken,
+            _operatorIsAdminToken,
+            _config.DeviceId);
+        if (!ok)
+        {
+            AgAuthStatusText.Text = detail;
+            AppendLog("warn", $"Load device agents: {detail}");
+            return;
+        }
+
+        _customAgents.Clear();
+        foreach (var item in custom) _customAgents.Add(item);
+
+        AgAuthStatusText.Text = detail;
+        AgPipeConsoleBox.Text = $"[Control Plane] {detail}";
+    }
+
+    private async void OnCreateCustomAgentClick(object sender, RoutedEventArgs e)
+    {
+        if (string.IsNullOrWhiteSpace(_deviceToken) || string.IsNullOrWhiteSpace(_config.DeviceId))
+        {
+            ShowToast("Enroll this Windows device first");
+            return;
+        }
+        if (string.IsNullOrWhiteSpace(_operatorToken))
+        {
+            ShowToast("Authenticate as operator/admin first");
+            return;
+        }
+        var provider = (AgNewProviderCombo.SelectedItem as ComboBoxItem)?.Content?.ToString() ?? "openai";
+        int interval = int.TryParse(AgNewIntervalBox.Text.Trim(), out var iv) ? iv : 300;
+        var (ok, detail) = await _client.CreateCustomAgentAsync(
+            _config.ControlUrl,
+            _operatorToken,
+            _operatorIsAdminToken,
+            AgNewNameBox.Text,
+            AgNewInstructionBox.Text,
+            provider,
+            "",
+            interval,
+            _config.DeviceId);
+        ShowToast(detail);
+        if (ok) await LoadFleetAgentsAndRolesAsync();
+    }
+
+    private async void OnToggleCustomAgentClick(object sender, RoutedEventArgs e)
+    {
+        if (string.IsNullOrWhiteSpace(_operatorToken)) return;
+        if (sender is System.Windows.Controls.Button btn && btn.Tag is CustomAgentItem item)
+        {
+            var (ok, detail) = await _client.SetCustomAgentEnabledAsync(
+                _config.ControlUrl,
+                _operatorToken,
+                _operatorIsAdminToken,
+                item.Id,
+                !item.Enabled);
+            ShowToast(detail);
+            if (ok) await LoadFleetAgentsAndRolesAsync();
+        }
+    }
+
+    private async void OnRunCustomAgentClick(object sender, RoutedEventArgs e)
+    {
+        if (string.IsNullOrWhiteSpace(_operatorToken)) return;
+        if (sender is System.Windows.Controls.Button btn && btn.Tag is CustomAgentItem item)
+        {
+            var (_, detail) = await _client.RunCustomAgentNowAsync(
+                _config.ControlUrl,
+                _operatorToken,
+                _operatorIsAdminToken,
+                item.Id);
+            ShowToast(detail);
+        }
     }
 }
