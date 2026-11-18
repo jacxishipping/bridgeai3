@@ -993,6 +993,10 @@ public partial class MainWindow : Window
 
     private void RecordTask(TaskHistoryRecord rec)
     {
+        // Keep task metadata for the UI, but avoid persisting file contents,
+        // command output, prompts, or other sensitive tool arguments/results.
+        rec.ArgsJson = "{}";
+        rec.ResultPreview = "Task content omitted from local history.";
         int limit = Math.Clamp(_config.TaskHistoryLimit, 50, 2000);
         _taskHistory.Insert(0, rec);
         if (_taskHistory.Count > limit)
@@ -1237,12 +1241,25 @@ public partial class MainWindow : Window
         SignInStatusText.Visibility = string.IsNullOrWhiteSpace(message) ? Visibility.Collapsed : Visibility.Visible;
     }
 
+    private static bool TryNormalizeControlPlaneUrl(string input, out string normalized)
+    {
+        try
+        {
+            normalized = ControlPlaneClient.NormalizeUrl(input);
+            return true;
+        }
+        catch (ArgumentException)
+        {
+            normalized = "";
+            return false;
+        }
+    }
+
     private async void OnSignInPingClick(object sender, RoutedEventArgs e)
     {
-        var url = ControlPlaneClient.NormalizeUrl(SignInUrlBox.Text);
-        if (!Uri.TryCreate(url, UriKind.Absolute, out _))
+        if (!TryNormalizeControlPlaneUrl(SignInUrlBox.Text, out var url))
         {
-            SetSignInStatus("Enter a valid Control Plane URL (e.g. https://...).");
+            SetSignInStatus("Use an HTTPS Control Plane URL. HTTP is allowed only for localhost.");
             return;
         }
         SetSignInStatus("Pinging Control Plane...", isError: false);
@@ -1252,16 +1269,15 @@ public partial class MainWindow : Window
 
     private async void OnSignInAccountSubmitClick(object sender, RoutedEventArgs e)
     {
-        var url = ControlPlaneClient.NormalizeUrl(SignInUrlBox.Text);
+        if (!TryNormalizeControlPlaneUrl(SignInUrlBox.Text, out var url))
+        {
+            SetSignInStatus("Use an HTTPS Control Plane URL. HTTP is allowed only for localhost.");
+            return;
+        }
         var devName = SignInDeviceNameBox.Text.Trim();
         var username = SignInUsernameBox.Text.Trim();
         var password = SignInPasswordBox.Password;
 
-        if (!Uri.TryCreate(url, UriKind.Absolute, out _))
-        {
-            SetSignInStatus("Enter a valid Control Plane URL.");
-            return;
-        }
         if (string.IsNullOrWhiteSpace(username) || string.IsNullOrEmpty(password))
         {
             SetSignInStatus("Username and password are required.");
@@ -1289,15 +1305,14 @@ public partial class MainWindow : Window
 
     private async void OnSignInTokenSubmitClick(object sender, RoutedEventArgs e)
     {
-        var url = ControlPlaneClient.NormalizeUrl(SignInUrlBox.Text);
+        if (!TryNormalizeControlPlaneUrl(SignInUrlBox.Text, out var url))
+        {
+            SetSignInStatus("Use an HTTPS Control Plane URL. HTTP is allowed only for localhost.");
+            return;
+        }
         var devName = SignInDeviceNameBox.Text.Trim();
         var tok = SignInTokenBox.Password.Trim();
 
-        if (!Uri.TryCreate(url, UriKind.Absolute, out _))
-        {
-            SetSignInStatus("Enter a valid Control Plane URL.");
-            return;
-        }
         if (string.IsNullOrWhiteSpace(tok))
         {
             SetSignInStatus("Device Token or Admin Token is required.");
@@ -1358,7 +1373,11 @@ public partial class MainWindow : Window
 
     private async void OnSubmitEnrollClick(object sender, RoutedEventArgs e)
     {
-        var url = ControlPlaneClient.NormalizeUrl(EnrollUrlBox.Text);
+        if (!TryNormalizeControlPlaneUrl(EnrollUrlBox.Text, out var url))
+        {
+            EnrollStatusText.Text = "Use an HTTPS Control Plane URL. HTTP is allowed only for localhost.";
+            return;
+        }
         var devId = EnrollDeviceIdBox.Text.Trim();
         var tok = EnrollTokenBox.Text.Trim();
         if (string.IsNullOrEmpty(url) || string.IsNullOrEmpty(tok))
@@ -1402,11 +1421,10 @@ public partial class MainWindow : Window
 
     private async void OnTestConnectionClick(object sender, RoutedEventArgs e)
     {
-        var url = ControlPlaneClient.NormalizeUrl(SetControlUrlBox.Text);
-        if (!Uri.TryCreate(url, UriKind.Absolute, out _))
+        if (!TryNormalizeControlPlaneUrl(SetControlUrlBox.Text, out var url))
         {
             SetValidationBadge.Foreground = new SolidColorBrush(ColorFromHex(239, 68, 68));
-            SetValidationBadge.Text = "Invalid URL";
+            SetValidationBadge.Text = "Use HTTPS (or localhost HTTP)";
             return;
         }
         var (ok, latencyMs, _) = await _client.PingAsync(url);
@@ -2014,6 +2032,12 @@ public partial class MainWindow : Window
 
     private async void OnSaveSettingsClick(object sender, RoutedEventArgs e)
     {
+        if (!TryNormalizeControlPlaneUrl(SetControlUrlBox.Text, out var normalizedControlUrl))
+        {
+            ShowToast("Use HTTPS for the Control Plane; HTTP is allowed only for localhost.");
+            return;
+        }
+
         // General
         _config.Workspace = SetWorkspaceBox.Text.Trim();
         _config.ScreenshotDirectory = string.IsNullOrWhiteSpace(SetScreenshotDirBox.Text)
@@ -2024,7 +2048,7 @@ public partial class MainWindow : Window
         _config.ConfirmDestructiveActions = SetConfirmDestructiveChk.IsChecked == true;
 
         // Control Plane
-        _config.ControlUrl = ControlPlaneClient.NormalizeUrl(SetControlUrlBox.Text);
+        _config.ControlUrl = normalizedControlUrl;
         _config.DeviceId = SetDeviceIdBox.Text.Trim();
         _config.TenantId = string.IsNullOrWhiteSpace(SetTenantIdBox.Text) ? "default" : SetTenantIdBox.Text.Trim();
         if (int.TryParse(SetPollIntervalBox.Text, out var poll)) _config.PollIntervalSeconds = Math.Clamp(poll, 5, 60);

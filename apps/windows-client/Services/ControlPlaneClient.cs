@@ -630,7 +630,12 @@ public sealed class ControlPlaneClient : IDisposable
         string resultJson;
         try
         {
-            if (config.Policy.RequireLocalApproval && IsSensitiveTool(tool) && LocalApprovalRequested is not null)
+            if (!DeviceAgentRuntimeService.IsToolAllowed(tool, config, out var permissionDeny))
+            {
+                status = "failed";
+                resultJson = JsonSerializer.Serialize(new { error = permissionDeny });
+            }
+            else if (config.Policy.RequireLocalApproval && IsSensitiveTool(tool) && LocalApprovalRequested is not null)
             {
                 bool approved = await LocalApprovalRequested.Invoke(taskId, tool, argsJson);
                 if (!approved)
@@ -646,8 +651,8 @@ public sealed class ControlPlaneClient : IDisposable
                         Status = status,
                         Timestamp = DateTimeOffset.Now.ToString("yyyy-MM-dd HH:mm:ss"),
                         DurationMs = Math.Round(sw.Elapsed.TotalMilliseconds, 1),
-                        ArgsJson = argsJson,
-                        ResultPreview = resultJson,
+                        ArgsJson = "{}",
+                        ResultPreview = "Task content omitted from local history.",
                     };
                     TaskRecorded?.Invoke(deniedRec);
                     LogMessage?.Invoke("warn", $"Task {taskId} denied by local operator.");
@@ -683,8 +688,8 @@ public sealed class ControlPlaneClient : IDisposable
             Status = status,
             Timestamp = DateTimeOffset.Now.ToString("yyyy-MM-dd HH:mm:ss"),
             DurationMs = Math.Round(sw.Elapsed.TotalMilliseconds, 1),
-            ArgsJson = argsJson,
-            ResultPreview = resultJson.Length > 4000 ? resultJson[..4000] : resultJson,
+            ArgsJson = "{}",
+            ResultPreview = "Task content omitted from local history.",
         };
         TaskRecorded?.Invoke(record);
         LogMessage?.Invoke(status == "succeeded" ? "ok" : (status == "cancelled" ? "warn" : "err"),
@@ -757,7 +762,21 @@ public sealed class ControlPlaneClient : IDisposable
             or "start_webrtc_stream" or "stop_webrtc_stream";
     }
 
-    public static string NormalizeUrl(string url) => url.Trim().TrimEnd('/');
+    public static string NormalizeUrl(string url)
+    {
+        var normalized = url.Trim().TrimEnd('/');
+        if (!Uri.TryCreate(normalized, UriKind.Absolute, out var uri) ||
+            (uri.Scheme != Uri.UriSchemeHttps &&
+             !(uri.Scheme == Uri.UriSchemeHttp && IsLoopbackHost(uri))))
+        {
+            throw new ArgumentException("Control Plane URL must use HTTPS. HTTP is allowed only for localhost or a loopback IP.", nameof(url));
+        }
+        return normalized;
+    }
+
+    private static bool IsLoopbackHost(Uri uri) =>
+        string.Equals(uri.Host, "localhost", StringComparison.OrdinalIgnoreCase) ||
+        System.Net.IPAddress.TryParse(uri.Host, out var address) && System.Net.IPAddress.IsLoopback(address);
 
     public async Task<(bool Ok, string Token, bool IsAdminToken, string Detail)> LoginOperatorAsync(
         string controlUrl,

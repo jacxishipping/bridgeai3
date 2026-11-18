@@ -243,7 +243,31 @@ public sealed class NativeToolExecutor
             throw new UnauthorizedAccessException("Path traversal outside workspace is denied.");
         }
 
+        // Lexical path checks do not contain a path that crosses a junction or
+        // symlink. Reject reparse points from the volume root through the target.
+        EnsureNoReparsePoints(rootFull, candidate);
+
         return candidate;
+    }
+
+    private static void EnsureNoReparsePoints(string workspaceRoot, string candidate)
+    {
+        var volumeRoot = Path.GetPathRoot(workspaceRoot)
+            ?? throw new UnauthorizedAccessException("Workspace path has no volume root.");
+        var current = volumeRoot;
+        var relativeRoot = Path.GetRelativePath(volumeRoot, workspaceRoot);
+        var relativeCandidate = Path.GetRelativePath(workspaceRoot, candidate);
+        var parts = relativeRoot.Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries)
+            .Concat(relativeCandidate == "." ? Array.Empty<string>() : relativeCandidate.Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries));
+        foreach (var part in parts)
+        {
+            current = Path.Combine(current, part);
+            if (!File.Exists(current) && !Directory.Exists(current)) continue;
+            if ((File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0)
+            {
+                throw new UnauthorizedAccessException("Workspace paths cannot traverse symbolic links, junctions, or other reparse points.");
+            }
+        }
     }
 
     private static string ResolveAccessiblePath(AgentGuiConfig config, string requestedPath, bool requireFullPcFlag = false)
