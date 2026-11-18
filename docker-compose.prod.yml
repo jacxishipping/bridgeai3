@@ -66,6 +66,15 @@ services:
       # Tier 3 (shell/desktop control) is OFF by default (R-P0-14).
       # Explicit opt-in only: set it to 1 in .env.production to enable.
       - AI_BRIDGE_ALLOW_TIER3=${AI_BRIDGE_ALLOW_TIER3:-0}
+      # Desktop automation is a separate gate from Tier 3: the agent
+      # denies desktop tools (start_webrtc_stream, mouse/keyboard,
+      # screenshots) unless desktop_enabled is true on BOTH sides, and
+      # the plane reads it from AI_BRIDGE_DESKTOP_ENABLED (default 0).
+      # The control-api never received this variable, so a WebRTC
+      # session's start_webrtc_stream task failed with "Desktop
+      # automation is not enabled" even with AI_BRIDGE_ALLOW_TIER3=1.
+      # Pass it here (default 0/off); opt in with 1 in .env.production.
+      - AI_BRIDGE_DESKTOP_ENABLED=${AI_BRIDGE_DESKTOP_ENABLED:-0}
       - AI_BRIDGE_DEVICE_TOKEN_TTL_DAYS=${AI_BRIDGE_DEVICE_TOKEN_TTL_DAYS:-7}
       - AI_BRIDGE_PUBLIC_URL=${AI_BRIDGE_PUBLIC_URL:-https://${AI_BRIDGE_DOMAIN:-jxiptvplayer.app}}
       # P-15 (Wave 7): env-matrix alignment with render.yaml — these keys

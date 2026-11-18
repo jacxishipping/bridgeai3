@@ -73,7 +73,17 @@ public partial class App : System.Windows.Application
             args.Handled = true;
         };
 
-        _mainWindow = new MainWindow();
+        int initialTab = 0;
+        foreach (var arg in e.Args)
+        {
+            if (arg.StartsWith("--tab=", StringComparison.OrdinalIgnoreCase) &&
+                int.TryParse(arg[6..], out var parsedTab))
+            {
+                initialTab = parsedTab;
+            }
+        }
+
+        _mainWindow = new MainWindow(initialTab);
         _mainWindow.Show();
     }
 

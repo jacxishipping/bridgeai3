@@ -35,3 +35,5 @@ __pycache__/
 # .NET Windows client build artifacts
 apps/windows-client/bin/
 apps/windows-client/obj/
+apps/windows-client.Tests/bin/
+apps/windows-client.Tests/obj/

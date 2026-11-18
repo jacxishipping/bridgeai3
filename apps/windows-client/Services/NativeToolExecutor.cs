@@ -47,7 +47,18 @@ public sealed class NativeToolExecutor
                 "read_workspace_file" or "read_file" => ReadWorkspaceFile(config.Workspace, args),
                 "search_workspace" => SearchWorkspace(config.Workspace, args),
                 "create_workspace_file" => CreateWorkspaceFile(config, args),
-                "capture_desktop_screenshot" or "take_screenshot" or "capture_desktop_frame" => CaptureScreenshot(config),
+                "get_monitors" => new { monitors = ScreenCaptureService.GetMonitors() },
+                "get_desktop_status" => new { pipe_available = NamedPipeBridge.IsDesktopAgentAvailable(), pipe_name = NamedPipeBridge.PipeName },
+                "get_ui_tree" or "find_elements" => FindUiElements(args),
+                "click_element" or "click_text" => ClickUiElement(config, args),
+                "start_webrtc_stream" => await SendPipeStreamCommandAsync(config, "START_WEBRTC_SESSION", args, ct),
+                "stop_webrtc_stream" => await SendPipeStreamCommandAsync(config, "STOP_WEBRTC_SESSION", args, ct),
+                "capture_desktop_screenshot" or "take_screenshot" or "capture_desktop_frame" => CaptureScreenshot(config, args),
+                "mouse_move" => MouseMove(config, args),
+                "mouse_click" => MouseClick(config, args),
+                "mouse_scroll" => MouseScroll(config, args),
+                "keyboard_type" => KeyboardType(config, args),
+                "key_press" => KeyPress(config, args),
                 "run_shell" => await RunShellAsync(config, args, ct),
                 _ => throw new InvalidOperationException($"Tool '{tool}' is not supported by native C# executor."),
             };
@@ -255,21 +266,112 @@ public sealed class NativeToolExecutor
         return new { path = rel, bytes_written = content.Length, status = "created" };
     }
 
-    private object CaptureScreenshot(AgentGuiConfig config)
+    private object CaptureScreenshot(AgentGuiConfig config, JsonElement args)
     {
         if (!config.Policy.AllowTier3)
         {
             throw new UnauthorizedAccessException("Policy denied: Tier 3 sensitive operations are disabled.");
         }
-        var shot = ScreenCaptureService.CapturePrimaryScreen(_screenshotDir);
+        int monitorIdx = args.TryGetProperty("monitor_index", out var mEl) && mEl.TryGetInt32(out var m) ? m : 0;
+        var shot = ScreenCaptureService.CapturePrimaryScreen(_screenshotDir, monitorIdx);
         return new
         {
             path = shot.FilePath,
+            monitor_index = shot.MonitorIndex,
             width = shot.Width,
             height = shot.Height,
             size_bytes = shot.SizeBytes,
             image_base64 = shot.Base64Png,
         };
+    }
+
+    private static void RequireDesktopControl(AgentGuiConfig config)
+    {
+        if (!config.Policy.AllowTier3 || !config.Policy.AllowDesktopControl)
+        {
+            throw new UnauthorizedAccessException("Policy denied: interactive desktop control is disabled.");
+        }
+    }
+
+    private static object MouseMove(AgentGuiConfig config, JsonElement args)
+    {
+        RequireDesktopControl(config);
+        int x = args.TryGetProperty("x", out var xEl) ? xEl.GetInt32() : 0;
+        int y = args.TryGetProperty("y", out var yEl) ? yEl.GetInt32() : 0;
+        DesktopInputService.MoveMouse(x, y);
+        return new { status = "ok", x, y };
+    }
+
+    private static object MouseClick(AgentGuiConfig config, JsonElement args)
+    {
+        RequireDesktopControl(config);
+        int x = args.TryGetProperty("x", out var xEl) ? xEl.GetInt32() : 0;
+        int y = args.TryGetProperty("y", out var yEl) ? yEl.GetInt32() : 0;
+        string button = args.TryGetProperty("button", out var bEl) ? bEl.GetString() ?? "left" : "left";
+        bool dbl = args.TryGetProperty("double_click", out var dEl) && dEl.GetBoolean();
+        DesktopInputService.ClickMouse(x, y, button, dbl);
+        return new { status = "ok", x, y, button, double_click = dbl };
+    }
+
+    private static object MouseScroll(AgentGuiConfig config, JsonElement args)
+    {
+        RequireDesktopControl(config);
+        int delta = args.TryGetProperty("delta", out var dEl) ? dEl.GetInt32() : -120;
+        DesktopInputService.ScrollMouse(delta);
+        return new { status = "ok", delta };
+    }
+
+    private static object KeyboardType(AgentGuiConfig config, JsonElement args)
+    {
+        RequireDesktopControl(config);
+        string text = args.TryGetProperty("text", out var tEl) ? tEl.GetString() ?? "" : "";
+        DesktopInputService.TypeText(text);
+        return new { status = "ok", length = text.Length };
+    }
+
+    private static object KeyPress(AgentGuiConfig config, JsonElement args)
+    {
+        RequireDesktopControl(config);
+        ushort vk = args.TryGetProperty("vk", out var vEl) && vEl.TryGetUInt16(out var code) ? code : (ushort)0x0D;
+        DesktopInputService.PressKey(vk);
+        return new { status = "ok", vk };
+    }
+
+    private static object FindUiElements(JsonElement args)
+    {
+        string? query = args.TryGetProperty("query", out var qEl) ? qEl.GetString() : null;
+        int limit = args.TryGetProperty("limit", out var lEl) && lEl.TryGetInt32(out var l) ? Math.Clamp(l, 1, 150) : 60;
+        var elements = UiAutomationService.FindVisibleElements(query, limit);
+        return new { count = elements.Count, elements };
+    }
+
+    private static object ClickUiElement(AgentGuiConfig config, JsonElement args)
+    {
+        RequireDesktopControl(config);
+        string query = args.TryGetProperty("query", out var qEl) ? qEl.GetString() ?? ""
+            : args.TryGetProperty("text", out var tEl) ? tEl.GetString() ?? ""
+            : args.TryGetProperty("name", out var nEl) ? nEl.GetString() ?? "" : "";
+        string button = args.TryGetProperty("button", out var bEl) ? bEl.GetString() ?? "left" : "left";
+        var clicked = UiAutomationService.ClickElement(query, button);
+        return new { status = "clicked", element = clicked };
+    }
+
+    private static async Task<object> SendPipeStreamCommandAsync(
+        AgentGuiConfig config,
+        string msgType,
+        JsonElement args,
+        CancellationToken ct)
+    {
+        if (!config.Policy.AllowTier3)
+        {
+            throw new UnauthorizedAccessException("Policy denied: Tier 3 sensitive operations are disabled.");
+        }
+        var (ok, reply) = await NamedPipeBridge.SendCommandAsync(msgType, args, ct: ct);
+        if (!ok)
+        {
+            throw new InvalidOperationException(reply);
+        }
+        return new { status = "ok", pipe_response = reply };
     }
 
     private static async Task<object> RunShellAsync(AgentGuiConfig config, JsonElement args, CancellationToken ct)

@@ -399,6 +399,18 @@ async function runFullTest() {
     : "FAIL — see failing criteria above");
 }
 
+function wsRejected(r) {
+  // A rejected handshake is valid when the socket never opened. The close
+  // code is 4401 when the server sends a WS close frame, or 1006 when the
+  // server rejects pre-accept (the handshake fails, so the browser never
+  // receives a close frame and reports abnormal closure). Both mean the
+  // ticket was refused and no session data flowed; the security property
+  // is `!opened`, not the code. (Proven live on the AWS plane: a replayed
+  // stream ticket closes 1006, not 4401, because the handler rejects
+  // before accept — which is the correct, standard behaviour.)
+  return !r.opened && (r.closeCode === 4401 || r.closeCode === 1006);
+}
+
 async function noSourceTicketAndWsChecks(devId) {
   // No session exists, so mint a ticket bound to a synthetic session id
   // and prove the WS endpoint refuses it (session lookup fails first),
@@ -412,17 +424,17 @@ async function noSourceTicketAndWsChecks(devId) {
     const wsUrl = plane().replace(/^http/, "ws") + "/api/v1/ws/sessions/" + encodeURIComponent(probeSession) + "?ticket=" + encodeURIComponent(mint.json.ticket);
     const r1 = await wsConnect(wsUrl, 10000);
     results.ws.probe_ticket = { opened: r1.opened, close_code: r1.closeCode };
-    if (!r1.opened && r1.closeCode === 4401) {
-      setCriterion("ws_rejects_unknown_session", "WS with a ticket for a nonexistent session is refused (4401)", "PASS",
-        "Socket closed 4401 without opening; ticket could not redeem without a live session row.");
+    if (wsRejected(r1)) {
+      setCriterion("ws_rejects_unknown_session", "WS with a ticket for a nonexistent session is refused (4401 or pre-accept 1006)", "PASS",
+        "Socket did not open; closeCode=" + r1.closeCode + " (ticket could not redeem without a live session row).");
     } else {
-      setCriterion("ws_rejects_unknown_session", "WS with a ticket for a nonexistent session is refused (4401)", "FAIL",
+      setCriterion("ws_rejects_unknown_session", "WS with a ticket for a nonexistent session is refused (4401 or pre-accept 1006)", "FAIL",
         "opened=" + r1.opened + " closeCode=" + r1.closeCode + " error=" + (r1.error || "none"));
     }
     const badUrl = plane().replace(/^http/, "ws") + "/api/v1/ws/sessions/" + encodeURIComponent(probeSession) + "?ticket=garbage-ticket-value";
     const r2 = await wsConnect(badUrl, 10000);
     results.ws.garbage_ticket = { opened: r2.opened, close_code: r2.closeCode };
-    setCriterion("ws_rejects_bad_ticket", "WS with a garbage ticket is refused (4401)", (!r2.opened && r2.closeCode === 4401) ? "PASS" : "FAIL",
+    setCriterion("ws_rejects_bad_ticket", "WS with a garbage ticket is refused (4401 or pre-accept 1006)", wsRejected(r2) ? "PASS" : "FAIL",
       "opened=" + r2.opened + " closeCode=" + r2.closeCode);
   } else {
     setCriterion("ticket_mint", "Stream ticket mints (single-use, 60s) for a bound device+session", "FAIL",
@@ -435,7 +447,7 @@ async function noSourceTicketAndWsChecks(devId) {
   const noAuthUrl = plane().replace(/^http/, "ws") + "/api/v1/ws/sessions/" + encodeURIComponent(probeSession);
   const r3 = await wsConnect(noAuthUrl, 10000);
   results.ws.no_auth = { opened: r3.opened, close_code: r3.closeCode };
-  setCriterion("ws_rejects_no_auth", "WS with no ticket/credential is refused (4401)", (!r3.opened && r3.closeCode === 4401) ? "PASS" : "FAIL",
+  setCriterion("ws_rejects_no_auth", "WS with no ticket/credential is refused (4401 or pre-accept 1006)", wsRejected(r3) ? "PASS" : "FAIL",
     "opened=" + r3.opened + " closeCode=" + r3.closeCode);
 }
 
@@ -456,8 +468,8 @@ async function liveSessionTicketAndWsChecks(devId, sid) {
   if (ok) {
     const r2 = await wsConnect(wsUrl, 8000); // replay same ticket
     results.ws.replay = { opened: r2.opened, close_code: r2.closeCode };
-    detail += " | replay: opened=" + r2.opened + " closeCode=" + r2.closeCode + (r2.opened || r2.closeCode !== 4401 ? " — REPLAY NOT REJECTED" : " (single-use enforced)");
-    if (r2.opened || r2.closeCode !== 4401) ok = false;
+    detail += " | replay: opened=" + r2.opened + " closeCode=" + r2.closeCode + (wsRejected(r2) ? " (single-use enforced)" : " — REPLAY NOT REJECTED");
+    if (!wsRejected(r2)) ok = false;
   }
   return { ok, detail };
 }

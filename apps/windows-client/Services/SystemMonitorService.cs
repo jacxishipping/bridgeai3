@@ -1,11 +1,16 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Net.NetworkInformation;
 using System.Runtime.InteropServices;
 using AIBridgeClient.Models;
+using Microsoft.Win32;
 
 namespace AIBridgeClient.Services;
+
+public sealed record ProcessSummary(int Pid, string Name, long MemoryMb, int Threads);
 
 public sealed class SystemMonitorService
 {
@@ -47,6 +52,65 @@ public sealed class SystemMonitorService
 
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool GetSystemTimes(out FileTime lpIdleTime, out FileTime lpKernelTime, out FileTime lpUserTime);
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct DisplayDevice
+    {
+        public int cb;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)]
+        public string DeviceName;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)]
+        public string DeviceString;
+        public uint StateFlags;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)]
+        public string DeviceID;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)]
+        public string DeviceKey;
+    }
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern bool EnumDisplayDevices(string? lpDevice, uint iDevNum, ref DisplayDevice lpDisplayDevice, uint dwFlags);
+
+    public HardwareInfo GetHardwareInfo()
+    {
+        string cpuName = "Unknown Processor";
+        try
+        {
+            using var key = Registry.LocalMachine.OpenSubKey(@"HARDWARE\DESCRIPTION\System\CentralProcessor\0");
+            if (key?.GetValue("ProcessorNameString") is string val && !string.IsNullOrWhiteSpace(val))
+            {
+                cpuName = val.Trim();
+            }
+        }
+        catch { }
+
+        string gpuName = "Microsoft Basic Display";
+        try
+        {
+            var gpus = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var dd = new DisplayDevice { cb = Marshal.SizeOf<DisplayDevice>() };
+            for (uint i = 0; EnumDisplayDevices(null, i, ref dd, 0); i++)
+            {
+                if (!string.IsNullOrWhiteSpace(dd.DeviceString))
+                {
+                    gpus.Add(dd.DeviceString.Trim());
+                }
+                dd.cb = Marshal.SizeOf<DisplayDevice>();
+            }
+            if (gpus.Count > 0)
+            {
+                gpuName = string.Join(" / ", gpus);
+            }
+        }
+        catch { }
+
+        return new HardwareInfo(
+            cpuName,
+            Environment.ProcessorCount,
+            gpuName,
+            Environment.OSVersion.VersionString,
+            Environment.MachineName);
+    }
 
     public HardwareTelemetry Sample()
     {
@@ -179,5 +243,49 @@ public sealed class SystemMonitorService
         _prevNetTime = now;
 
         return (sentKbps, recvKbps);
+    }
+
+    public List<ProcessSummary> GetTopProcesses(string? filter = null, int limit = 60)
+    {
+        var list = new List<ProcessSummary>();
+        foreach (var p in Process.GetProcesses())
+        {
+            try
+            {
+                if (!string.IsNullOrWhiteSpace(filter) &&
+                    !p.ProcessName.Contains(filter, StringComparison.OrdinalIgnoreCase) &&
+                    !p.Id.ToString().Contains(filter, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+                list.Add(new ProcessSummary(p.Id, p.ProcessName, p.WorkingSet64 / (1024 * 1024), p.Threads.Count));
+            }
+            catch
+            {
+                // Skip protected system processes
+            }
+        }
+        return list.OrderByDescending(x => x.MemoryMb).Take(limit).ToList();
+    }
+
+    public bool TryKillProcess(int pid, out string error)
+    {
+        if (pid <= 4 || pid == Environment.ProcessId)
+        {
+            error = "Refused to terminate critical system or self process.";
+            return false;
+        }
+        try
+        {
+            using var proc = Process.GetProcessById(pid);
+            proc.Kill(entireProcessTree: true);
+            error = "";
+            return true;
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+            return false;
+        }
     }
 }

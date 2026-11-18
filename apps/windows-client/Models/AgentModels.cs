@@ -21,6 +21,9 @@ public sealed class AgentPolicyConfig
     [JsonPropertyName("allow_desktop_control")]
     public bool AllowDesktopControl { get; set; } = false;
 
+    [JsonPropertyName("require_local_approval")]
+    public bool RequireLocalApproval { get; set; } = false;
+
     [JsonPropertyName("allowed_apps")]
     public List<string> AllowedApps { get; set; } = new()
     {
@@ -109,3 +112,26 @@ public sealed class RemoteTaskEnvelope
     [JsonPropertyName("emergency_stop")]
     public bool EmergencyStop { get; set; }
 }
+
+public sealed class LogEntry
+{
+    public string Timestamp { get; init; } = "";
+    public string Level { get; init; } = "INFO";
+    public string Message { get; init; } = "";
+    public string LevelColor { get; init; } = "#34D399";
+    public string FormattedLine => $"[{Timestamp}] [{Level}] {Message}";
+}
+
+public sealed record CaptureHistoryItem(
+    string FilePath,
+    int MonitorIndex,
+    string Resolution,
+    string SizeLabel,
+    string Timestamp);
+
+public sealed record HardwareInfo(
+    string CpuName,
+    int LogicalCores,
+    string GpuName,
+    string OsVersion,
+    string MachineName);

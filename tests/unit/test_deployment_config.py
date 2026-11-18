@@ -104,6 +104,32 @@ class TestTier3Default(unittest.TestCase):
         self.assertIn("AI_BRIDGE_ALLOW_TIER3", env)
         self.assertEqual(env["AI_BRIDGE_ALLOW_TIER3"], "${AI_BRIDGE_ALLOW_TIER3:-0}")
 
+    def test_prod_compose_desktop_enabled_defaults_to_0(self):
+        # Desktop automation is a separate gate from Tier 3: the plane
+        # reads AI_BRIDGE_DESKTOP_ENABLED (default 0) and the agent
+        # denies desktop tools unless it is true on both sides. The
+        # control-api never received this variable, so a WebRTC
+        # session's start_webrtc_stream task failed with "Desktop
+        # automation is not enabled" even with ALLOW_TIER3=1.
+        env = _compose_env(PROD_COMPOSE)
+        self.assertIn("AI_BRIDGE_DESKTOP_ENABLED", env)
+        self.assertEqual(env["AI_BRIDGE_DESKTOP_ENABLED"], "${AI_BRIDGE_DESKTOP_ENABLED:-0}")
+
+    def test_no_desktop_enabled_by_default_anywhere(self):
+        for path in (PROD_COMPOSE, BASE_COMPOSE, DEV_COMPOSE, CFN):
+            code = "\n".join(
+                line for line in _read(path).splitlines()
+                if not line.strip().startswith("#")
+            )
+            self.assertNotIn(
+                "AI_BRIDGE_DESKTOP_ENABLED=1",
+                code,
+                f"{path.name} still enables desktop automation by default",
+            )
+            self.assertNotRegex(
+                code, r"AI_BRIDGE_DESKTOP_ENABLED=\$\{[^}]*:-1\}",
+            )
+
     def test_no_tier3_enabled_by_default_anywhere(self):
         # Strip full-line comments first: prose may mention the opt-in
         # value ("set it to 1") without enabling anything.
