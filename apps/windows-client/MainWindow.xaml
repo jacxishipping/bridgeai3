@@ -1285,7 +1285,7 @@
                                                             <TextBlock x:Name="AgPollerMetaText" Text="Local tools ready" FontSize="10.5" FontFamily="Consolas" Foreground="{DynamicResource TextMuted}" Margin="0,2,0,0" TextTrimming="CharacterEllipsis"/>
                                                         </StackPanel>
                                                     </Border>
-                                                    <Button x:Name="AgToggleDrawerBtn" Content="Auth, Pipe &amp; Schedules" Style="{StaticResource BtnStyle}" Padding="10,7" FontSize="11.5" Click="OnAgToggleDrawerClick"/>
+                                                    <Button x:Name="AgToggleDrawerBtn" Content="Agent Settings &amp; Runtime" Style="{StaticResource BtnStyle}" Padding="10,7" FontSize="11.5" Click="OnAgOpenSettingsDrawerClick"/>
                                                 </StackPanel>
 
                                                 <!-- Thread History List -->
@@ -1310,39 +1310,31 @@
                                         <!-- CENTER MAIN CHATGPT STREAM & COMPOSER -->
                                         <Grid Grid.Column="1" Background="{DynamicResource BgCard}">
                                             <Grid.RowDefinitions>
-                                                <RowDefinition Height="48"/>
+                                                <RowDefinition Height="Auto" MinHeight="48"/>
                                                 <RowDefinition Height="*"/>
                                                 <RowDefinition Height="Auto"/>
                                             </Grid.RowDefinitions>
 
-                                            <!-- Top Model / Mode Bar -->
-                                            <Border Grid.Row="0" BorderBrush="{DynamicResource BorderHairline}" BorderThickness="0,0,0,1" Padding="18,0">
-                                                <Grid VerticalAlignment="Center">
-                                                    <Grid.ColumnDefinitions>
-                                                        <ColumnDefinition Width="Auto"/>
-                                                        <ColumnDefinition Width="*"/>
-                                                        <ColumnDefinition Width="Auto"/>
-                                                    </Grid.ColumnDefinitions>
-
-                                                    <ComboBox x:Name="AgChatModeCombo" Grid.Column="0" Style="{StaticResource SaaSComboBoxStyle}" Width="245" SelectedIndex="0" FontSize="12">
+                                            <!-- Top Model / Mode Bar (wraps cleanly so controls never clip) -->
+                                            <Border Grid.Row="0" BorderBrush="{DynamicResource BorderHairline}" BorderThickness="0,0,0,1" Padding="14,8">
+                                                <WrapPanel VerticalAlignment="Center" ItemHeight="30">
+                                                    <ComboBox x:Name="AgChatModeCombo" Style="{StaticResource SaaSComboBoxStyle}" Width="210" SelectedIndex="0" FontSize="11.5" Margin="0,2,8,2">
                                                         <ComboBoxItem Content="AI Bridge Copilot (Auto + Local)" Tag="auto"/>
                                                         <ComboBoxItem Content="OpenAI · GPT-4o (This Device)" Tag="openai"/>
                                                         <ComboBoxItem Content="Anthropic · Claude (This Device)" Tag="anthropic"/>
                                                         <ComboBoxItem Content="Google · Gemini (This Device)" Tag="gemini"/>
                                                         <ComboBoxItem Content="Local Windows Tools Only (Offline)" Tag="local"/>
                                                     </ComboBox>
-
-                                                    <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
-                                                        <Button x:Name="AgFullPcBtn" Content="Full PC: Off" Style="{StaticResource BtnStyle}" Padding="10,5" FontSize="11.5" Margin="0,0,6,0"
-                                                                Click="OnAgToggleFullPcClick" ToolTip="Grant or revoke full access to all PC drives/files, PowerShell, processes, and apps (asks confirmation first)"/>
-                                                        <Button x:Name="AgFullUiBtn" Content="Full UI: Off" Style="{StaticResource BtnStyle}" Padding="10,5" FontSize="11.5" Margin="0,0,8,0"
-                                                                Click="OnAgToggleFullUiClick" ToolTip="Enable or disable full Windows desktop UI control (mouse, keyboard, window manager, UI Automation &amp; apps)"/>
-                                                        <Border Background="{DynamicResource BgElevated}" BorderBrush="{DynamicResource BorderHairline}" BorderThickness="1" CornerRadius="12" Padding="10,4" Margin="0,0,8,0">
-                                                            <TextBlock x:Name="AgChatStatusPillText" Text="Local Ready · Cloud Auth Optional" FontSize="11" FontFamily="Consolas" Foreground="{DynamicResource TextSecondary}"/>
-                                                        </Border>
-                                                        <Button Content="Tools &amp; Agents" Style="{StaticResource BtnStyle}" Padding="10,5" FontSize="11.5" Click="OnAgToggleDrawerClick"/>
-                                                    </StackPanel>
-                                                </Grid>
+                                                    <Button x:Name="AgFullPcBtn" Content="Full PC: Off" Style="{StaticResource BtnStyle}" Padding="9,4" FontSize="11" Margin="0,2,6,2"
+                                                            Click="OnAgToggleFullPcClick" ToolTip="Grant or revoke full access to all PC drives/files, PowerShell, processes, and apps (asks confirmation first)"/>
+                                                    <Button x:Name="AgFullUiBtn" Content="Full UI: Off" Style="{StaticResource BtnStyle}" Padding="9,4" FontSize="11" Margin="0,2,6,2"
+                                                            Click="OnAgToggleFullUiClick" ToolTip="Enable or disable full Windows desktop UI control (mouse, keyboard, window manager, UI Automation &amp; apps)"/>
+                                                    <Border Background="{DynamicResource BgElevated}" BorderBrush="{DynamicResource BorderHairline}" BorderThickness="1" CornerRadius="12" Padding="9,4" Margin="0,2,6,2">
+                                                        <TextBlock x:Name="AgChatStatusPillText" Text="Local Ready" FontSize="10.5" FontFamily="Consolas" Foreground="{DynamicResource TextSecondary}" VerticalAlignment="Center"/>
+                                                    </Border>
+                                                    <Button x:Name="AgSettingsBtn" Content="Agent Settings" Style="{StaticResource PrimaryBtnStyle}" Padding="9,4" FontSize="11" Margin="0,2,6,2" Click="OnAgOpenSettingsDrawerClick"/>
+                                                    <Button Content="Runtime" Style="{StaticResource BtnStyle}" Padding="9,4" FontSize="11" Margin="0,2,0,2" Click="OnAgOpenRuntimeDrawerClick"/>
+                                                </WrapPanel>
                                             </Border>
 
                                             <!-- Chat Stream + Empty Starter Grid -->
@@ -1353,8 +1345,8 @@
                                                         <Border Width="42" Height="42" CornerRadius="12" Background="{DynamicResource AccentPrimary}" HorizontalAlignment="Center" Margin="0,0,0,14">
                                                             <TextBlock Text="AI" FontSize="16" FontWeight="Bold" Foreground="#FFFFFF" HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                                         </Border>
-                                                        <TextBlock Text="What can I help with on this Windows PC?" FontSize="22" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}" HorizontalAlignment="Center" TextAlignment="Center"/>
-                                                        <TextBlock x:Name="AgWelcomeSubText" Text="Scoped exclusively to this installed device — never dispatches to other hosts." FontSize="12.5" Foreground="{DynamicResource TextMuted}" HorizontalAlignment="Center" TextAlignment="Center" Margin="0,6,0,24"/>
+                                                        <TextBlock Text="What can I help with on this Windows PC?" FontSize="21" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}" HorizontalAlignment="Center" TextAlignment="Center" TextWrapping="Wrap"/>
+                                                        <TextBlock x:Name="AgWelcomeSubText" Text="Scoped exclusively to this installed device — never dispatches to other hosts." FontSize="12.5" Foreground="{DynamicResource TextMuted}" HorizontalAlignment="Center" TextAlignment="Center" TextWrapping="Wrap" Margin="0,6,0,24"/>
 
                                                         <UniformGrid Columns="2" MaxWidth="660">
                                                             <Button Style="{StaticResource BtnStyle}" Margin="0,0,6,10" Padding="14,12" HorizontalContentAlignment="Left" Click="OnAgStarterClick" Tag="/ui">
@@ -1436,9 +1428,7 @@
                                                                 <ColumnDefinition Width="*"/>
                                                                 <ColumnDefinition Width="Auto"/>
                                                             </Grid.ColumnDefinitions>
-                                                            <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
-                                                                <TextBlock Text="/ui · /som · /click · /type · /open · /dir · /ps · /screenshot · /sysinfo" FontSize="10.5" FontFamily="Consolas" Foreground="{DynamicResource TextMuted}" VerticalAlignment="Center"/>
-                                                            </StackPanel>
+                                                            <TextBlock Grid.Column="0" Text="/ui · /som · /click · /type · /open · /dir · /ps · /screenshot · /sysinfo" FontSize="10.5" FontFamily="Consolas" Foreground="{DynamicResource TextMuted}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" Margin="0,0,10,0"/>
                                                             <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
                                                                 <Button Content="Clear" Style="{StaticResource GhostBtnStyle}" Padding="8,5" FontSize="11.5" Click="OnAgNewChatClick" Margin="0,0,6,0"/>
                                                                 <Button x:Name="AgSendBtn" Content="Send ↑" Style="{StaticResource PrimaryBtnStyle}" Padding="14,6" FontSize="12" Click="OnAgSendChatClick"/>
@@ -1449,101 +1439,220 @@
                                             </Border>
                                         </Grid>
 
-                                        <!-- COLLAPSIBLE RIGHT DRAWER: AUTH, PIPE BRIDGE & SCHEDULED DEVICE AGENTS -->
-                                        <Border x:Name="AgSidePanel" Grid.Column="2" Width="355" Visibility="Collapsed" Background="{DynamicResource BgElevated}" BorderBrush="{DynamicResource BorderHairline}" BorderThickness="1,0,0,0" Padding="14">
-                                            <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-                                                <StackPanel>
-                                                    <Grid Margin="0,0,0,12">
+                                        <!-- COLLAPSIBLE RIGHT DRAWER: AGENT SETTINGS (AI API, PROMPT, FUNCTIONS) & RUNTIME -->
+                                        <Border x:Name="AgSidePanel" Grid.Column="2" Width="420" Visibility="Collapsed" Background="{DynamicResource BgElevated}" BorderBrush="{DynamicResource BorderHairline}" BorderThickness="1,0,0,0" Padding="14">
+                                            <DockPanel>
+                                                <!-- Drawer Header + Sub-tabs -->
+                                                <StackPanel DockPanel.Dock="Top" Margin="0,0,0,10">
+                                                    <Grid Margin="0,0,0,8">
                                                         <Grid.ColumnDefinitions>
                                                             <ColumnDefinition Width="*"/>
                                                             <ColumnDefinition Width="Auto"/>
                                                         </Grid.ColumnDefinitions>
-                                                        <TextBlock Grid.Column="0" Text="Device Agent Runtime &amp; Cloud Sync" FontSize="13" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}" VerticalAlignment="Center"/>
+                                                        <TextBlock Grid.Column="0" Text="Agent Settings &amp; Controls" FontSize="13.5" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}" VerticalAlignment="Center"/>
                                                         <Button Grid.Column="1" Content="✕" Style="{StaticResource ChipBtnStyle}" Click="OnAgToggleDrawerClick"/>
                                                     </Grid>
-
-                                                    <!-- Operator Cloud Auth -->
-                                                    <Border Background="{DynamicResource BgCard}" BorderBrush="{DynamicResource BorderHairline}" BorderThickness="1" CornerRadius="10" Padding="12" Margin="0,0,0,12">
-                                                        <StackPanel>
-                                                            <TextBlock Text="Control Plane LLM / Agent Auth" FontSize="12" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}" Margin="0,0,0,4"/>
-                                                            <TextBlock x:Name="AgAuthStatusText" Text="Optional: sign in to route chat via Control Plane LLM." FontSize="11" Foreground="{DynamicResource TextMuted}" TextWrapping="Wrap" Margin="0,0,0,8"/>
-                                                            <ComboBox x:Name="AgAuthModeCombo" Style="{StaticResource SaaSComboBoxStyle}" SelectedIndex="0" SelectionChanged="OnAgentAuthModeChanged" Margin="0,0,0,6">
-                                                                <ComboBoxItem Content="Username / Password" Tag="creds"/>
-                                                                <ComboBoxItem Content="Admin Token" Tag="token"/>
-                                                            </ComboBox>
-                                                            <StackPanel x:Name="AgCredsPanel">
-                                                                <TextBox x:Name="AgUserBox" Style="{StaticResource FieldStyle}" Text="admin" ToolTip="Username" Margin="0,0,0,6"/>
-                                                                <PasswordBox x:Name="AgPassBox" Style="{StaticResource PasswordFieldStyle}" ToolTip="Password" Margin="0,0,0,6"/>
-                                                            </StackPanel>
-                                                            <StackPanel x:Name="AgTokenPanel" Visibility="Collapsed">
-                                                                <PasswordBox x:Name="AgAdminTokenBox" Style="{StaticResource PasswordFieldStyle}" FontFamily="Consolas" ToolTip="X-Admin-Token" Margin="0,0,0,6"/>
-                                                            </StackPanel>
-                                                            <PasswordBox x:Name="AgApiKeyBox" Style="{StaticResource PasswordFieldStyle}" FontFamily="Consolas" ToolTip="Optional LLM API Key Override" Margin="0,0,0,8"/>
-                                                            <Button Content="Authenticate &amp; Sync" Style="{StaticResource PrimaryBtnStyle}" Padding="10,6" FontSize="11.5" Click="OnAgentsAuthenticateAndLoadClick"/>
-                                                        </StackPanel>
-                                                    </Border>
-
-                                                    <!-- Local Worker & C++ Pipe -->
-                                                    <Border Background="{DynamicResource BgCard}" BorderBrush="{DynamicResource BorderHairline}" BorderThickness="1" CornerRadius="10" Padding="12" Margin="0,0,0,12">
-                                                        <StackPanel>
-                                                            <TextBlock Text="Local Worker &amp; C++ Desktop Pipe" FontSize="12" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}" Margin="0,0,0,6"/>
-                                                            <TextBlock x:Name="AgPipeMetaText" Text="\\.\pipe\AIBridgeDesktopPipe" FontSize="10.5" FontFamily="Consolas" Foreground="{DynamicResource TextMuted}" Margin="0,0,0,8"/>
-                                                            <WrapPanel Margin="0,0,0,8">
-                                                                <Button Content="Start / Stop" Style="{StaticResource BtnStyle}" Padding="8,4" FontSize="11" Click="OnToggleAgentClick" Margin="0,2,4,2"/>
-                                                                <Button Content="Ping Pipe" Style="{StaticResource BtnStyle}" Padding="8,4" FontSize="11" Click="OnAgentPipePingClick" Margin="0,2,4,2"/>
-                                                                <Button Content="Pipe Status" Style="{StaticResource BtnStyle}" Padding="8,4" FontSize="11" Click="OnAgentPipeStatusClick" Margin="0,2,4,2"/>
-                                                                <Button Content="Push Policy" Style="{StaticResource BtnStyle}" Padding="8,4" FontSize="11" Click="OnAgentPipePushPolicyClick" Margin="0,2,4,2"/>
-                                                                <Button Content="Release Input" Style="{StaticResource DangerBtnStyle}" Padding="8,4" FontSize="11" Click="OnAgentPipeReleaseInputClick" Margin="0,2,0,2"/>
-                                                            </WrapPanel>
-                                                            <TextBox x:Name="AgPipeConsoleBox" Height="64" Background="{DynamicResource ConsoleCardBg}" Foreground="#CBD5E1"
-                                                                     BorderThickness="0" FontFamily="Consolas" FontSize="10.5" IsReadOnly="True" Padding="8"
-                                                                     TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" Text="Pipe output appears here."/>
-                                                        </StackPanel>
-                                                    </Border>
-
-                                                    <!-- Scheduled Device Agents (This Device Only) -->
-                                                    <Border Background="{DynamicResource BgCard}" BorderBrush="{DynamicResource BorderHairline}" BorderThickness="1" CornerRadius="10" Padding="12">
-                                                        <StackPanel>
-                                                            <Grid Margin="0,0,0,6">
-                                                                <Grid.ColumnDefinitions>
-                                                                    <ColumnDefinition Width="*"/>
-                                                                    <ColumnDefinition Width="Auto"/>
-                                                                </Grid.ColumnDefinitions>
-                                                                <TextBlock Grid.Column="0" Text="Scheduled Agents (This PC)" FontSize="12" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}" VerticalAlignment="Center"/>
-                                                                <Button Grid.Column="1" Content="Refresh" Style="{StaticResource GhostBtnStyle}" Padding="6,2" FontSize="11" Click="OnAgentsRefreshClick"/>
-                                                            </Grid>
-                                                            <DataGrid x:Name="AgCustomGrid" Style="{StaticResource MinimalDataGridStyle}" Height="125" AutoGenerateColumns="False" IsReadOnly="True" HeadersVisibility="Column" Margin="0,0,0,8">
-                                                                <DataGrid.Columns>
-                                                                    <DataGridTextColumn Header="Name" Binding="{Binding Name}" Width="*"/>
-                                                                    <DataGridTextColumn Header="Status" Binding="{Binding Status}" Width="58"/>
-                                                                    <DataGridTemplateColumn Header="Actions" Width="96">
-                                                                        <DataGridTemplateColumn.CellTemplate>
-                                                                            <DataTemplate>
-                                                                                <StackPanel Orientation="Horizontal">
-                                                                                    <Button Content="{Binding ToggleLabel}" Style="{StaticResource BtnStyle}" Padding="5,2" FontSize="10.5" Click="OnToggleCustomAgentClick" Tag="{Binding}" Margin="0,0,3,0"/>
-                                                                                    <Button Content="Run" Style="{StaticResource PrimaryBtnStyle}" Padding="5,2" FontSize="10.5" Click="OnRunCustomAgentClick" Tag="{Binding}"/>
-                                                                                </StackPanel>
-                                                                            </DataTemplate>
-                                                                        </DataGridTemplateColumn.CellTemplate>
-                                                                    </DataGridTemplateColumn>
-                                                                </DataGrid.Columns>
-                                                            </DataGrid>
-                                                            <TextBox x:Name="AgNewNameBox" Style="{StaticResource FieldStyle}" Text="health-watchdog" Margin="0,0,0,6"/>
-                                                            <UniformGrid Columns="2" Margin="0,0,0,6">
-                                                                <ComboBox x:Name="AgNewProviderCombo" Style="{StaticResource SaaSComboBoxStyle}" SelectedIndex="0" Margin="0,0,3,0">
-                                                                    <ComboBoxItem Content="openai"/>
-                                                                    <ComboBoxItem Content="anthropic"/>
-                                                                    <ComboBoxItem Content="gemini"/>
-                                                                    <ComboBoxItem Content="ollama"/>
-                                                                </ComboBox>
-                                                                <TextBox x:Name="AgNewIntervalBox" Style="{StaticResource FieldStyle}" FontFamily="Consolas" Text="300" Margin="3,0,0,0"/>
-                                                            </UniformGrid>
-                                                            <TextBox x:Name="AgNewInstructionBox" Style="{StaticResource FieldStyle}" Text="Monitor CPU/RAM and check workspace health." Margin="0,0,0,6"/>
-                                                            <Button Content="+ Create Device Agent" Style="{StaticResource PrimaryBtnStyle}" Padding="10,5" FontSize="11.5" Click="OnCreateCustomAgentClick"/>
-                                                        </StackPanel>
-                                                    </Border>
+                                                    <UniformGrid Columns="3">
+                                                        <Button x:Name="AgDrawerTabAiBtn" Content="AI &amp; Prompt" Style="{StaticResource PrimaryBtnStyle}" Padding="6,6" FontSize="11" Margin="0,0,3,0" Click="OnAgDrawerTabClick" Tag="ai"/>
+                                                        <Button x:Name="AgDrawerTabFnBtn" Content="Functions" Style="{StaticResource BtnStyle}" Padding="6,6" FontSize="11" Margin="2,0,2,0" Click="OnAgDrawerTabClick" Tag="functions"/>
+                                                        <Button x:Name="AgDrawerTabSysBtn" Content="Runtime &amp; Pipe" Style="{StaticResource BtnStyle}" Padding="6,6" FontSize="11" Margin="3,0,0,0" Click="OnAgDrawerTabClick" Tag="runtime"/>
+                                                    </UniformGrid>
                                                 </StackPanel>
-                                            </ScrollViewer>
+
+                                                <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                                                    <StackPanel>
+                                                        <!-- TAB 1: AI API CONNECTION, SYSTEM PROMPT & INSTRUCTION NAME -->
+                                                        <StackPanel x:Name="AgDrawerAiPanel" Visibility="Visible">
+                                                            <Border Background="{DynamicResource BgCard}" BorderBrush="{DynamicResource BorderHairline}" BorderThickness="1" CornerRadius="10" Padding="12" Margin="0,0,0,10">
+                                                                <StackPanel>
+                                                                    <TextBlock Text="Agent Identity &amp; System Instructions" FontSize="12" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}" Margin="0,0,0,8"/>
+                                                                    <UniformGrid Columns="2" Margin="0,0,0,6">
+                                                                        <StackPanel Margin="0,0,4,0">
+                                                                            <TextBlock Text="Agent Name" FontSize="10.5" Foreground="{DynamicResource TextMuted}" Margin="0,0,0,3"/>
+                                                                            <TextBox x:Name="AgSetNameBox" Style="{StaticResource FieldStyle}" Text="Windows Copilot"/>
+                                                                        </StackPanel>
+                                                                        <StackPanel Margin="4,0,0,0">
+                                                                            <TextBlock Text="Instruction Name" FontSize="10.5" Foreground="{DynamicResource TextMuted}" Margin="0,0,0,3"/>
+                                                                            <TextBox x:Name="AgSetInstructionNameBox" Style="{StaticResource FieldStyle}" Text="Default Windows Assistant"/>
+                                                                        </StackPanel>
+                                                                    </UniformGrid>
+                                                                    <TextBlock Text="System Prompt" FontSize="10.5" Foreground="{DynamicResource TextMuted}" Margin="0,2,0,3"/>
+                                                                    <TextBox x:Name="AgSetSystemPromptBox" Style="{StaticResource FieldStyle}" Height="92" AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" Margin="0,0,0,6"/>
+                                                                    <UniformGrid Columns="2">
+                                                                        <StackPanel Margin="0,0,4,0">
+                                                                            <TextBlock Text="Temperature (0.0 - 2.0)" FontSize="10.5" Foreground="{DynamicResource TextMuted}" Margin="0,0,0,3"/>
+                                                                            <TextBox x:Name="AgSetTempBox" Style="{StaticResource FieldStyle}" FontFamily="Consolas" Text="0.2"/>
+                                                                        </StackPanel>
+                                                                        <StackPanel Margin="4,0,0,0">
+                                                                            <TextBlock Text="Max Tool Steps (1 - 20)" FontSize="10.5" Foreground="{DynamicResource TextMuted}" Margin="0,0,0,3"/>
+                                                                            <TextBox x:Name="AgSetMaxStepsBox" Style="{StaticResource FieldStyle}" FontFamily="Consolas" Text="8"/>
+                                                                        </StackPanel>
+                                                                    </UniformGrid>
+                                                                </StackPanel>
+                                                            </Border>
+
+                                                            <Border Background="{DynamicResource BgCard}" BorderBrush="{DynamicResource BorderHairline}" BorderThickness="1" CornerRadius="10" Padding="12" Margin="0,0,0,10">
+                                                                <StackPanel>
+                                                                    <TextBlock Text="AI API Connection" FontSize="12" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}" Margin="0,0,0,6"/>
+                                                                    <TextBlock Text="Routing Mode" FontSize="10.5" Foreground="{DynamicResource TextMuted}" Margin="0,0,0,3"/>
+                                                                    <ComboBox x:Name="AgSetConnModeCombo" Style="{StaticResource SaaSComboBoxStyle}" SelectedIndex="0" Margin="0,0,0,6">
+                                                                        <ComboBoxItem Content="Auto (Direct API Key if set → Local Tools)" Tag="direct_or_local"/>
+                                                                        <ComboBoxItem Content="Direct AI API (Execute Tools Directly on This PC)" Tag="direct_api"/>
+                                                                        <ComboBoxItem Content="Via Control Plane (/api/ai/chat)" Tag="control_plane"/>
+                                                                        <ComboBoxItem Content="Local Windows Tools Only (No AI API)" Tag="local_only"/>
+                                                                    </ComboBox>
+
+                                                                    <UniformGrid Columns="2" Margin="0,0,0,6">
+                                                                        <StackPanel Margin="0,0,4,0">
+                                                                            <TextBlock Text="AI Provider" FontSize="10.5" Foreground="{DynamicResource TextMuted}" Margin="0,0,0,3"/>
+                                                                            <ComboBox x:Name="AgSetProviderCombo" Style="{StaticResource SaaSComboBoxStyle}" SelectionChanged="OnAgSettingsProviderChanged">
+                                                                                <ComboBoxItem Content="openai" Tag="openai"/>
+                                                                                <ComboBoxItem Content="anthropic" Tag="anthropic"/>
+                                                                                <ComboBoxItem Content="gemini" Tag="gemini"/>
+                                                                                <ComboBoxItem Content="ollama" Tag="ollama"/>
+                                                                                <ComboBoxItem Content="custom" Tag="custom"/>
+                                                                            </ComboBox>
+                                                                        </StackPanel>
+                                                                        <StackPanel Margin="4,0,0,0">
+                                                                            <TextBlock Text="Model Name" FontSize="10.5" Foreground="{DynamicResource TextMuted}" Margin="0,0,0,3"/>
+                                                                            <TextBox x:Name="AgSetModelBox" Style="{StaticResource FieldStyle}" FontFamily="Consolas" Text="gpt-4o"/>
+                                                                        </StackPanel>
+                                                                    </UniformGrid>
+
+                                                                    <TextBlock Text="API Base URL" FontSize="10.5" Foreground="{DynamicResource TextMuted}" Margin="0,0,0,3"/>
+                                                                    <TextBox x:Name="AgSetBaseUrlBox" Style="{StaticResource FieldStyle}" FontFamily="Consolas" Text="https://api.openai.com/v1" Margin="0,0,0,6"/>
+
+                                                                    <TextBlock Text="AI API Key (DPAPI-encrypted locally)" FontSize="10.5" Foreground="{DynamicResource TextMuted}" Margin="0,0,0,3"/>
+                                                                    <PasswordBox x:Name="AgSetApiKeyBox" Style="{StaticResource PasswordFieldStyle}" FontFamily="Consolas" ToolTip="Leave unchanged or paste OpenAI / Anthropic / Gemini key" Margin="0,0,0,8"/>
+
+                                                                    <UniformGrid Columns="2" Margin="0,0,0,6">
+                                                                        <Button Content="Test AI API" Style="{StaticResource BtnStyle}" Padding="8,6" FontSize="11.5" Margin="0,0,4,0" Click="OnAgTestApiClick"/>
+                                                                        <Button Content="Save Agent Settings" Style="{StaticResource PrimaryBtnStyle}" Padding="8,6" FontSize="11.5" Margin="4,0,0,0" Click="OnAgSaveSettingsClick"/>
+                                                                    </UniformGrid>
+                                                                    <TextBlock x:Name="AgApiTestStatusText" Text="Configure your AI provider and prompt, then Save." FontSize="11" Foreground="{DynamicResource TextMuted}" TextWrapping="Wrap"/>
+                                                                </StackPanel>
+                                                            </Border>
+                                                        </StackPanel>
+
+                                                        <!-- TAB 2: DEVICE FUNCTIONS ALLOW / DISALLOW -->
+                                                        <StackPanel x:Name="AgDrawerFunctionsPanel" Visibility="Collapsed">
+                                                            <Border Background="{DynamicResource BgCard}" BorderBrush="{DynamicResource BorderHairline}" BorderThickness="1" CornerRadius="10" Padding="12" Margin="0,0,0,10">
+                                                                <StackPanel>
+                                                                    <Grid Margin="0,0,0,8">
+                                                                        <Grid.ColumnDefinitions>
+                                                                            <ColumnDefinition Width="*"/>
+                                                                            <ColumnDefinition Width="Auto"/>
+                                                                        </Grid.ColumnDefinitions>
+                                                                        <TextBlock Grid.Column="0" Text="Device Functions Allow / Disallow" FontSize="12" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}" VerticalAlignment="Center"/>
+                                                                        <StackPanel Grid.Column="1" Orientation="Horizontal">
+                                                                            <Button Content="Allow All" Style="{StaticResource ChipBtnStyle}" FontSize="10.5" Margin="0,0,4,0" Click="OnAgAllowAllFunctionsClick"/>
+                                                                            <Button Content="Read-Only" Style="{StaticResource ChipBtnStyle}" FontSize="10.5" Click="OnAgReadOnlyFunctionsClick"/>
+                                                                        </StackPanel>
+                                                                    </Grid>
+
+                                                                    <CheckBox x:Name="AgFnSysHealthChk" Style="{StaticResource ToggleSwitchStyle}" Content="System Health, Telemetry, Processes &amp; Monitors"/>
+                                                                    <CheckBox x:Name="AgFnScreenCaptureChk" Style="{StaticResource ToggleSwitchStyle}" Content="Screen Capture &amp; Set-of-Marks Vision"/>
+                                                                    <CheckBox x:Name="AgFnWindowMgmtChk" Style="{StaticResource ToggleSwitchStyle}" Content="Window Management (Focus, Max, Min, Close, Resize)"/>
+                                                                    <CheckBox x:Name="AgFnUiInputChk" Style="{StaticResource ToggleSwitchStyle}" Content="UI Automation, Mouse Clicks, Typing &amp; Hotkeys"/>
+                                                                    <CheckBox x:Name="AgFnClipboardChk" Style="{StaticResource ToggleSwitchStyle}" Content="Clipboard Read &amp; Write"/>
+                                                                    <CheckBox x:Name="AgFnAppLaunchChk" Style="{StaticResource ToggleSwitchStyle}" Content="Launch Applications"/>
+                                                                    <CheckBox x:Name="AgFnWorkspaceFilesChk" Style="{StaticResource ToggleSwitchStyle}" Content="Workspace File Read, Search &amp; Edit"/>
+                                                                    <CheckBox x:Name="AgFnFullPcFilesChk" Style="{StaticResource ToggleSwitchStyle}" Content="Full PC Drives, Directories &amp; Files (if allowed)"/>
+                                                                    <CheckBox x:Name="AgFnShellPsChk" Style="{StaticResource ToggleSwitchStyle}" Content="CMD Shell &amp; PowerShell Execution (if allowed)"/>
+                                                                    <CheckBox x:Name="AgFnKillProcChk" Style="{StaticResource ToggleSwitchStyle}" Content="Terminate Running Processes (kill_process)"/>
+                                                                    <CheckBox x:Name="AgFnConfirmMutateChk" Style="{StaticResource ToggleSwitchStyle}" Content="Ask confirmation popup before every mutating function"/>
+
+                                                                    <TextBlock Text="Disallowed Function Names (comma-separated blocklist)" FontSize="10.5" Foreground="{DynamicResource TextMuted}" Margin="0,8,0,3"/>
+                                                                    <TextBox x:Name="AgSetDisabledToolsBox" Style="{StaticResource FieldStyle}" FontFamily="Consolas" ToolTip="Example: close_window, delete_workspace_file" Margin="0,0,0,8"/>
+
+                                                                    <Button Content="Save Function Permissions" Style="{StaticResource PrimaryBtnStyle}" Padding="10,6" FontSize="11.5" Click="OnAgSaveSettingsClick"/>
+                                                                </StackPanel>
+                                                            </Border>
+                                                        </StackPanel>
+
+                                                        <!-- TAB 3: CONTROL PLANE RUNTIME, C++ PIPE & SCHEDULED AGENTS -->
+                                                        <StackPanel x:Name="AgDrawerRuntimePanel" Visibility="Collapsed">
+                                                            <Border Background="{DynamicResource BgCard}" BorderBrush="{DynamicResource BorderHairline}" BorderThickness="1" CornerRadius="10" Padding="12" Margin="0,0,0,10">
+                                                                <StackPanel>
+                                                                    <TextBlock Text="Control Plane Operator Auth (Optional)" FontSize="12" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}" Margin="0,0,0,4"/>
+                                                                    <TextBlock x:Name="AgAuthStatusText" Text="Sign in only if routing via Control Plane or syncing scheduled device agents." FontSize="11" Foreground="{DynamicResource TextMuted}" TextWrapping="Wrap" Margin="0,0,0,8"/>
+                                                                    <ComboBox x:Name="AgAuthModeCombo" Style="{StaticResource SaaSComboBoxStyle}" SelectedIndex="0" SelectionChanged="OnAgentAuthModeChanged" Margin="0,0,0,6">
+                                                                        <ComboBoxItem Content="Username / Password" Tag="creds"/>
+                                                                        <ComboBoxItem Content="Admin Token" Tag="token"/>
+                                                                    </ComboBox>
+                                                                    <StackPanel x:Name="AgCredsPanel">
+                                                                        <TextBox x:Name="AgUserBox" Style="{StaticResource FieldStyle}" Text="admin" ToolTip="Username" Margin="0,0,0,6"/>
+                                                                        <PasswordBox x:Name="AgPassBox" Style="{StaticResource PasswordFieldStyle}" ToolTip="Password" Margin="0,0,0,6"/>
+                                                                    </StackPanel>
+                                                                    <StackPanel x:Name="AgTokenPanel" Visibility="Collapsed">
+                                                                        <PasswordBox x:Name="AgAdminTokenBox" Style="{StaticResource PasswordFieldStyle}" FontFamily="Consolas" ToolTip="X-Admin-Token" Margin="0,0,0,6"/>
+                                                                    </StackPanel>
+                                                                    <PasswordBox x:Name="AgApiKeyBox" Style="{StaticResource PasswordFieldStyle}" FontFamily="Consolas" ToolTip="Optional Control Plane LLM Key Override" Margin="0,0,0,8"/>
+                                                                    <Button Content="Authenticate &amp; Sync" Style="{StaticResource PrimaryBtnStyle}" Padding="10,6" FontSize="11.5" Click="OnAgentsAuthenticateAndLoadClick"/>
+                                                                </StackPanel>
+                                                            </Border>
+
+                                                            <Border Background="{DynamicResource BgCard}" BorderBrush="{DynamicResource BorderHairline}" BorderThickness="1" CornerRadius="10" Padding="12" Margin="0,0,0,10">
+                                                                <StackPanel>
+                                                                    <TextBlock Text="Local Worker &amp; C++ Desktop Pipe" FontSize="12" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}" Margin="0,0,0,6"/>
+                                                                    <TextBlock x:Name="AgPipeMetaText" Text="\\.\pipe\AIBridgeDesktopPipe" FontSize="10.5" FontFamily="Consolas" Foreground="{DynamicResource TextMuted}" Margin="0,0,0,8"/>
+                                                                    <WrapPanel Margin="0,0,0,8">
+                                                                        <Button Content="Start / Stop" Style="{StaticResource BtnStyle}" Padding="8,4" FontSize="11" Click="OnToggleAgentClick" Margin="0,2,4,2"/>
+                                                                        <Button Content="Ping Pipe" Style="{StaticResource BtnStyle}" Padding="8,4" FontSize="11" Click="OnAgentPipePingClick" Margin="0,2,4,2"/>
+                                                                        <Button Content="Pipe Status" Style="{StaticResource BtnStyle}" Padding="8,4" FontSize="11" Click="OnAgentPipeStatusClick" Margin="0,2,4,2"/>
+                                                                        <Button Content="Push Policy" Style="{StaticResource BtnStyle}" Padding="8,4" FontSize="11" Click="OnAgentPipePushPolicyClick" Margin="0,2,4,2"/>
+                                                                        <Button Content="Release Input" Style="{StaticResource DangerBtnStyle}" Padding="8,4" FontSize="11" Click="OnAgentPipeReleaseInputClick" Margin="0,2,0,2"/>
+                                                                    </WrapPanel>
+                                                                    <TextBox x:Name="AgPipeConsoleBox" Height="64" Background="{DynamicResource ConsoleCardBg}" Foreground="#CBD5E1"
+                                                                             BorderThickness="0" FontFamily="Consolas" FontSize="10.5" IsReadOnly="True" Padding="8"
+                                                                             TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" Text="Pipe output appears here."/>
+                                                                </StackPanel>
+                                                            </Border>
+
+                                                            <Border Background="{DynamicResource BgCard}" BorderBrush="{DynamicResource BorderHairline}" BorderThickness="1" CornerRadius="10" Padding="12">
+                                                                <StackPanel>
+                                                                    <Grid Margin="0,0,0,6">
+                                                                        <Grid.ColumnDefinitions>
+                                                                            <ColumnDefinition Width="*"/>
+                                                                            <ColumnDefinition Width="Auto"/>
+                                                                        </Grid.ColumnDefinitions>
+                                                                        <TextBlock Grid.Column="0" Text="Scheduled Agents (This PC)" FontSize="12" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}" VerticalAlignment="Center"/>
+                                                                        <Button Grid.Column="1" Content="Refresh" Style="{StaticResource GhostBtnStyle}" Padding="6,2" FontSize="11" Click="OnAgentsRefreshClick"/>
+                                                                    </Grid>
+                                                                    <DataGrid x:Name="AgCustomGrid" Style="{StaticResource MinimalDataGridStyle}" Height="125" AutoGenerateColumns="False" IsReadOnly="True" HeadersVisibility="Column" Margin="0,0,0,8">
+                                                                        <DataGrid.Columns>
+                                                                            <DataGridTextColumn Header="Name" Binding="{Binding Name}" Width="*"/>
+                                                                            <DataGridTextColumn Header="Status" Binding="{Binding Status}" Width="58"/>
+                                                                            <DataGridTemplateColumn Header="Actions" Width="96">
+                                                                                <DataGridTemplateColumn.CellTemplate>
+                                                                                    <DataTemplate>
+                                                                                        <StackPanel Orientation="Horizontal">
+                                                                                            <Button Content="{Binding ToggleLabel}" Style="{StaticResource BtnStyle}" Padding="5,2" FontSize="10.5" Click="OnToggleCustomAgentClick" Tag="{Binding}" Margin="0,0,3,0"/>
+                                                                                            <Button Content="Run" Style="{StaticResource PrimaryBtnStyle}" Padding="5,2" FontSize="10.5" Click="OnRunCustomAgentClick" Tag="{Binding}"/>
+                                                                                        </StackPanel>
+                                                                                    </DataTemplate>
+                                                                                </DataGridTemplateColumn.CellTemplate>
+                                                                            </DataGridTemplateColumn>
+                                                                        </DataGrid.Columns>
+                                                                    </DataGrid>
+                                                                    <TextBox x:Name="AgNewNameBox" Style="{StaticResource FieldStyle}" Text="health-watchdog" Margin="0,0,0,6"/>
+                                                                    <UniformGrid Columns="2" Margin="0,0,0,6">
+                                                                        <ComboBox x:Name="AgNewProviderCombo" Style="{StaticResource SaaSComboBoxStyle}" SelectedIndex="0" Margin="0,0,3,0">
+                                                                            <ComboBoxItem Content="openai"/>
+                                                                            <ComboBoxItem Content="anthropic"/>
+                                                                            <ComboBoxItem Content="gemini"/>
+                                                                            <ComboBoxItem Content="ollama"/>
+                                                                        </ComboBox>
+                                                                        <TextBox x:Name="AgNewIntervalBox" Style="{StaticResource FieldStyle}" FontFamily="Consolas" Text="300" Margin="3,0,0,0"/>
+                                                                    </UniformGrid>
+                                                                    <TextBox x:Name="AgNewInstructionBox" Style="{StaticResource FieldStyle}" Text="Monitor CPU/RAM and check workspace health." Margin="0,0,0,6"/>
+                                                                    <Button Content="+ Create Device Agent" Style="{StaticResource PrimaryBtnStyle}" Padding="10,5" FontSize="11.5" Click="OnCreateCustomAgentClick"/>
+                                                                </StackPanel>
+                                                            </Border>
+                                                        </StackPanel>
+                                                    </StackPanel>
+                                                </ScrollViewer>
+                                            </DockPanel>
                                         </Border>
                                     </Grid>
                                 </Border>

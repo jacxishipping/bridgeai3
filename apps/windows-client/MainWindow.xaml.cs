@@ -31,9 +31,12 @@ public partial class MainWindow : Window
     private readonly SystemMonitorService _monitor = new();
     private readonly NativeToolExecutor _executor;
     private readonly ControlPlaneClient _client;
+    private readonly DeviceAgentRuntimeService _agentRuntime;
 
     private AgentGuiConfig _config;
     private string _deviceToken;
+    private string _agentApiKey = "";
+    private bool _loadingAgentSettings;
     private List<TaskHistoryRecord> _taskHistory;
     private readonly List<LogEntry> _logBuffer = new();
     private readonly ObservableCollection<LogEntry> _visibleLogs = new();
@@ -104,6 +107,7 @@ public partial class MainWindow : Window
 
         _config = _configService.LoadConfig();
         _deviceToken = _configService.LoadToken();
+        _agentApiKey = _configService.LoadAgentApiKey();
         _taskHistory = _configService.LoadTaskHistory();
         foreach (var entry in _configService.LoadPolicyAudit())
         {
@@ -123,6 +127,7 @@ public partial class MainWindow : Window
         var screenshotDir = _config.ScreenshotDirectory;
         _executor = new NativeToolExecutor(_monitor, screenshotDir);
         _client = new ControlPlaneClient(_monitor, _executor);
+        _agentRuntime = new DeviceAgentRuntimeService(_executor);
 
         _client.LogMessage += (level, msg) => Dispatcher.Invoke(() => AppendLog(level, msg));
         _client.StatusChanged += (status, tone) => Dispatcher.Invoke(() => UpdateConnectionStatus(status, tone));
@@ -270,7 +275,8 @@ public partial class MainWindow : Window
         }
 
         OverviewKpiGrid.Columns = width >= 1060 ? 4 : (width >= 720 ? 2 : 1);
-        AgLeftRailCol.Width = width < 920 ? new GridLength(0) : new GridLength(228);
+        bool drawerOpen = AgSidePanel is not null && AgSidePanel.Visibility == Visibility.Visible;
+        AgLeftRailCol.Width = (width < 920 || (drawerOpen && width < 1480)) ? new GridLength(0) : new GridLength(228);
 
         if (width < 960)
         {
@@ -636,6 +642,7 @@ public partial class MainWindow : Window
         KpiTasksText.Text = _taskHistory.Count.ToString();
         LoadPolicyIntoUi();
         LoadSettingsIntoUi();
+        LoadDeviceAgentSettingsIntoUi();
     }
 
     private void LoadPolicyIntoUi()
@@ -2229,17 +2236,28 @@ public partial class MainWindow : Window
 
         if (AgWelcomeSubText is not null)
         {
+            var agent = _config.DeviceAgent ?? new DeviceAgentSettings();
+            var instr = string.IsNullOrWhiteSpace(agent.InstructionName) ? "Default" : agent.InstructionName;
             AgWelcomeSubText.Text = string.IsNullOrWhiteSpace(_config.DeviceId)
-                ? $"Scoped exclusively to {Environment.MachineName} — offline Windows tools ready."
-                : $"Scoped exclusively to installed device '{_config.DeviceId}' — never dispatches to other hosts.";
+                ? $"{agent.AgentName} ({instr}) · Scoped exclusively to {Environment.MachineName}."
+                : $"{agent.AgentName} ({instr}) · Scoped exclusively to '{_config.DeviceId}'.";
         }
 
         if (AgChatStatusPillText is not null)
         {
-            var cloudStatus = !string.IsNullOrWhiteSpace(_operatorToken) && !string.IsNullOrWhiteSpace(_config.DeviceId)
-                ? "Cloud LLM Ready"
-                : "Local Ready · Cloud Auth Optional";
-            AgChatStatusPillText.Text = cloudStatus;
+            var agent = _config.DeviceAgent ?? new DeviceAgentSettings();
+            var hasDirect = !string.IsNullOrWhiteSpace(_agentApiKey) ||
+                agent.Provider.Equals("ollama", StringComparison.OrdinalIgnoreCase) ||
+                agent.Provider.Equals("custom", StringComparison.OrdinalIgnoreCase);
+            var statusLabel = (agent.ConnectionMode, hasDirect, !string.IsNullOrWhiteSpace(_operatorToken)) switch
+            {
+                ("control_plane", _, true) => $"{agent.AgentName} · Control Plane Ready",
+                ("direct_api", true, _) or ("direct_or_local", true, _) => $"{agent.AgentName} · {agent.Provider}/{agent.Model}",
+                ("local_only", _, _) => $"{agent.AgentName} · Local Tools Only",
+                (_, _, true) => $"{agent.AgentName} · Cloud Auth Ready",
+                _ => $"{agent.AgentName} · Local Ready",
+            };
+            AgChatStatusPillText.Text = statusLabel;
         }
 
         if (AgFullUiBtn is not null)
@@ -2409,6 +2427,208 @@ public partial class MainWindow : Window
         AgSidePanel.Visibility = AgSidePanel.Visibility == Visibility.Visible
             ? Visibility.Collapsed
             : Visibility.Visible;
+        if (AgSidePanel.Visibility == Visibility.Visible)
+        {
+            LoadDeviceAgentSettingsIntoUi();
+        }
+        ApplyResponsiveLayout(ActualWidth > 0 ? ActualWidth : Width);
+    }
+
+    private void OnAgOpenSettingsDrawerClick(object sender, RoutedEventArgs e)
+    {
+        LoadDeviceAgentSettingsIntoUi();
+        SelectAgDrawerTab("ai");
+        AgSidePanel.Visibility = Visibility.Visible;
+        ApplyResponsiveLayout(ActualWidth > 0 ? ActualWidth : Width);
+    }
+
+    private void OnAgOpenRuntimeDrawerClick(object sender, RoutedEventArgs e)
+    {
+        SelectAgDrawerTab("runtime");
+        AgSidePanel.Visibility = Visibility.Visible;
+        ApplyResponsiveLayout(ActualWidth > 0 ? ActualWidth : Width);
+    }
+
+    private void OnAgDrawerTabClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is System.Windows.Controls.Button btn && btn.Tag is string tag)
+        {
+            SelectAgDrawerTab(tag);
+        }
+    }
+
+    private void SelectAgDrawerTab(string tab)
+    {
+        if (AgDrawerAiPanel is null) return;
+        AgDrawerAiPanel.Visibility = tab == "ai" ? Visibility.Visible : Visibility.Collapsed;
+        AgDrawerFunctionsPanel.Visibility = tab == "functions" ? Visibility.Visible : Visibility.Collapsed;
+        AgDrawerRuntimePanel.Visibility = tab == "runtime" ? Visibility.Visible : Visibility.Collapsed;
+
+        var primary = (Style)FindResource("PrimaryBtnStyle");
+        var normal = (Style)FindResource("BtnStyle");
+        AgDrawerTabAiBtn.Style = tab == "ai" ? primary : normal;
+        AgDrawerTabFnBtn.Style = tab == "functions" ? primary : normal;
+        AgDrawerTabSysBtn.Style = tab == "runtime" ? primary : normal;
+    }
+
+    private void LoadDeviceAgentSettingsIntoUi()
+    {
+        _loadingAgentSettings = true;
+        try
+        {
+            _config.DeviceAgent ??= new DeviceAgentSettings();
+            _config.DeviceAgent.Functions ??= new AgentFunctionPermissions();
+            var a = _config.DeviceAgent;
+            var f = a.Functions;
+
+            AgSetNameBox.Text = a.AgentName;
+            AgSetInstructionNameBox.Text = a.InstructionName;
+            AgSetSystemPromptBox.Text = a.SystemPrompt;
+            AgSetTempBox.Text = a.Temperature.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
+            AgSetMaxStepsBox.Text = a.MaxToolSteps.ToString();
+            AgSetModelBox.Text = a.Model;
+            AgSetBaseUrlBox.Text = a.BaseUrl;
+            AgSetApiKeyBox.Password = _agentApiKey;
+
+            foreach (ComboBoxItem item in AgSetConnModeCombo.Items)
+            {
+                if (string.Equals(item.Tag?.ToString(), a.ConnectionMode, StringComparison.OrdinalIgnoreCase))
+                {
+                    AgSetConnModeCombo.SelectedItem = item;
+                    break;
+                }
+            }
+            foreach (ComboBoxItem item in AgSetProviderCombo.Items)
+            {
+                if (string.Equals(item.Tag?.ToString(), a.Provider, StringComparison.OrdinalIgnoreCase))
+                {
+                    AgSetProviderCombo.SelectedItem = item;
+                    break;
+                }
+            }
+
+            AgFnSysHealthChk.IsChecked = f.AllowSystemHealthTools;
+            AgFnScreenCaptureChk.IsChecked = f.AllowScreenCapture;
+            AgFnWindowMgmtChk.IsChecked = f.AllowWindowManagement;
+            AgFnUiInputChk.IsChecked = f.AllowUiInputAutomation;
+            AgFnClipboardChk.IsChecked = f.AllowClipboard;
+            AgFnAppLaunchChk.IsChecked = f.AllowAppLaunching;
+            AgFnWorkspaceFilesChk.IsChecked = f.AllowWorkspaceFiles;
+            AgFnFullPcFilesChk.IsChecked = f.AllowFullPcFilesAndDrives;
+            AgFnShellPsChk.IsChecked = f.AllowShellAndPowerShell;
+            AgFnKillProcChk.IsChecked = f.AllowProcessTermination;
+            AgFnConfirmMutateChk.IsChecked = a.ConfirmMutatingFunctions;
+            AgSetDisabledToolsBox.Text = string.Join(", ", f.DisabledTools ?? new List<string>());
+        }
+        finally
+        {
+            _loadingAgentSettings = false;
+        }
+    }
+
+    private void SaveDeviceAgentSettingsFromUi()
+    {
+        _config.DeviceAgent ??= new DeviceAgentSettings();
+        _config.DeviceAgent.Functions ??= new AgentFunctionPermissions();
+        var a = _config.DeviceAgent;
+        var f = a.Functions;
+
+        a.AgentName = string.IsNullOrWhiteSpace(AgSetNameBox.Text) ? "Windows Copilot" : AgSetNameBox.Text.Trim();
+        a.InstructionName = AgSetInstructionNameBox.Text.Trim();
+        a.SystemPrompt = AgSetSystemPromptBox.Text.Trim();
+        a.Temperature = double.TryParse(AgSetTempBox.Text.Trim(), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var tv)
+            ? Math.Clamp(tv, 0.0, 2.0)
+            : 0.2;
+        a.MaxToolSteps = int.TryParse(AgSetMaxStepsBox.Text.Trim(), out var ms) ? Math.Clamp(ms, 1, 20) : 8;
+        a.ConnectionMode = (AgSetConnModeCombo.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "direct_or_local";
+        a.Provider = (AgSetProviderCombo.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "openai";
+        a.BaseUrl = AgSetBaseUrlBox.Text.Trim();
+        a.Model = AgSetModelBox.Text.Trim();
+        a.ConfirmMutatingFunctions = AgFnConfirmMutateChk.IsChecked == true;
+
+        _agentApiKey = AgSetApiKeyBox.Password.Trim();
+        _configService.SaveAgentApiKey(_agentApiKey);
+
+        f.AllowSystemHealthTools = AgFnSysHealthChk.IsChecked == true;
+        f.AllowScreenCapture = AgFnScreenCaptureChk.IsChecked == true;
+        f.AllowWindowManagement = AgFnWindowMgmtChk.IsChecked == true;
+        f.AllowUiInputAutomation = AgFnUiInputChk.IsChecked == true;
+        f.AllowClipboard = AgFnClipboardChk.IsChecked == true;
+        f.AllowAppLaunching = AgFnAppLaunchChk.IsChecked == true;
+        f.AllowWorkspaceFiles = AgFnWorkspaceFilesChk.IsChecked == true;
+        f.AllowFullPcFilesAndDrives = AgFnFullPcFilesChk.IsChecked == true;
+        f.AllowShellAndPowerShell = AgFnShellPsChk.IsChecked == true;
+        f.AllowProcessTermination = AgFnKillProcChk.IsChecked == true;
+        f.DisabledTools = AgSetDisabledToolsBox.Text
+            .Split(new[] { ',', '\n', '\r', ';' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        _configService.SaveConfig(_config);
+        RefreshLocalAgentsSummary();
+    }
+
+    private void OnAgSettingsProviderChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_loadingAgentSettings || AgSetProviderCombo is null || AgSetBaseUrlBox is null || AgSetModelBox is null) return;
+        var provider = (AgSetProviderCombo.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "openai";
+        if (provider != "custom")
+        {
+            AgSetBaseUrlBox.Text = DeviceAgentRuntimeService.GetDefaultBaseUrl(provider);
+            AgSetModelBox.Text = DeviceAgentRuntimeService.GetDefaultModel(provider);
+        }
+    }
+
+    private async void OnAgTestApiClick(object sender, RoutedEventArgs e)
+    {
+        SaveDeviceAgentSettingsFromUi();
+        AgApiTestStatusText.Text = "Testing AI API connection...";
+        var (ok, detail) = await _agentRuntime.TestConnectionAsync(_config.DeviceAgent, _agentApiKey);
+        AgApiTestStatusText.Text = detail;
+        AgApiTestStatusText.Foreground = (System.Windows.Media.Brush)FindResource(ok ? "SuccessText" : "ErrorText");
+        ShowToast(ok ? "AI API connection succeeded" : "AI API connection failed");
+    }
+
+    private void OnAgSaveSettingsClick(object sender, RoutedEventArgs e)
+    {
+        SaveDeviceAgentSettingsFromUi();
+        AgApiTestStatusText.Text = $"Saved settings for '{_config.DeviceAgent.AgentName}' ({_config.DeviceAgent.Provider}/{_config.DeviceAgent.Model}).";
+        AgApiTestStatusText.Foreground = (System.Windows.Media.Brush)FindResource("SuccessText");
+        AppendLog("ok", $"Agent settings saved: {_config.DeviceAgent.AgentName} ({_config.DeviceAgent.InstructionName}).");
+        ShowToast("Agent settings saved");
+    }
+
+    private void OnAgAllowAllFunctionsClick(object sender, RoutedEventArgs e)
+    {
+        AgFnSysHealthChk.IsChecked = true;
+        AgFnScreenCaptureChk.IsChecked = true;
+        AgFnWindowMgmtChk.IsChecked = true;
+        AgFnUiInputChk.IsChecked = true;
+        AgFnClipboardChk.IsChecked = true;
+        AgFnAppLaunchChk.IsChecked = true;
+        AgFnWorkspaceFilesChk.IsChecked = true;
+        AgFnFullPcFilesChk.IsChecked = true;
+        AgFnShellPsChk.IsChecked = true;
+        AgFnKillProcChk.IsChecked = true;
+        AgSetDisabledToolsBox.Text = "";
+        SaveDeviceAgentSettingsFromUi();
+        ShowToast("All device functions allowed in Agent Settings");
+    }
+
+    private void OnAgReadOnlyFunctionsClick(object sender, RoutedEventArgs e)
+    {
+        AgFnSysHealthChk.IsChecked = true;
+        AgFnScreenCaptureChk.IsChecked = true;
+        AgFnWindowMgmtChk.IsChecked = false;
+        AgFnUiInputChk.IsChecked = false;
+        AgFnClipboardChk.IsChecked = false;
+        AgFnAppLaunchChk.IsChecked = false;
+        AgFnWorkspaceFilesChk.IsChecked = false;
+        AgFnFullPcFilesChk.IsChecked = false;
+        AgFnShellPsChk.IsChecked = false;
+        AgFnKillProcChk.IsChecked = false;
+        SaveDeviceAgentSettingsFromUi();
+        ShowToast("Agent functions set to Read-Only Inspection");
     }
 
     private void OnAgThreadSelected(object sender, SelectionChangedEventArgs e)
@@ -2477,18 +2697,82 @@ public partial class MainWindow : Window
 
             var modeTag = (AgChatModeCombo.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "auto";
             var isSlashCommand = prompt.StartsWith('/');
+            var agent = _config.DeviceAgent ?? new DeviceAgentSettings();
+            var connMode = string.IsNullOrWhiteSpace(agent.ConnectionMode) ? "direct_or_local" : agent.ConnectionMode;
 
-            if (!isSlashCommand &&
+            // 1. Direct AI API Runtime on this device (OpenAI / Anthropic / Gemini / Ollama / Custom)
+            bool wantsDirectApi = !isSlashCommand &&
                 !string.Equals(modeTag, "local", StringComparison.OrdinalIgnoreCase) &&
-                !string.IsNullOrWhiteSpace(_operatorToken) &&
-                !string.IsNullOrWhiteSpace(_config.DeviceId))
+                connMode is "direct_api" or "direct_or_local";
+            bool hasDirectCreds = !string.IsNullOrWhiteSpace(_agentApiKey) ||
+                agent.Provider.Equals("ollama", StringComparison.OrdinalIgnoreCase) ||
+                agent.Provider.Equals("custom", StringComparison.OrdinalIgnoreCase);
+
+            if (wantsDirectApi && hasDirectCreds)
             {
-                var provider = string.Equals(modeTag, "auto", StringComparison.OrdinalIgnoreCase) ? "auto" : modeTag;
-                var apiKey = AgApiKeyBox.Password.Trim();
+                var effConfig = _config;
+                if (modeTag is "openai" or "anthropic" or "gemini" &&
+                    !string.Equals(modeTag, agent.Provider, StringComparison.OrdinalIgnoreCase))
+                {
+                    // Allow header mode switcher to temporarily override provider cleanly if requested
+                    agent.Provider = modeTag;
+                }
+
                 var historyPayload = _activeThread.Messages
                     .TakeLast(16)
                     .Select(m => (m.Role, m.Content))
                     .ToList();
+                var (dOk, dReply, dSummary, dShot, dErr) = await _agentRuntime.RunChatAsync(
+                    effConfig,
+                    _agentApiKey,
+                    historyPayload,
+                    confirmMutatingToolAsync: async (tool, argsJson) => await RequestLocalApprovalAsync(tool, "agent-chat", argsJson));
+
+                if (dOk)
+                {
+                    _activeThread.Messages.Add(new AgentChatMessage
+                    {
+                        Role = "assistant",
+                        Content = dReply,
+                        ToolsSummary = dSummary,
+                        Timestamp = DateTime.Now.ToString("HH:mm:ss"),
+                        ScreenshotImage = DecodeBase64Image(dShot),
+                    });
+                    _activeThread.Preview = dReply.Length > 48 ? dReply[..48] + "..." : dReply;
+                    AgThreadsList.Items.Refresh();
+                    SyncChatStreamVisibility();
+                    return;
+                }
+
+                if (connMode == "direct_api")
+                {
+                    _activeThread.Messages.Add(new AgentChatMessage
+                    {
+                        Role = "assistant",
+                        Content = $"Direct AI API error ({agent.Provider}/{agent.Model}): {dErr}\n\nCheck your URL, Model, or API Key inside **Agent Settings → AI & Prompt**.",
+                        ToolsSummary = $"{agent.AgentName} · Error",
+                        Timestamp = DateTime.Now.ToString("HH:mm:ss"),
+                    });
+                    AgThreadsList.Items.Refresh();
+                    SyncChatStreamVisibility();
+                    return;
+                }
+            }
+
+            // 2. Optional Control Plane AI chat route (/api/ai/chat) scoped strictly to _config.DeviceId
+            if (!isSlashCommand &&
+                !string.Equals(modeTag, "local", StringComparison.OrdinalIgnoreCase) &&
+                connMode != "local_only" &&
+                !string.IsNullOrWhiteSpace(_operatorToken) &&
+                !string.IsNullOrWhiteSpace(_config.DeviceId))
+            {
+                var provider = string.Equals(modeTag, "auto", StringComparison.OrdinalIgnoreCase) ? agent.Provider : modeTag;
+                var apiKey = !string.IsNullOrWhiteSpace(AgApiKeyBox.Password) ? AgApiKeyBox.Password.Trim() : _agentApiKey;
+                var historyPayload = new List<(string Role, string Content)>
+                {
+                    ("system", DeviceAgentRuntimeService.BuildEffectiveSystemPrompt(_config)),
+                };
+                historyPayload.AddRange(_activeThread.Messages.TakeLast(16).Select(m => (m.Role, m.Content)));
                 var (ok, reply, toolsSummary, screenshotB64, err) = await _client.SendDeviceAgentChatAsync(
                     _config.ControlUrl,
                     _operatorToken,
@@ -2496,7 +2780,7 @@ public partial class MainWindow : Window
                     _config.DeviceId,
                     historyPayload,
                     provider,
-                    null,
+                    string.IsNullOrWhiteSpace(agent.Model) ? null : agent.Model,
                     string.IsNullOrWhiteSpace(apiKey) ? null : apiKey,
                     _config.TenantId);
 
@@ -2548,8 +2832,8 @@ public partial class MainWindow : Window
             var (handled, answer, toolLabel, shot) = await TryExecuteLocalDevicePromptAsync(prompt, allowDefaultSummary: true);
             var cloudHint = string.Equals(modeTag, "local", StringComparison.OrdinalIgnoreCase)
                 ? ""
-                : (string.IsNullOrWhiteSpace(_operatorToken)
-                    ? "\n\n(Running local Windows device tools. For full LLM reasoning, click 'Tools & Agents' to sign in to Control Plane.)"
+                : (string.IsNullOrWhiteSpace(_agentApiKey) && string.IsNullOrWhiteSpace(_operatorToken)
+                    ? $"\n\n(Ran local Windows tools as '{agent.AgentName}'. Open **Agent Settings** in the top bar to connect an AI API key, edit System Prompt / Instruction Name, or allow/disallow functions.)"
                     : "");
 
             _activeThread.Messages.Add(new AgentChatMessage
@@ -2635,6 +2919,8 @@ public partial class MainWindow : Window
 
         if (lower.StartsWith("/som") || lower.Contains("set of marks") || lower.Contains("set-of-marks"))
         {
+            if (!DeviceAgentRuntimeService.IsToolAllowed("set_of_marks_screenshot", _config, out var deny))
+                return (true, deny, "Disallowed: set_of_marks_screenshot", null);
             var winFilter = lower.StartsWith("/som") ? trimmed[4..].Trim() : "";
             var argsJson = JsonSerializer.Serialize(new { window = string.IsNullOrWhiteSpace(winFilter) ? null : winFilter, max_marks = 40 });
             var (ok, json) = await _executor.ExecuteAsync("set_of_marks_screenshot", argsJson, _config, default);
@@ -2658,6 +2944,8 @@ public partial class MainWindow : Window
 
         if (lower.StartsWith("/ui") || lower.Contains("ui element") || lower.Contains("ui tree") || lower.Contains("clickable"))
         {
+            if (!DeviceAgentRuntimeService.IsToolAllowed("list_ui_elements", _config, out var deny))
+                return (true, deny, "Disallowed: list_ui_elements", null);
             var argPart = lower.StartsWith("/ui") ? trimmed[3..].Trim() : "";
             var argsJson = string.IsNullOrWhiteSpace(argPart)
                 ? "{\"limit\":60}"
@@ -2668,8 +2956,7 @@ public partial class MainWindow : Window
 
         if (lower.StartsWith("/active") || lower.Contains("active window"))
         {
-            var (_, json) = await _executor.ExecuteAsync("get_active_window", "{}", _config, default);
-            return (true, $"Active foreground window:\n{FormatJsonForChat(json)}", "Local Tool: get_active_window", null);
+            return await ExecuteUiToolWithPolicyHintAsync("get_active_window", new { }, "Active foreground window");
         }
 
         if (lower.StartsWith("/focus ") || lower.StartsWith("focus "))
@@ -2826,6 +3113,8 @@ public partial class MainWindow : Window
 
         if (lower.StartsWith("/screenshot") || lower.Contains("screenshot") || lower.Contains("capture") || lower.Contains("screen"))
         {
+            if (!DeviceAgentRuntimeService.IsToolAllowed("capture_desktop_screenshot", _config, out var deny))
+                return (true, deny, "Disallowed: capture_desktop_screenshot", null);
             var (ok, json) = await _executor.ExecuteAsync("capture_desktop_screenshot", "{}", _config, default);
             if (ok)
             {
@@ -2844,26 +3133,25 @@ public partial class MainWindow : Window
 
         if (lower.StartsWith("/windows") || lower.Contains("open window") || lower.Contains("windows") || lower.Contains("handles"))
         {
-            var (_, json) = await _executor.ExecuteAsync("list_desktop_windows", "{}", _config, default);
-            return (true, $"Visible desktop windows on {Environment.MachineName}:\n{FormatJsonForChat(json)}", "Local Tool: list_desktop_windows", null);
+            return await ExecuteUiToolWithPolicyHintAsync("list_desktop_windows", new { }, $"Visible desktop windows on {Environment.MachineName}");
         }
 
         if (lower.StartsWith("/monitor") || lower.Contains("monitor") || lower.Contains("display"))
         {
-            var (_, json) = await _executor.ExecuteAsync("get_monitors", "{}", _config, default);
-            return (true, $"Attached monitors on {Environment.MachineName}:\n{FormatJsonForChat(json)}", "Local Tool: get_monitors", null);
+            return await ExecuteUiToolWithPolicyHintAsync("get_monitors", new { }, $"Attached monitors on {Environment.MachineName}");
         }
 
         if (lower.StartsWith("/workspace") || lower.Contains("workspace") || lower.Contains("files"))
         {
-            var (_, json) = await _executor.ExecuteAsync("list_workspace", "{}", _config, default);
-            return (true, $"Workspace contents ({_config.Workspace}):\n{FormatJsonForChat(json)}", "Local Tool: list_workspace", null);
+            return await ExecuteUiToolWithPolicyHintAsync("list_workspace", new { }, $"Workspace contents ({_config.Workspace})");
         }
 
         if (lower.StartsWith("/sysinfo") || allowDefaultSummary ||
             lower.Contains("cpu") || lower.Contains("memory") || lower.Contains("health") ||
             lower.Contains("system") || lower.Contains("process") || lower.Contains("disk"))
         {
+            if (!DeviceAgentRuntimeService.IsToolAllowed("get_system_info", _config, out var deny))
+                return (true, deny, "Disallowed: get_system_info", null);
             var (_, sysJson) = await _executor.ExecuteAsync("get_system_info", "{}", _config, default);
             var (_, resJson) = await _executor.ExecuteAsync("get_resource_usage", "{}", _config, default);
             var (_, procJson) = await _executor.ExecuteAsync("list_processes", "{}", _config, default);
@@ -2882,6 +3170,10 @@ public partial class MainWindow : Window
         object argsObj,
         string successTitle)
     {
+        if (!DeviceAgentRuntimeService.IsToolAllowed(toolName, _config, out var denyReason))
+        {
+            return (true, $"Blocked by Agent Settings:\n{denyReason}", $"Disallowed: {toolName}", null);
+        }
         var argsJson = JsonSerializer.Serialize(argsObj);
         var (ok, resultJson) = await _executor.ExecuteAsync(toolName, argsJson, _config, default);
         if (!ok && resultJson.Contains("interactive desktop control is disabled", StringComparison.OrdinalIgnoreCase))
@@ -2901,6 +3193,10 @@ public partial class MainWindow : Window
         object argsObj,
         string successTitle)
     {
+        if (!DeviceAgentRuntimeService.IsToolAllowed(toolName, _config, out var denyReason))
+        {
+            return (true, $"Blocked by Agent Settings:\n{denyReason}", $"Disallowed: {toolName}", null);
+        }
         if (!_config.Policy.AllowFullPcAccess ||
             ((toolName is "run_powershell" or "run_shell" or "kill_process") &&
              (!_config.Policy.AllowTier4 || _config.Policy.MaxTierUnattended < 4 || (toolName != "kill_process" && !_config.Policy.AllowShell))))

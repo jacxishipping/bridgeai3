@@ -177,6 +177,84 @@ public sealed class AgentGuiConfig
 
     [JsonPropertyName("policy")]
     public AgentPolicyConfig Policy { get; set; } = new();
+
+    [JsonPropertyName("device_agent")]
+    public DeviceAgentSettings DeviceAgent { get; set; } = new();
+}
+
+public sealed class AgentFunctionPermissions
+{
+    [JsonPropertyName("allow_system_health_tools")]
+    public bool AllowSystemHealthTools { get; set; } = true;
+
+    [JsonPropertyName("allow_screen_capture")]
+    public bool AllowScreenCapture { get; set; } = true;
+
+    [JsonPropertyName("allow_window_management")]
+    public bool AllowWindowManagement { get; set; } = true;
+
+    [JsonPropertyName("allow_ui_input_automation")]
+    public bool AllowUiInputAutomation { get; set; } = true;
+
+    [JsonPropertyName("allow_clipboard")]
+    public bool AllowClipboard { get; set; } = true;
+
+    [JsonPropertyName("allow_app_launching")]
+    public bool AllowAppLaunching { get; set; } = true;
+
+    [JsonPropertyName("allow_workspace_files")]
+    public bool AllowWorkspaceFiles { get; set; } = true;
+
+    [JsonPropertyName("allow_full_pc_files_and_drives")]
+    public bool AllowFullPcFilesAndDrives { get; set; } = true;
+
+    [JsonPropertyName("allow_shell_and_powershell")]
+    public bool AllowShellAndPowerShell { get; set; } = true;
+
+    [JsonPropertyName("allow_process_termination")]
+    public bool AllowProcessTermination { get; set; } = false;
+
+    [JsonPropertyName("disabled_tools")]
+    public List<string> DisabledTools { get; set; } = new();
+}
+
+public sealed class DeviceAgentSettings
+{
+    [JsonPropertyName("agent_name")]
+    public string AgentName { get; set; } = "Windows Copilot";
+
+    [JsonPropertyName("instruction_name")]
+    public string InstructionName { get; set; } = "Default Windows Assistant";
+
+    [JsonPropertyName("system_prompt")]
+    public string SystemPrompt { get; set; } =
+        "You are a dedicated Windows desktop AI assistant scoped strictly to this PC. " +
+        "Inspect active state before mutating windows, files, or running commands, keep answers concise, " +
+        "and strictly respect all device function permissions.";
+
+    [JsonPropertyName("connection_mode")]
+    public string ConnectionMode { get; set; } = "direct_or_local"; // direct_or_local | direct_api | control_plane | local_only
+
+    [JsonPropertyName("provider")]
+    public string Provider { get; set; } = "openai"; // openai | anthropic | gemini | ollama | custom
+
+    [JsonPropertyName("base_url")]
+    public string BaseUrl { get; set; } = "https://api.openai.com/v1";
+
+    [JsonPropertyName("model")]
+    public string Model { get; set; } = "gpt-4o";
+
+    [JsonPropertyName("temperature")]
+    public double Temperature { get; set; } = 0.2;
+
+    [JsonPropertyName("max_tool_steps")]
+    public int MaxToolSteps { get; set; } = 8;
+
+    [JsonPropertyName("confirm_mutating_functions")]
+    public bool ConfirmMutatingFunctions { get; set; } = false;
+
+    [JsonPropertyName("functions")]
+    public AgentFunctionPermissions Functions { get; set; } = new();
 }
 
 public sealed class TaskHistoryRecord

@@ -23,6 +23,7 @@ public sealed class ConfigService
     public string ConfigFile { get; }
     public string TokenFile { get; }
     public string PipeHmacSecretFile { get; }
+    public string AgentApiKeyFile { get; }
     public string TaskHistoryFile { get; }
     public string PolicyAuditFile { get; }
     public string LogDir { get; }
@@ -37,6 +38,7 @@ public sealed class ConfigService
         ConfigFile = Path.Combine(ConfigDir, "agent_gui.json");
         TokenFile = Path.Combine(ConfigDir, "device.token");
         PipeHmacSecretFile = Path.Combine(ConfigDir, "pipe_hmac.token");
+        AgentApiKeyFile = Path.Combine(ConfigDir, "agent_api.token");
         TaskHistoryFile = Path.Combine(ConfigDir, "task_history.json");
         PolicyAuditFile = Path.Combine(ConfigDir, "policy_audit.json");
         LogDir = Path.Combine(ConfigDir, "logs");
@@ -59,6 +61,9 @@ public sealed class ConfigService
                     cfg.Policy ??= new AgentPolicyConfig();
                     cfg.Policy.AllowedApps ??= new List<string>();
                     cfg.Policy.AllowedCommands ??= new List<string>();
+                    cfg.DeviceAgent ??= new DeviceAgentSettings();
+                    cfg.DeviceAgent.Functions ??= new AgentFunctionPermissions();
+                    cfg.DeviceAgent.Functions.DisabledTools ??= new List<string>();
                     if (string.IsNullOrWhiteSpace(cfg.Workspace))
                     {
                         cfg.Workspace = Path.Combine(
@@ -139,6 +144,21 @@ public sealed class ConfigService
             return;
         }
         DpapiTokenStore.SaveTokenFile(PipeHmacSecretFile, secret.Trim());
+    }
+
+    public string LoadAgentApiKey()
+    {
+        try { return DpapiTokenStore.LoadTokenFile(AgentApiKeyFile); } catch { return string.Empty; }
+    }
+
+    public void SaveAgentApiKey(string apiKey)
+    {
+        if (string.IsNullOrWhiteSpace(apiKey))
+        {
+            try { if (File.Exists(AgentApiKeyFile)) File.Delete(AgentApiKeyFile); } catch { }
+            return;
+        }
+        DpapiTokenStore.SaveTokenFile(AgentApiKeyFile, apiKey.Trim());
     }
 
     public List<TaskHistoryRecord> LoadTaskHistory()

@@ -459,5 +459,44 @@ await RunTest("Full PC Access gating: drives, directories, PowerShell & kill_pro
     }
 });
 
+// 15. Per-agent settings: AI API connection config, system prompt, instruction name & function allow/disallow
+await RunTest("DeviceAgentRuntimeService: system prompt, instruction name & function allow/disallow", () =>
+{
+    var cfg = new AgentGuiConfig
+    {
+        DeviceId = "win-dev-local",
+        DeviceAgent = new DeviceAgentSettings
+        {
+            AgentName = "SysAdmin Bot",
+            InstructionName = "Safe Read-Only Profile",
+            SystemPrompt = "Never restart services unless asked twice.",
+            Provider = "anthropic",
+            Model = "claude-3-5-sonnet-latest",
+            Functions = new AgentFunctionPermissions
+            {
+                AllowSystemHealthTools = true,
+                AllowWindowManagement = true,
+                AllowShellAndPowerShell = false,
+                AllowProcessTermination = false,
+                DisabledTools = new List<string> { "close_window" },
+            },
+        },
+    };
+
+    Assert(DeviceAgentRuntimeService.IsToolAllowed("get_system_info", cfg, out _), "Expected get_system_info to be allowed");
+    Assert(!DeviceAgentRuntimeService.IsToolAllowed("run_shell", cfg, out _), "Expected run_shell to be disallowed when AllowShellAndPowerShell=false");
+    Assert(!DeviceAgentRuntimeService.IsToolAllowed("kill_process", cfg, out _), "Expected kill_process to be disallowed when AllowProcessTermination=false");
+    Assert(!DeviceAgentRuntimeService.IsToolAllowed("close_window", cfg, out _), "Expected close_window to be disallowed via DisabledTools");
+
+    var enabledNames = DeviceAgentRuntimeService.GetEnabledTools(cfg).Select(t => t.Name).ToHashSet();
+    Assert(enabledNames.Contains("get_system_info"), "Expected enabled tools to contain get_system_info");
+    Assert(!enabledNames.Contains("close_window") && !enabledNames.Contains("run_powershell"), "Expected disabled tools excluded from schema list");
+
+    var prompt = DeviceAgentRuntimeService.BuildEffectiveSystemPrompt(cfg);
+    Assert(prompt.Contains("SysAdmin Bot") && prompt.Contains("Safe Read-Only Profile") && prompt.Contains("Never restart services unless asked twice."), "Effective system prompt must include name, instruction name & custom system prompt");
+    Assert(DeviceAgentRuntimeService.GetDefaultBaseUrl("gemini").Contains("generativelanguage.googleapis.com"), "Default Gemini base URL mismatch");
+    return Task.CompletedTask;
+});
+
 Console.WriteLine($"\nSummary: {passed} passed, {failed} failed ({passed + failed} total)");
 return failed > 0 ? 1 : 0;
