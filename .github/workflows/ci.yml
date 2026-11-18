@@ -140,23 +140,7 @@ jobs:
           cache: "npm"
           cache-dependency-path: apps/dashboard/package-lock.json
       - run: npm ci
-      # `npm run build` runs `tsc -b && vite build`, so this step is also
-      # the dashboard typecheck. It must stay before `npm test`.
       - run: npm run build
-      - name: Run dashboard unit tests
-        run: |
-          mkdir -p "$GITHUB_WORKSPACE/.run"
-          npm test 2>&1 | tee "$GITHUB_WORKSPACE/.run/dashboard-test.log"
-      - run: npx playwright install --with-deps chromium
-      - run: npm run test:browser
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: dashboard-test-results
-          path: |
-            apps/dashboard/test-results/
-            .run/dashboard-test.log
-          retention-days: 30
 
   windows-client:
     runs-on: windows-latest

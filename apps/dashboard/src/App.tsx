@@ -1,210 +1,576 @@
-/**
- * AI Bridge Enterprise Dashboard — Root Application
- * Mounts AppShell with active view routing connected to dashboardStore.
- * Strict JXUI Primitives & Lucide Icons. ZERO inline styles.
- */
-
-import React, { useEffect } from "react";
-import { AppShell } from "./shell/AppShell";
-import { BreadcrumbTrail } from "./ui";
-import { useDashboardStore } from "./state/dashboardStore";
-import type { ViewId } from "./types/dashboard";
-
-// Import all 15 operational screen views
-import { LoginView } from "./views/LoginView";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  Activity,
+  Cable,
+  Command,
+  FileSearch,
+  GitBranch,
+  ListChecks,
+  Menu,
+  Monitor,
+  Radio,
+  RefreshCw,
+  Server,
+  Settings,
+  Shield,
+  Terminal,
+  Sun,
+  Moon,
+} from "lucide-react";
+import {
+  ApiClient,
+  loadStoredSession,
+  saveStoredSession,
+} from "./api";
+import type {
+  ApprovalRecord,
+  AuditRecord,
+  AuthSession,
+  DeviceRecord,
+  FleetTelemetrySummary,
+  NavSection,
+  TaskRecord,
+  ThemeMode,
+} from "./types";
+import {
+  Button,
+  DropdownMenu,
+  Modal,
+  SkeletonCard,
+  StatusBadge,
+  ToastBanner,
+} from "./components/ui";
+import { SignInView } from "./views/SignInView";
 import { OverviewView } from "./views/OverviewView";
-import { DevicesView } from "./views/DevicesView";
-import { Device360View } from "./views/Device360View";
-import { TaskQueueVisionView } from "./views/TaskQueueVisionView";
-import { LiveDesktopView } from "./views/LiveDesktopView";
+import { FleetView } from "./views/FleetView";
 import { TerminalView } from "./views/TerminalView";
+import { TasksView } from "./views/TasksView";
+import { DesktopView } from "./views/DesktopView";
 import { WorkflowsView } from "./views/WorkflowsView";
-import { FleetOperationsView } from "./views/FleetOperationsView";
-import { AiApiHubView } from "./views/AiApiHubView";
-import { HumanApprovalsView } from "./views/HumanApprovalsView";
-import { SecurityPoliciesView } from "./views/SecurityPoliciesView";
-import { AuditTrailView } from "./views/AuditTrailView";
+import { FleetOpsView } from "./views/FleetOpsView";
+import { SecurityView } from "./views/SecurityView";
+import { AuditLogsView } from "./views/AuditLogsView";
 import { ConnectionsView } from "./views/ConnectionsView";
-import { DiagnosticsLogsView } from "./views/DiagnosticsLogsView";
-import { LiveControlView } from "./views/LiveControlView";
+import { SettingsView } from "./views/SettingsView";
 
-export interface ViewMetadata {
-  title: string;
-  domain: string;
-  breadcrumbs: string[];
-}
-
-const VIEWS_WITH_OWN_HEADER: ViewId[] = [
-  "overview",
-  "devices",
-  "device-360-system",
-  // These views render their own <header><h1> (LiveDesktopView, TerminalView,
-  // HumanApprovalsView, ConnectionsView); without this entry App.tsx would
-  // render a second shell h1 above it (duplicate-h1 a11y defect, caught by
-  // the Playwright layout tests).
-  "live-desktop-studio",
-  "interactive-terminal",
-  "human-approvals",
-  "mcp-and-oauth",
+const NAV_ITEMS: Array<{
+  group: string;
+  id: NavSection;
+  label: string;
+  icon: typeof Activity;
+}> = [
+  { group: "Core", id: "overview", label: "Overview", icon: Activity },
+  { group: "Core", id: "devices", label: "Fleet & Device 360", icon: Server },
+  { group: "Core", id: "terminal", label: "Live Terminal", icon: Terminal },
+  { group: "Core", id: "desktop", label: "Live Desktop", icon: Monitor },
+  { group: "Automation", id: "tasks", label: "Task Explorer", icon: ListChecks },
+  { group: "Automation", id: "workflows", label: "Workflows & Agents", icon: GitBranch },
+  { group: "Automation", id: "fleetops", label: "Fleet Ops & Cron", icon: Radio },
+  { group: "Governance", id: "security", label: "Security & Policy", icon: Shield },
+  { group: "Governance", id: "audit", label: "Audit & Logs", icon: FileSearch },
+  { group: "Platform", id: "connections", label: "Connections & MCP", icon: Cable },
+  { group: "Platform", id: "settings", label: "Admin & Settings", icon: Settings },
 ];
 
-export const App: React.FC = () => {
-  const currentView = useDashboardStore((s) => s.currentView);
-  const devices = useDashboardStore((s) => s.devices);
-  const selectedDeviceId = useDashboardStore((s) => s.selectedDeviceId);
+export default function App() {
+  const [theme, setTheme] = useState<ThemeMode>(() => {
+    const saved = localStorage.getItem("aibridge.theme");
+    return saved === "light" ? "light" : "dark";
+  });
+  const [session, setSession] = useState<AuthSession | null>(() => loadStoredSession());
+  const api = useMemo(() => new ApiClient(session), [session]);
 
-  const selectedDevice = devices.find((d) => d.id === selectedDeviceId) || devices[0];
-  const selectedHostname = selectedDevice?.hostname || "srv-us-east-412";
+  const [section, setSection] = useState<NavSection>("overview");
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [paletteQuery, setPaletteQuery] = useState("");
+  const [toast, setToast] = useState<string | null>(null);
+  const toastTimer = useRef<number | null>(null);
 
-  // View titles and navigation breadcrumbs metadata for all 15 routes
-  const viewMeta: Record<ViewId, ViewMetadata> = {
-    live: {
-      title: "Control plane",
-      domain: "Live",
-      breadcrumbs: ["AI Bridge", "Control plane"],
-    },
-    overview: {
-      title: "Fleet overview",
-      domain: "Operations Domain",
-      breadcrumbs: ["AI Bridge", "Operations", "Overview"],
-    },
-    devices: {
-      title: "Devices",
-      domain: "Operations Domain",
-      breadcrumbs: ["AI Bridge", "Operations", "Devices"],
-    },
-    "device-360-system": {
-      title: "Device details",
-      domain: "Operations Domain",
-      breadcrumbs: ["AI Bridge", "Operations", "Device 360", selectedHostname],
-    },
-    "task-queue-and-vision": {
-      title: "Tasks & vision",
-      domain: "Operations Domain",
-      breadcrumbs: ["AI Bridge", "Operations", "Task Queue & Vision"],
-    },
-    "live-desktop-studio": {
-      title: "Remote desktop",
-      domain: "Operations Domain",
-      breadcrumbs: ["AI Bridge", "Operations", "Live Desktop"],
-    },
-    "interactive-terminal": {
-      title: "Terminal",
-      domain: "Operations Domain",
-      breadcrumbs: ["AI Bridge", "Operations", "Terminal"],
-    },
-    "autonomous-workflows": {
-      title: "Workflows",
-      domain: "Operations Domain",
-      breadcrumbs: ["AI Bridge", "Operations", "Workflows"],
-    },
-    "fleet-operations": {
-      title: "Fleet operations",
-      domain: "Operations Domain",
-      breadcrumbs: ["AI Bridge", "Operations", "Fleet Operations"],
-    },
-    "ai-api-and-agents": {
-      title: "AI providers & agents",
-      domain: "Operations Domain",
-      breadcrumbs: ["AI Bridge", "Operations", "AI API & Agents"],
-    },
-    "human-approvals": {
-      title: "Human approvals",
-      domain: "Governance Domain",
-      breadcrumbs: ["AI Bridge", "Governance", "Human Approvals"],
-    },
-    "security-policies": {
-      title: "Security policies",
-      domain: "Governance Domain",
-      breadcrumbs: ["AI Bridge", "Governance", "Security Policies"],
-    },
-    "audit-trail": {
-      title: "Audit trail",
-      domain: "Governance Domain",
-      breadcrumbs: ["AI Bridge", "Governance", "Audit Trail"],
-    },
-    "mcp-and-oauth": {
-      title: "MCP & OAuth",
-      domain: "Governance Domain",
-      breadcrumbs: ["AI Bridge", "Governance", "MCP & OAuth"],
-    },
-    "diagnostics-and-logs": {
-      title: "Diagnostics & logs",
-      domain: "Governance Domain",
-      breadcrumbs: ["AI Bridge", "Governance", "Diagnostics & Logs"],
-    },
-    login: {
-      title: "Sign in",
-      domain: "Authentication",
-      breadcrumbs: ["AI Bridge", "Sign in"],
-    },
-  };
+  // Live Control Plane State
+  const [loading, setLoading] = useState(false);
+  const [refreshSpin, setRefreshSpin] = useState(false);
+  const [latencyMs, setLatencyMs] = useState<number | null>(null);
+  const [emergencyStop, setEmergencyStop] = useState(false);
+  const [devices, setDevices] = useState<DeviceRecord[]>([]);
+  const [tasks, setTasks] = useState<TaskRecord[]>([]);
+  const [approvals, setApprovals] = useState<ApprovalRecord[]>([]);
+  const [audit, setAudit] = useState<AuditRecord[]>([]);
+  const [telemetry, setTelemetry] = useState<FleetTelemetrySummary | null>(null);
+  const [inspectedDevice, setInspectedDevice] = useState<DeviceRecord | null>(null);
 
-  const currentMeta = viewMeta[currentView] || viewMeta.overview;
+  const showToast = useCallback((msg: string) => {
+    setToast(msg);
+    if (toastTimer.current) window.clearTimeout(toastTimer.current);
+    toastTimer.current = window.setTimeout(() => setToast(null), 2600);
+  }, []);
+
   useEffect(() => {
-    document.title = `${currentMeta.breadcrumbs[currentMeta.breadcrumbs.length - 1]} · AI Bridge${currentView !== "live" && currentView !== "login" ? " · Demo" : ""}`;
-  }, [currentView, currentMeta.title]);
+    document.documentElement.setAttribute("data-theme", theme);
+    localStorage.setItem("aibridge.theme", theme);
+  }, [theme]);
 
-  const renderActiveView = () => {
-    switch (currentView) {
-      case "login":
-        return <LoginView />;
-      case "overview":
-        return <OverviewView />;
-      case "devices":
-        return <DevicesView />;
-      case "device-360-system":
-        return <Device360View />;
-      case "task-queue-and-vision":
-        return <TaskQueueVisionView />;
-      case "live-desktop-studio":
-        return <LiveDesktopView />;
-      case "interactive-terminal":
-        return <TerminalView />;
-      case "autonomous-workflows":
-        return <WorkflowsView />;
-      case "fleet-operations":
-        return <FleetOperationsView />;
-      case "ai-api-and-agents":
-        return <AiApiHubView />;
-      case "human-approvals":
-        return <HumanApprovalsView />;
-      case "security-policies":
-        return <SecurityPoliciesView />;
-      case "audit-trail":
-        return <AuditTrailView />;
-      case "mcp-and-oauth":
-        return <ConnectionsView />;
-      case "diagnostics-and-logs":
-        return <DiagnosticsLogsView />;
-      default:
-        return <OverviewView />;
-    }
-  };
+  const toggleTheme = useCallback(() => {
+    setTheme((prev) => {
+      const next = prev === "dark" ? "light" : "dark";
+      showToast(`Switched to ${next} theme`);
+      return next;
+    });
+  }, [showToast]);
 
-  // If current view is login, render full Zero-Trust Login Console
-  if (currentView === "login") {
-    return <LoginView />;
+  const refreshAll = useCallback(
+    async (initial = false) => {
+      if (!session) return;
+      if (initial) setLoading(true);
+      setRefreshSpin(true);
+      try {
+        const [healthRes, devList, taskList, approvalList, auditList, fleetTel] =
+          await Promise.all([
+            api.pingHealth(session.controlUrl),
+            api.listDevices(),
+            api.listTasks(),
+            api.listApprovals().catch(() => [] as ApprovalRecord[]),
+            api.listAudit().catch(() => [] as AuditRecord[]),
+            api.getFleetTelemetry().catch(() => null),
+          ]);
+        setLatencyMs(healthRes.latencyMs);
+        setEmergencyStop(Boolean(healthRes.data.emergency_stop));
+        setDevices(devList);
+        setTasks(taskList);
+        setApprovals(approvalList);
+        setAudit(auditList);
+        setTelemetry(fleetTel);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "Refresh error";
+        if (msg.includes("401") || msg.toLowerCase().includes("session") || msg.toLowerCase().includes("token")) {
+          saveStoredSession(null);
+          setSession(null);
+          showToast("Session expired — please sign in again");
+        } else {
+          showToast(msg);
+        }
+      } finally {
+        setLoading(false);
+        window.setTimeout(() => setRefreshSpin(false), 380);
+      }
+    },
+    [api, session, showToast],
+  );
+
+  useEffect(() => {
+    if (!session) return;
+    void refreshAll(true);
+    const id = window.setInterval(() => {
+      void refreshAll(false);
+    }, 12000);
+    return () => window.clearInterval(id);
+  }, [session, refreshAll]);
+
+  // Ctrl+K / Cmd+K Quick Jump Shortcut
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setPaletteOpen((open) => !open);
+        setPaletteQuery("");
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  if (!session) {
+    return (
+      <>
+        <SignInView
+          api={api}
+          theme={theme}
+          onToggleTheme={toggleTheme}
+          onSignedIn={(next) => {
+            saveStoredSession(next);
+            setSession(next);
+            showToast(`Signed in as ${next.username}`);
+          }}
+          onToast={showToast}
+        />
+        <ToastBanner message={toast} />
+      </>
+    );
   }
-  if (currentView === "live") return <LiveControlView />;
+
+  const activeNav = NAV_ITEMS.find((n) => n.id === section) ?? NAV_ITEMS[0];
+  const groups = Array.from(new Set(NAV_ITEMS.map((i) => i.group)));
+  const pendingCount = approvals.filter((a) => a.status === "pending").length;
+
+  const paletteCommands = [
+    ...NAV_ITEMS.map((i) => ({
+      id: `nav-${i.id}`,
+      label: `Go to ${i.label}`,
+      meta: i.group,
+      run: () => setSection(i.id),
+    })),
+    {
+      id: "act-theme",
+      label: `Switch to ${theme === "dark" ? "Light" : "Dark"} Theme`,
+      meta: "Appearance",
+      run: toggleTheme,
+    },
+    {
+      id: "act-refresh",
+      label: "Refresh Fleet Telemetry",
+      meta: "Action",
+      run: () => void refreshAll(false),
+    },
+  ].filter(
+    (c) =>
+      !paletteQuery.trim() ||
+      c.label.toLowerCase().includes(paletteQuery.toLowerCase()) ||
+      c.meta.toLowerCase().includes(paletteQuery.toLowerCase()),
+  );
 
   return (
-    <AppShell currentView={currentView} viewMeta={currentMeta}>
-      <div className="w-full">
-        {!VIEWS_WITH_OWN_HEADER.includes(currentView) && (
-          <div className="mb-6 flex flex-col justify-between gap-3 border-b border-[var(--product-line)] pb-3 md:flex-row md:items-end">
-            <div className="space-y-2">
-              <BreadcrumbTrail crumbs={currentMeta.breadcrumbs} />
-              <h1 className="text-xl font-bold tracking-tight text-[var(--product-text)]">
-                {currentMeta.title}
-              </h1>
+    <div className="shell">
+      <div
+        className={`mobile-sidebar-backdrop ${mobileNavOpen ? "open" : ""}`}
+        onClick={() => setMobileNavOpen(false)}
+      />
+
+      <aside className={`sidebar ${mobileNavOpen ? "mobile-open" : ""}`}>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 10,
+            padding: "2px 8px 16px",
+          }}
+        >
+          <div
+            style={{
+              width: 28,
+              height: 28,
+              borderRadius: 8,
+              background: "var(--accent)",
+              color: "#fff",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              fontWeight: 600,
+              fontSize: 12,
+              flexShrink: 0,
+            }}
+          >
+            AI
+          </div>
+          <div>
+            <div style={{ fontSize: 13, fontWeight: 600, lineHeight: 1.2 }}>AI Bridge</div>
+            <div className="mono" style={{ fontSize: 10.5, color: "var(--text-muted)" }}>
+              Control Plane v0.3.0
             </div>
           </div>
-        )}
-        {renderActiveView()}
-      </div>
-    </AppShell>
-  );
-};
+        </div>
 
-export default App;
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 14 }}>
+          {groups.map((grp) => (
+            <div key={grp}>
+              <div className="nav-group-label">{grp}</div>
+              <nav style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                {NAV_ITEMS.filter((n) => n.group === grp).map((item) => {
+                  const Icon = item.icon;
+                  const active = item.id === section;
+                  return (
+                    <button
+                      key={item.id}
+                      type="button"
+                      className={`nav-item ${active ? "active" : ""}`}
+                      onClick={() => {
+                        setSection(item.id);
+                        setMobileNavOpen(false);
+                      }}
+                    >
+                      <Icon size={15} />
+                      <span>{item.label}</span>
+                      {item.id === "security" && pendingCount > 0 && (
+                        <span
+                          className="mono"
+                          style={{
+                            marginLeft: "auto",
+                            fontSize: 10.5,
+                            padding: "1px 6px",
+                            borderRadius: 999,
+                            background: "rgba(245,158,11,0.16)",
+                            color: "var(--amber)",
+                          }}
+                        >
+                          {pendingCount}
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
+              </nav>
+            </div>
+          ))}
+        </div>
+
+        <div
+          className="surface surface-lift"
+          style={{ padding: 12, marginTop: 14, cursor: "pointer" }}
+          onClick={() => {
+            setSection("settings");
+            setMobileNavOpen(false);
+          }}
+        >
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              marginBottom: 4,
+            }}
+          >
+            <span style={{ fontSize: 11, color: "var(--text-secondary)" }}>Control Link</span>
+            <span className="mono" style={{ fontSize: 11, color: "var(--text-muted)" }}>
+              {latencyMs !== null ? `${latencyMs} ms` : "—"}
+            </span>
+          </div>
+          <StatusBadge
+            status={emergencyStop ? "err" : latencyMs !== null ? "ok" : "warn"}
+            label={
+              emergencyStop
+                ? "Lockdown Active"
+                : latencyMs !== null
+                  ? "Connected"
+                  : "Connecting"
+            }
+          />
+        </div>
+      </aside>
+
+      <div style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
+        <header className="topbar">
+          <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0, flex: 1 }}>
+            <Button
+              size="icon"
+              className="mobile-menu-btn"
+              aria-label="Open menu"
+              onClick={() => setMobileNavOpen(true)}
+            >
+              <Menu size={16} />
+            </Button>
+
+            <nav
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 7,
+                fontSize: 12,
+                color: "var(--text-muted)",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+                flex: 1,
+                minWidth: 0,
+              }}
+            >
+              <span className="breadcrumb-prefix">AI Bridge</span>
+              <span className="breadcrumb-prefix">/</span>
+              <span className="breadcrumb-prefix">{activeNav.group}</span>
+              <span className="breadcrumb-prefix">/</span>
+              <span
+                style={{
+                  fontWeight: 500,
+                  color: "var(--text-primary)",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                }}
+              >
+                {activeNav.label}
+              </span>
+            </nav>
+          </div>
+
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+            <Button
+              size="sm"
+              onClick={() => {
+                setPaletteQuery("");
+                setPaletteOpen(true);
+              }}
+            >
+              <Command size={13} />
+              <span className="mono cmd-kbd" style={{ fontSize: 11 }}>
+                Ctrl+K
+              </span>
+            </Button>
+
+            <Button size="icon" title="Refresh telemetry" onClick={() => void refreshAll(false)}>
+              <RefreshCw
+                size={14}
+                style={{
+                  transition: "transform 0.4s ease",
+                  transform: refreshSpin ? "rotate(360deg)" : "rotate(0deg)",
+                }}
+              />
+            </Button>
+
+            <Button size="icon" title="Toggle light / dark" onClick={toggleTheme}>
+              {theme === "dark" ? <Sun size={14} /> : <Moon size={14} />}
+            </Button>
+
+            <DropdownMenu
+              label={session.username}
+              items={[
+                { label: "Fleet & Device 360", shortcut: "G F", onClick: () => setSection("devices") },
+                { label: "Live Terminal", shortcut: "G T", onClick: () => setSection("terminal") },
+                { label: "Security & Policy", shortcut: "G S", onClick: () => setSection("security") },
+                { type: "divider" },
+                {
+                  label: emergencyStop ? "Clear Emergency Stop" : "Emergency Stop",
+                  danger: !emergencyStop,
+                  onClick: async () => {
+                    try {
+                      const res = await api.setEmergencyStop(!emergencyStop);
+                      setEmergencyStop(res.emergency_stop);
+                      showToast(res.emergency_stop ? "Emergency stop engaged" : "Emergency stop cleared");
+                    } catch (err) {
+                      showToast(err instanceof Error ? err.message : "Failed");
+                    }
+                  },
+                },
+                {
+                  label: "Sign Out",
+                  danger: true,
+                  onClick: async () => {
+                    await api.logout();
+                    saveStoredSession(null);
+                    setSession(null);
+                  },
+                },
+              ]}
+            />
+          </div>
+        </header>
+
+        <main className="main-content">
+          {loading ? (
+            <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+              <SkeletonCard lines={2} />
+              <div className="split-2">
+                <SkeletonCard lines={4} />
+                <SkeletonCard lines={4} />
+              </div>
+            </div>
+          ) : section === "overview" ? (
+            <OverviewView
+              devices={devices}
+              tasks={tasks}
+              audit={audit}
+              telemetry={telemetry}
+              latencyMs={latencyMs}
+              emergencyStop={emergencyStop}
+              onNavigate={setSection}
+              onInspectDevice={(dev) => {
+                setInspectedDevice(dev);
+                setSection("devices");
+              }}
+            />
+          ) : section === "devices" ? (
+            <FleetView
+              api={api}
+              devices={devices}
+              selectedDevice={inspectedDevice}
+              onSelectDevice={setInspectedDevice}
+              onRefresh={() => refreshAll(false)}
+              onToast={showToast}
+            />
+          ) : section === "terminal" ? (
+            <TerminalView api={api} devices={devices} onToast={showToast} />
+          ) : section === "desktop" ? (
+            <DesktopView api={api} devices={devices} onToast={showToast} />
+          ) : section === "tasks" ? (
+            <TasksView
+              api={api}
+              tasks={tasks}
+              devices={devices}
+              onRefresh={() => refreshAll(false)}
+              onToast={showToast}
+            />
+          ) : section === "workflows" ? (
+            <WorkflowsView api={api} devices={devices} onToast={showToast} />
+          ) : section === "fleetops" ? (
+            <FleetOpsView api={api} devices={devices} onToast={showToast} />
+          ) : section === "security" ? (
+            <SecurityView
+              api={api}
+              approvals={approvals}
+              audit={audit}
+              onRefresh={() => refreshAll(false)}
+              onToast={showToast}
+            />
+          ) : section === "audit" ? (
+            <AuditLogsView api={api} audit={audit} onToast={showToast} />
+          ) : section === "connections" ? (
+            <ConnectionsView api={api} onToast={showToast} />
+          ) : (
+            <SettingsView
+              api={api}
+              session={session}
+              theme={theme}
+              emergencyStop={emergencyStop}
+              onToggleTheme={toggleTheme}
+              onEmergencyStopChange={async (next) => {
+                const res = await api.setEmergencyStop(next);
+                setEmergencyStop(res.emergency_stop);
+                showToast(res.emergency_stop ? "Emergency stop engaged" : "Emergency stop cleared");
+              }}
+              onLogout={async () => {
+                await api.logout();
+                saveStoredSession(null);
+                setSession(null);
+              }}
+              onToast={showToast}
+            />
+          )}
+        </main>
+      </div>
+
+      <Modal
+        open={paletteOpen}
+        title="Quick Jump (Ctrl+K)"
+        onClose={() => setPaletteOpen(false)}
+        maxWidth={440}
+      >
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          <input
+            type="text"
+            className="field"
+            autoFocus
+            placeholder="Jump to view or action..."
+            value={paletteQuery}
+            onChange={(e) => setPaletteQuery(e.target.value)}
+          />
+          <div style={{ display: "flex", flexDirection: "column", gap: 3, maxHeight: 340, overflowY: "auto" }}>
+            {paletteCommands.map((cmd) => (
+              <button
+                key={cmd.id}
+                type="button"
+                className="nav-item"
+                onClick={() => {
+                  setPaletteOpen(false);
+                  cmd.run();
+                }}
+              >
+                <span style={{ flex: 1 }}>{cmd.label}</span>
+                <span className="mono" style={{ fontSize: 10.5, color: "var(--text-muted)" }}>
+                  {cmd.meta}
+                </span>
+              </button>
+            ))}
+          </div>
+        </div>
+      </Modal>
+
+      <ToastBanner message={toast} />
+    </div>
+  );
+}

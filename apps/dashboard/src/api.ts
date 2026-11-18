@@ -1,545 +1,693 @@
-const envBase = (import.meta as any).env?.VITE_API_URL || "";
-const isProdOrigin =
-  typeof window !== "undefined" &&
-  window.location.port !== "5173" &&
-  window.location.hostname !== "localhost" &&
-  window.location.hostname !== "127.0.0.1";
-const BASE =
-  envBase || (isProdOrigin ? window.location.origin : "http://127.0.0.1:8000");
-export const apiOrigin = BASE;
+import type {
+  AlertConfigState,
+  AlertDelivery,
+  ApprovalRecord,
+  AuditRecord,
+  AuditVerifyResult,
+  AuthSession,
+  BackupItem,
+  BroadcastBatchStatus,
+  ConnectionsSummary,
+  DeviceOverview,
+  DeviceRecord,
+  EnrollResult,
+  FleetTelemetrySummary,
+  HealthResponse,
+  MonitorDescriptor,
+  PolicyHistoryEntry,
+  PolicyState,
+  ReadinessResponse,
+  RoleAgentRecord,
+  ScheduleRecord,
+  TaskRecord,
+  TelemetryPoint,
+  TerminalSessionSummary,
+  TriggerRecord,
+  UserRecord,
+  WorkflowRecord,
+  WorkflowTemplate,
+} from "./types";
 
-/** True when the dashboard host is not the control API (cross-origin deploy). */
-export const isCrossOriginApi =
-  typeof window !== "undefined" && BASE.replace(/\/$/, "") !== window.location.origin;
+const SESSION_STORAGE_KEY = "aibridge.session.v1";
 
-/** Free-tier hosts (e.g. Render) often need 30–60s to wake after idle sleep. */
-const COLD_START_PROBE_MS = 60000;
-/** First cross-origin probe: long enough for a warm API, short enough to start a wake cycle. */
-const WAKE_KICK_PROBE_MS = 12000;
-
-function reachabilityHint(timedOut = false): string {
-  if (!envBase && isProdOrigin) {
-    return ` This static site is calling ${BASE}. Set VITE_API_URL to your control plane URL (e.g. https://ai-bridge-control.onrender.com) and redeploy the dashboard.`;
-  }
-  if (timedOut && isCrossOriginApi) {
-    return ` Control plane: ${BASE}. Free-tier APIs often sleep when idle — wait a minute and use Retry. If it stays down, ensure AI_BRIDGE_CORS_ORIGINS includes ${typeof window !== "undefined" ? window.location.origin : "this origin"}.`;
-  }
-  if (isCrossOriginApi) {
-    return ` Control plane: ${BASE}. If the API is up, ensure AI_BRIDGE_CORS_ORIGINS includes ${typeof window !== "undefined" ? window.location.origin : "this origin"}.`;
-  }
-  return ` Control plane: ${BASE}.`;
-}
-
-async function fetchHealthOnce(timeoutMs: number): Promise<{ ok: boolean; detail: string; version?: string }> {
-  const response = await fetch(BASE + "/health", { signal: AbortSignal.timeout(timeoutMs) });
-  if (!response.ok) {
-    return { ok: false, detail: `Control plane returned HTTP ${response.status} at ${BASE}/health.` };
-  }
-  const body = await response.json().catch(() => ({} as { version?: string; status?: string }));
-  return {
-    ok: body?.status === "ok" || response.ok,
-    detail: `Reachable at ${BASE}`,
-    version: typeof body?.version === "string" ? body.version : undefined,
-  };
-}
-
-export async function probeControlHealth(timeoutMs = COLD_START_PROBE_MS): Promise<{ ok: boolean; detail: string; version?: string }> {
-  // Cross-origin deploys: kick the free-tier wake with a short probe, then wait out cold start.
-  const budget = isCrossOriginApi && timeoutMs === COLD_START_PROBE_MS
-    ? [WAKE_KICK_PROBE_MS, COLD_START_PROBE_MS]
-    : [timeoutMs];
-  let lastTimedOut = false;
-  for (let attempt = 0; attempt < budget.length; attempt++) {
-    try {
-      return await fetchHealthOnce(budget[attempt]);
-    } catch (error) {
-      lastTimedOut = error instanceof DOMException && error.name === "TimeoutError";
-      if (attempt + 1 >= budget.length) break;
-    }
-  }
-  return {
-    ok: false,
-    detail: (lastTimedOut ? "Timed out reaching the control plane." : "Cannot reach the control plane.") + reachabilityHint(lastTimedOut),
-  };
-}
-
-export function token() {
-  if (typeof window === "undefined") return "";
-  // Session only. A token persisted in localStorage by an older build is
-  // deliberately NOT honoured: it would outlive the browser session the
-  // sign-in copy promises. clearCredentials() removes such legacy copies.
-  return sessionStorage.getItem("ai_bridge_admin_token") || "";
-}
-export function sessionToken() {
-  if (typeof window === "undefined") return "";
-  return sessionStorage.getItem("ai_bridge_session_token") || "";
-}
-
-export function clearCredentials() {
-  if (typeof window === "undefined") return;
-  sessionStorage.removeItem("ai_bridge_admin_token");
-  sessionStorage.removeItem("ai_bridge_session_token");
-  // Remove legacy copies persisted by older builds; no token is ever
-  // written to localStorage anymore.
-  localStorage.removeItem("ai_bridge_admin_token");
-  localStorage.removeItem("ai_bridge_session_token");
-  sessionStorage.removeItem("ai_bridge_demo_acknowledged");
-  csrfTokenCache = null;
-}
-
-// CSRF: the control plane requires an X-CSRF-Token header on mutating
-// requests authenticated with a session token (admin-token requests are
-// exempt). The dashboard previously never sent one, so every
-// session-authenticated POST/PUT/PATCH/DELETE — including the stream-ticket
-// mint — was rejected with 403. Fetch the per-session token once per tab
-// (GET /api/auth/csrf-token is a safe method, exempt from CSRF) and cache
-// it; it is dropped with the session on sign-out. A failed fetch returns
-// null and the call proceeds without the header (the server then rejects
-// it honestly) rather than failing silently.
-let csrfTokenCache: string | null = null;
-async function csrfToken(): Promise<string | null> {
-  if (typeof window === "undefined") return null;
-  const st = sessionToken();
-  if (!st) return null;
-  if (csrfTokenCache) return csrfTokenCache;
+export function loadStoredSession(): AuthSession | null {
   try {
-    const res = await fetch(BASE + "/api/auth/csrf-token", {
-      headers: { "X-Session-Token": st },
-      signal: AbortSignal.timeout(10000),
-    });
-    if (!res.ok) return null;
-    const data = await res.json().catch(() => null);
-    csrfTokenCache = typeof data?.csrf_token === "string" ? data.csrf_token : null;
-    return csrfTokenCache;
+    const raw = localStorage.getItem(SESSION_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as AuthSession;
+    if (!parsed?.token) return null;
+    return parsed;
   } catch {
     return null;
   }
 }
 
-/**
- * WebSocket signalling authentication (D-08): browsers cannot set custom
- * headers on a WebSocket handshake, so the signalling URL carries a
- * single-use, 60-second stream ticket instead of a long-lived credential.
- * Mint it with api.mintStreamTicket() (POST /api/stream-ticket, sent with
- * the session token as an X-Session-Token header) and pass it to
- * api.sessionWebSocketUrl(sessionId, ticket). The control plane redeems
- * the ticket on connect (bound to one actor + device + session) and
- * rejects replays, expired tickets, and wrong-device/session tickets.
- * No long-lived token ever appears in a URL.
- */
-
-/** Safely convert epoch seconds, epoch milliseconds, or ISO strings to an ISO-8601 string. */
-export function toIsoTimestamp(ts: unknown, fallback = ""): string {
-  if (ts === null || ts === undefined || ts === "") return fallback;
-  if (typeof ts === "number") {
-    if (!Number.isFinite(ts) || ts <= 0) return fallback;
-    const ms = ts < 1e12 ? ts * 1000 : ts;
-    const d = new Date(ms);
-    return Number.isNaN(d.getTime()) ? fallback : d.toISOString();
-  }
-  const raw = String(ts).trim();
-  if (!raw) return fallback;
-  if (/^\d+(?:\.\d+)?$/.test(raw)) {
-    const num = Number(raw);
-    if (!Number.isFinite(num) || num <= 0) return fallback;
-    const d = new Date(num < 1e12 ? num * 1000 : num);
-    return Number.isNaN(d.getTime()) ? fallback : d.toISOString();
-  }
-  const parsed = new Date(raw);
-  return Number.isNaN(parsed.getTime()) ? fallback : parsed.toISOString();
-}
-
-/** Consume the server's OIDC redirect once, before rendering or saving history.
- * The live view verifies this session with /api/auth/me before showing any data.
- *
- * F-05-15 (Wave 4): the server no longer puts the session token in the URL
- * fragment (fragments persist in browser history and are readable by any
- * script on the page). It redirects with a single-use 60 s `?oidc_code=`,
- * exchanged here for the session token via POST /api/auth/oidc/exchange.
- * The fragment path is deleted entirely — there is no fallback to it.
- */
-export async function consumeIdentityRedirectAsync(): Promise<boolean> {
-  const params = new URLSearchParams(window.location.search);
-  const code = params.get("oidc_code");
-  if (!code) return false;
-  // Strip the code from the URL immediately; it is single-use and must not
-  // remain in the address bar or history. Keep the existing #/live landing.
-  window.history.replaceState(null, "", `${window.location.pathname}#/live`);
-  clearCredentials();
+export function saveStoredSession(session: AuthSession | null): void {
   try {
-    const response = await fetch(BASE + "/api/auth/oidc/exchange", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ code }),
-    });
-    if (!response.ok) return false; // 401 = unknown/expired/replayed code: store nothing.
-    const data: unknown = await response.json();
-    const token =
-      typeof data === "object" && data !== null
-        ? (data as Record<string, unknown>)["session_token"]
-        : undefined;
-    if (typeof token !== "string" || !token) return false;
-    // Session only, never localStorage: the sign-in copy promises the browser
-    // drops the credential when it closes, and a persisted token would outlive it.
-    sessionStorage.setItem("ai_bridge_session_token", token);
-    return true;
+    if (!session) {
+      localStorage.removeItem(SESSION_STORAGE_KEY);
+    } else {
+      localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(session));
+    }
   } catch {
-    return false;
+    // Ignore storage errors
   }
 }
 
-export async function authenticate(credentials: { token: string } | { username: string; password: string }) {
-  clearCredentials();
-  try {
-    if ("token" in credentials) {
-      const response = await fetch(BASE + "/api/auth/me", {
-        headers: { "X-Admin-Token": credentials.token },
-        signal: AbortSignal.timeout(COLD_START_PROBE_MS),
-      });
-      if (!response.ok) throw new Error("Token rejected. Check your server's admin token.");
-      const identity = await response.json();
-      sessionStorage.setItem("ai_bridge_admin_token", credentials.token);
-      return identity;
-    }
-    const response = await api.login(credentials.username, credentials.password);
-    sessionStorage.setItem("ai_bridge_session_token", response.session_token);
-    return response;
-  } catch (error) {
-    clearCredentials();
-    if (error instanceof TypeError || (error instanceof DOMException && error.name === "TimeoutError")) {
-      const timedOut = error instanceof DOMException && error.name === "TimeoutError";
-      throw new Error((timedOut ? "Timed out reaching the control plane." : "Cannot reach the control plane.") + reachabilityHint(timedOut));
-    }
-    throw error;
+export function normalizeBaseUrl(url: string): string {
+  const trimmed = url.trim();
+  if (!trimmed) return "";
+  return trimmed.replace(/\/+$/, "");
+}
+
+export class ApiClient {
+  private session: AuthSession | null = null;
+  private csrfToken: string | null = null;
+
+  constructor(session?: AuthSession | null) {
+    this.session = session ?? null;
   }
-}
 
-export class ApiError extends Error {
-  constructor(message: string, public uncertain = false, public status?: number) { super(message); }
-}
+  setSession(session: AuthSession | null): void {
+    this.session = session;
+    this.csrfToken = null;
+  }
 
-async function call(path: string, method = "GET", body?: unknown, extraHeaders: Record<string, string> = {}) {
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
-  Object.assign(headers, extraHeaders);
-  const st = sessionToken();
-  const at = token();
-  if (st) {
-    headers["X-Session-Token"] = st;
-    if (method !== "GET") {
-      const csrf = await csrfToken();
+  resolveUrl(path: string, customBase?: string): string {
+    const base = normalizeBaseUrl(customBase ?? this.session?.controlUrl ?? "");
+    return base ? `${base}${path}` : path;
+  }
+
+  authHeaders(): Record<string, string> {
+    if (!this.session?.token) return {};
+    if (this.session.mode === "admin_token") {
+      return { "X-Admin-Token": this.session.token };
+    }
+    return { "X-Session-Token": this.session.token };
+  }
+
+  private async ensureCsrfToken(): Promise<string | null> {
+    if (!this.session || this.session.mode !== "session") return null;
+    if (this.csrfToken) return this.csrfToken;
+    const res = await fetch(this.resolveUrl("/api/auth/csrf-token"), {
+      headers: { ...this.authHeaders() },
+    });
+    if (!res.ok) return null;
+    const data = (await res.json()) as { csrf_token?: string };
+    this.csrfToken = data.csrf_token ?? null;
+    return this.csrfToken;
+  }
+
+  private async request<T>(
+    path: string,
+    options: RequestInit & { baseUrlOverride?: string } = {},
+  ): Promise<T> {
+    const { baseUrlOverride, ...fetchOpts } = options;
+    const method = (fetchOpts.method ?? "GET").toUpperCase();
+    const isMutating = method !== "GET" && method !== "HEAD" && method !== "OPTIONS";
+
+    const headers: Record<string, string> = {
+      ...(fetchOpts.body ? { "Content-Type": "application/json" } : {}),
+      ...this.authHeaders(),
+      ...(fetchOpts.headers as Record<string, string> | undefined),
+    };
+
+    if (isMutating && this.session?.mode === "session") {
+      const csrf = await this.ensureCsrfToken();
       if (csrf) headers["X-CSRF-Token"] = csrf;
     }
-  } else if (at) headers["X-Admin-Token"] = at;
-  let res: Response;
-  try {
-    res = await fetch(BASE + path, { method, headers, body: body ? JSON.stringify(body) : undefined, signal: AbortSignal.timeout(15000) });
-  } catch {
-    throw new ApiError(method === "GET" ? "Cannot reach the control plane. Try refreshing." :
-      "Outcome unknown. The server may have received this request. Refresh the relevant records before submitting again.", method !== "GET");
-  }
-  if (!res.ok) {
-    if (res.status === 401) clearCredentials();
-    const detail = await res.json().catch(() => null);
-    throw new ApiError(res.status === 401 ? "Your session expired. Please sign in again." :
-      `${res.status}: ${typeof detail?.detail === "string" ? detail.detail : "The server could not complete this request."}`,
-    method !== "GET" && res.status >= 500, res.status);
-  }
-  try { return await res.json(); }
-  catch { throw new ApiError("Response could not be read. Refresh to check the outcome.", method !== "GET"); }
-}
-export const api = {
-  health: () => fetch(BASE + "/health", { signal: AbortSignal.timeout(10000) }).then(r => { if (!r.ok) throw new Error("Health check failed"); return r.json(); }),
-  devices: () => call("/api/devices"),
-  enroll: (name: string) => call("/api/devices/enroll", "POST", { name }),
-  revoke: (id: string) => call(`/api/devices/${id}/revoke`, "POST", {}),
-  updateDevice: (id: string, body: { name?: string; hostname?: string; os?: string; revoked?: boolean }) =>
-    call(`/api/devices/${encodeURIComponent(id)}`, "PUT", body),
-  deleteDevice: (id: string) => call(`/api/devices/${encodeURIComponent(id)}`, "DELETE"),
-  devicePolicy: (id: string) => call(`/api/devices/${encodeURIComponent(id)}/policy`),
-  setDevicePolicy: (id: string, body: any) => call(`/api/devices/${encodeURIComponent(id)}/policy`, "PUT", body),
-  resetDevicePolicy: (id: string) => call(`/api/devices/${encodeURIComponent(id)}/policy`, "DELETE"),
-  deviceOverview: (id: string) => call(`/api/devices/${encodeURIComponent(id)}/overview`),
-  refreshDeviceTelemetry: (id: string, tools?: string[]) =>
-    call(`/api/devices/${encodeURIComponent(id)}/refresh`, "POST", { tools }),
-  tasks: (deviceId?: string) => call(`/api/tasks${deviceId ? `?device_id=${encodeURIComponent(deviceId)}` : ""}`),
-  taskHistory: (params: { q: string; status: string; device_id: string; tenant: string; page: number }) =>
-    call(`/api/tasks/history?${new URLSearchParams(Object.entries(params).map(([key, value]) => [key, String(value)]))}`),
-  taskEvents: (taskId: string, limit = 50) =>
-    call(`/api/tasks/${encodeURIComponent(taskId)}/events?limit=${limit}`),
-  metricsSummary: () => call("/api/metrics/summary"),
-  agentMemoryChunks: (agentId: string, params?: { project?: string; task?: string; limit?: number }) => {
-    const q = new URLSearchParams();
-    if (params?.project) q.set("project", params.project);
-    if (params?.task) q.set("task", params.task);
-    if (params?.limit != null) q.set("limit", String(params.limit));
-    const qs = q.toString();
-    return call(`/api/agents/${encodeURIComponent(agentId)}/memory/chunks${qs ? `?${qs}` : ""}`);
-  },
-  appendAgentMemoryChunk: (agentId: string, body: { content: string; project?: string; task?: string }) =>
-    call(`/api/agents/${encodeURIComponent(agentId)}/memory/chunks`, "POST", body),
-  clearAgentMemoryChunks: (agentId: string, params?: { project?: string; task?: string }) => {
-    const q = new URLSearchParams();
-    if (params?.project) q.set("project", params.project);
-    if (params?.task) q.set("task", params.task);
-    const qs = q.toString();
-    return call(`/api/agents/${encodeURIComponent(agentId)}/memory/chunks${qs ? `?${qs}` : ""}`, "DELETE");
-  },
-  // SSE URL builders intentionally carry NO credential: every SSE consumer
-  // authenticates with an X-Session-Token / X-Admin-Token header via
-  // fetch (EventSource cannot send headers, so fetch + ReadableStream is
-  // used instead). The WebSocket signalling URL likewise carries no
-  // long-lived token: it carries a single-use stream ticket minted via
-  // mintStreamTicket() — see the D-08 note above.
-  liveActivityStreamUrl: () => `${BASE}/api/activity/stream`,
-  taskDetail: (id: string) => call(`/api/tasks/${id}`),
-  submitTask: (device_id: string, tool: string, args: any = {}, tenant?: string, requestKey = crypto.randomUUID()) =>
-    call("/api/tasks", "POST", { device_id, tool, args, tenant }, { "Idempotency-Key": requestKey }),
-  users: () => call("/api/auth/users"),
-  createUser: (body: { username: string; password: string; role: string }) => call("/api/auth/users", "POST", body),
-  updateUser: (username: string, body: { role: string; disabled: boolean }) =>
-    call(`/api/auth/users/${encodeURIComponent(username)}`, "PATCH", body),
-  deviceMetadata: (id: string, body: { group: string; tags: string[] }) =>
-    call(`/api/devices/${encodeURIComponent(id)}/metadata`, "PUT", body),
-  notifications: () => call("/api/fleet/notifications"),
-  cancelTask: (id: string) => call(`/api/tasks/${id}/cancel`, "POST", {}),
-  updateTask: (id: string, body: { tool?: string; args?: any; status?: string }) =>
-    call(`/api/tasks/${encodeURIComponent(id)}`, "PUT", body),
-  deleteTask: (id: string) => call(`/api/tasks/${encodeURIComponent(id)}`, "DELETE"),
-  clearTasks: (status?: string) =>
-    call(`/api/tasks${status && status !== "all" ? `?status=${encodeURIComponent(status)}` : ""}`, "DELETE"),
-  approvals: () => call("/api/approvals"),
-  decide: (id: string, decision: string, reason = "") => call(`/api/approvals/${encodeURIComponent(id)}/decide`, "POST", { decision, reason }),
-  replanApproval: (id: string, reason = "") => call(`/api/approvals/${encodeURIComponent(id)}/replan`, "POST", { reason }),
-  deleteApproval: (id: string) => call(`/api/approvals/${encodeURIComponent(id)}`, "DELETE"),
-  audit: () => call("/api/audit"),
-  exportAudit: () => call("/api/audit/export"),
-  emergencyStop: () => call("/api/emergency-stop", "POST", {}),
-  emergencyClear: () => call("/api/emergency-stop/clear", "POST", {}),
-  login: (username: string, password: string) => fetch(BASE + "/api/auth/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username, password }), signal: AbortSignal.timeout(15000) }).then(async r => { if (!r.ok) throw new Error("Username or password rejected."); return r.json(); }),
-  logout: () => call("/api/auth/logout", "POST", {}),
-  policies: () => call("/api/policies"),
-  policyHistory: () => call("/api/policies/history"),
-  simulatePolicy: (p: { allow_tier3: boolean; desktop_enabled: boolean; allowed_apps: string[]; allowed_services: string[]; note?: string }) =>
-    call("/api/policies/simulate", "POST", p),
-  updatePolicyVersion: (version: number, p: { allow_tier3: boolean; desktop_enabled: boolean; allowed_apps: string[]; allowed_services: string[]; note?: string }) =>
-    call(`/api/policies/${version}`, "PUT", p),
-  deletePolicyVersion: (version: number) => call(`/api/policies/${version}`, "DELETE"),
-  connections: () => call("/api/connections"),
-  updateOAuthClient: (client_id: string, body: { client_name?: string; redirect_uris?: string }) =>
-    call(`/api/connections/clients/${encodeURIComponent(client_id)}`, "PUT", body),
-  deleteOAuthClient: (client_id: string) =>
-    call(`/api/connections/clients/${encodeURIComponent(client_id)}`, "DELETE"),
-  logs: (service: string, lines: number) => call(`/api/logs?service=${service}&lines=${lines}`),
-  createPolicy: (p: { allow_tier3: boolean; desktop_enabled: boolean; allowed_apps: string[]; allowed_services: string[]; note?: string }) =>
-    call("/api/policies", "POST", {
-      allow_tier3: p.allow_tier3,
-      desktop_enabled: p.desktop_enabled,
-      allowed_apps: p.allowed_apps,
-      allowed_services: p.allowed_services,
-      note: p.note || "Set from dashboard",
-    }),
-  getWebhook: () => call("/api/settings/webhook"),
-  setWebhook: (webhook_url: string) => call("/api/settings/webhook", "POST", { webhook_url }),
-  testWebhook: () => call("/api/settings/webhook/test", "POST", {}),
-  oidcConfigured: () => fetch(BASE + "/api/auth/oidc/configured", { signal: AbortSignal.timeout(10000) }).then(r => { if (!r.ok) throw new Error("Identity provider unavailable"); return r.json(); }),
-  me: () => call("/api/auth/me"),
-  oidcLogin: () => { window.location.href = BASE + "/api/auth/oidc/login"; },
-  aiTools: (format = "raw", device?: string) =>
-    call(`/api/ai/tools?format=${encodeURIComponent(format)}${device ? `&device=${encodeURIComponent(device)}` : ""}`),
-  aiExecute: (body: { tool: string; device?: string; args?: any; timeout?: number }) =>
-    call("/api/ai/execute", "POST", body),
-  aiAgent: (body: { prompt: string; device?: string; provider?: string; model?: string; api_key?: string; base_url?: string }) =>
-    call("/api/ai/agent", "POST", body),
-  aiFleet: () => call("/api/ai/devices"),
-  getAiSettings: () => call("/api/settings/ai"),
-  saveAiSettings: (body: { provider: string; model?: string; api_key?: string; base_url?: string; test_connection?: boolean; clear?: boolean }) =>
-    call("/api/settings/ai", "POST", body),
-  agents: () => call("/api/agents"),
-  createAgent: (body: { name: string; instruction: string; provider: string; model?: string; base_url?: string; device_ids: string[]; interval_seconds: number; enabled: boolean; allowed_tools?: string[]; mcp_server_ids?: string[] }) =>
-    call("/api/agents", "POST", body),
-  updateAgent: (id: string, body: { enabled?: boolean; name?: string; instruction?: string; provider?: string; model?: string; base_url?: string; device_ids?: string[]; interval_seconds?: number; memory?: string; allowed_tools?: string[]; mcp_server_ids?: string[] }) =>
-    call(`/api/agents/${encodeURIComponent(id)}`, "PATCH", body),
-  deleteAgent: (id: string) => call(`/api/agents/${encodeURIComponent(id)}`, "DELETE"),
-  runAgentNow: (id: string) => call(`/api/agents/${encodeURIComponent(id)}/run`, "POST", {}),
-  askAgent: (id: string, prompt: string) => call(`/api/agents/${encodeURIComponent(id)}/ask`, "POST", { prompt }),
-  agentRuns: (id: string) => call(`/api/agents/${encodeURIComponent(id)}/runs?limit=10`),
-  mcpServers: () => call("/api/mcp/servers"),
-  mcpTemplates: () => call("/api/mcp/templates"),
-  discoverMcpOAuth: (url: string) => call("/api/mcp/oauth/discover", "POST", { url }),
-  createMcpServer: (body: {
-    name: string;
-    url: string;
-    transport?: string;
-    auth_type?: string;
-    auth_header?: string;
-    auth_token?: string;
-    oauth_client_id?: string;
-    oauth_client_secret?: string;
-    oauth_auth_url?: string;
-    oauth_token_url?: string;
-    oauth_scopes?: string;
-    headers?: Record<string, string>;
-    enabled?: boolean;
-  }) => call("/api/mcp/servers", "POST", body),
-  startMcpOAuth: (id: string) => call(`/api/mcp/servers/${encodeURIComponent(id)}/oauth/start`, "POST", {}),
-  syncMcpServer: (id: string) => call(`/api/mcp/servers/${encodeURIComponent(id)}/sync`, "POST", {}),
-  updateMcpServer: (id: string, body: any) => call(`/api/mcp/servers/${encodeURIComponent(id)}`, "PATCH", body),
-  deleteMcpServer: (id: string) => call(`/api/mcp/servers/${encodeURIComponent(id)}`, "DELETE"),
-  executeMcpTool: (id: string, tool: string, args: any = {}) => call(`/api/mcp/servers/${encodeURIComponent(id)}/execute`, "POST", { tool, arguments: args }),
-  mcpToolPolicies: () => call("/api/mcp/tool-policies"),
-  updateMcpToolPolicies: (policies: Record<string, string>) => call("/api/mcp/tool-policies", "PUT", { policies }),
-  aiChat: (body: { messages: any[]; provider?: string; model?: string; api_key?: string; base_url?: string; device?: string }) =>
-    call("/api/ai/chat", "POST", body),
-  aiChatStreamUrl: () => `${BASE}/api/ai/chat/stream`,
-  workflowTemplates: () => call("/api/workflows/templates"),
-  createWorkflowTemplate: (body: { name: string; description?: string; steps: any[]; tenant?: string }) =>
-    call("/api/workflows/templates", "POST", body),
-  deleteWorkflowTemplate: (id: string) => call(`/api/workflows/templates/${encodeURIComponent(id)}`, "DELETE"),
-  workflows: (status?: string) => call(`/api/workflows${status ? `?status=${encodeURIComponent(status)}` : ""}`),
-  workflowDetail: (id: string) => call(`/api/workflows/${encodeURIComponent(id)}`),
-  submitWorkflow: (body: { name: string; device_id?: string; steps: any[]; stop_on_failure?: boolean; max_retries?: number; require_step_approval?: boolean }) =>
-    call("/api/workflows", "POST", body),
-  cancelWorkflow: (id: string) => call(`/api/workflows/${encodeURIComponent(id)}/cancel`, "POST", {}),
-  retryWorkflow: (id: string, from_failed_step = true) => call(`/api/workflows/${encodeURIComponent(id)}/retry`, "POST", { from_failed_step }),
-  deleteWorkflow: (id: string) => call(`/api/workflows/${encodeURIComponent(id)}`, "DELETE"),
-  scheduleWorkflow: (id: string, body: { name?: string; interval_seconds?: number; device_id?: string }) =>
-    call(`/api/workflows/${encodeURIComponent(id)}/schedule`, "POST", body),
-  streamWorkflowUrl: (id: string) => `${BASE}/api/workflows/${encodeURIComponent(id)}/stream`,
-  eventsStreamUrl: () => `${BASE}/api/events/stream`,
-  alertsConfig: () => call("/api/alerts/config"),
-  updateAlertsConfig: (body: { slack_webhook?: string; discord_webhook?: string; telegram_token?: string; telegram_chat_id?: string; generic_webhook?: string }) =>
-    call("/api/alerts/config", "PUT", body),
-  testAlerts: () => call("/api/alerts/test", "POST", {}),
-  alertDeliveries: () => call("/api/alerts/deliveries"),
-  backups: () => call("/api/admin/backups"),
-  createBackup: () => call("/api/admin/backups", "POST", {}),
-  restoreBackup: (filename: string) => call(`/api/admin/backups/${encodeURIComponent(filename)}/restore`, "POST", {}),
-  downloadBackupBlob: async (filename: string): Promise<Blob> => {
-    const headers: Record<string, string> = {};
-    const st = sessionToken();
-    const at = token();
-    if (st) headers["X-Session-Token"] = st;
-    else if (at) headers["X-Admin-Token"] = at;
-    const res = await fetch(`${BASE}/api/admin/backups/${encodeURIComponent(filename)}`, {
-      headers,
-      signal: AbortSignal.timeout(30000),
-    });
-    if (!res.ok) {
-      throw new ApiError(`${res.status}: Failed to download backup ${filename}`, false, res.status);
-    }
-    return await res.blob();
-  },
-  tenants: () => call("/api/tenants"),
-  fleetTelemetry: () => call("/api/fleet/telemetry"),
-  fleetHealth: () => call("/api/fleet/health"),
-  liveActivity: (limit = 40) => call(`/api/activity/live?limit=${limit}`),
-  roles: () => call("/api/roles"),
-  enableRole: (roleId: string, enabled = true) =>
-    call(`/api/roles/${encodeURIComponent(roleId)}/enable?enabled=${enabled ? "true" : "false"}`, "POST", {}),
-  supervisorHandoff: (body: {
-    device_id: string;
-    goal?: string;
-    tenant?: string;
-    profile?: string;
-    mode?: "gated" | "fanout";
-  }) => call("/api/supervisor/handoff", "POST", body),
-  supervisorHandoffStatus: (handoffId: string) =>
-    call(`/api/supervisor/handoffs/${encodeURIComponent(handoffId)}`),
-  supervisorRecover: (body: { role: string; device_id?: string }) =>
-    call("/api/supervisor/recover", "POST", body),
-  deviceTelemetry: (id: string, limit = 50) => call(`/api/devices/${encodeURIComponent(id)}/telemetry?limit=${limit}`),
-  fleetBroadcast: (body: { tool: string; args?: any; target_os?: string; target_device_ids?: string[] }) =>
-    call("/api/fleet/broadcast", "POST", body),
-  broadcastStatus: (batch_id: string) => call(`/api/fleet/broadcast/${encodeURIComponent(batch_id)}`),
-  triggers: () => call("/api/triggers"),
-  createTrigger: (body: any) => call("/api/triggers", "POST", body),
-  deleteTrigger: (id: string) => call(`/api/triggers/${encodeURIComponent(id)}`, "DELETE"),
-  toggleTrigger: (id: string) => call(`/api/triggers/${encodeURIComponent(id)}/toggle`, "POST", {}),
-  testTrigger: (id: string) => call(`/api/triggers/${encodeURIComponent(id)}/test`, "POST", {}),
-  schedules: () => call("/api/schedules"),
-  createSchedule: (body: any) => call("/api/schedules", "POST", body),
-  deleteSchedule: (id: string) => call(`/api/schedules/${encodeURIComponent(id)}`, "DELETE"),
-  toggleSchedule: (id: string) => call(`/api/schedules/${encodeURIComponent(id)}/toggle`, "POST", {}),
-  runScheduleNow: (id: string) => call(`/api/schedules/${encodeURIComponent(id)}/run-now`, "POST", {}),
-  desktopFrame: (deviceId: string, scale = 0.75, quality = 70) =>
-    call(`/api/devices/${encodeURIComponent(deviceId)}/desktop/frame?scale=${scale}&quality=${quality}`),
-  fleetDesktopFrames: (os?: string) =>
-    call(`/api/fleet/desktop/frames${os ? `?os=${encodeURIComponent(os)}` : ""}`),
-  deviceMonitors: (deviceId: string) =>
-    call(`/api/devices/${encodeURIComponent(deviceId)}/desktop/monitors`),
-  createTerminalSession: (deviceId: string, cols = 120, rows = 35) =>
-    call(`/api/devices/${encodeURIComponent(deviceId)}/terminal/sessions`, "POST", { cols, rows }),
-  listTerminalSessions: (deviceId?: string) =>
-    call(`/api/devices/${encodeURIComponent(deviceId || "local")}/terminal/sessions`),
-  writeTerminalInput: (deviceId: string, sessionId: string, input: string) =>
-    call(`/api/devices/${encodeURIComponent(deviceId)}/terminal/${encodeURIComponent(sessionId)}/input`, "POST", { input }),
-  closeTerminalSession: (deviceId: string, sessionId: string) =>
-    call(`/api/devices/${encodeURIComponent(deviceId)}/terminal/${encodeURIComponent(sessionId)}`, "DELETE"),
-  terminalStreamUrl: (deviceId: string, sessionId: string, sinceSeq = 0) =>
-    `${BASE}/api/devices/${encodeURIComponent(deviceId)}/terminal/${encodeURIComponent(sessionId)}/stream?since_seq=${sinceSeq}`,
-  createSessionV1: (body: {
-    device_id?: string;
-    mode?: "view_only" | "human_control" | "ai_assisted";
-    fps?: number;
-    scale?: number;
-    monitor_index?: number;
-    bitrate_kbps?: number;
-  }) => call("/api/v1/sessions", "POST", body),
-  desktopCapabilities: () => call("/api/fleet/desktop-capabilities"),
-  getSessionV1: (sessionId: string) =>
-    call(`/api/v1/sessions/${encodeURIComponent(sessionId)}`),
-  setSessionModeV1: (
-    sessionId: string,
-    mode: "view_only" | "human_control" | "ai_assisted",
-    human_takeover?: boolean
-  ) => call(`/api/v1/sessions/${encodeURIComponent(sessionId)}/mode`, "POST", { mode, human_takeover }),
-  terminateSessionV1: (sessionId: string) =>
-    call(`/api/v1/sessions/${encodeURIComponent(sessionId)}/terminate`, "POST", {}),
-  postAnswerV1: (sessionId: string, sdp: string, type = "answer") =>
-    call(`/api/v1/sessions/${encodeURIComponent(sessionId)}/answer`, "POST", { sdp, type }),
-  postIceV1: (sessionId: string, candidate: any) =>
-    call(`/api/v1/sessions/${encodeURIComponent(sessionId)}/ice`, "POST", { candidate }),
-  mintStreamTicket: (deviceId: string, sessionId: string) =>
-    call("/api/stream-ticket", "POST", { device_id: deviceId, session_id: sessionId }),
-  sessionWebSocketUrl: (sessionId: string, ticket?: string) => {
-    const wsBase = BASE.replace(/^http/, "ws");
-    const q = ticket ? `?ticket=${encodeURIComponent(ticket)}` : "";
-    return `${wsBase}/api/v1/ws/sessions/${encodeURIComponent(sessionId)}${q}`;
-  },
-  getDeviceMonitorsV1: (deviceId: string) =>
-    call(`/api/v1/devices/${encodeURIComponent(deviceId)}/monitors`),
-  getDeviceUiElementsV1: (deviceId: string) =>
-    call(`/api/v1/devices/${encodeURIComponent(deviceId)}/ui-elements`),
-  listDeviceFilesV1: (deviceId: string) =>
-    call(`/api/v1/devices/${encodeURIComponent(deviceId)}/files`),
-  uploadDeviceFileV1: (deviceId: string, filename: string, contentB64: string, sha256?: string, targetDir?: string) =>
-    call(`/api/v1/devices/${encodeURIComponent(deviceId)}/files/upload`, "POST", {
-      filename,
-      content_b64: contentB64,
-      sha256,
-      target_dir: targetDir,
-    }),
-  downloadDeviceFileV1: (deviceId: string, path: string) =>
-    call(`/api/v1/devices/${encodeURIComponent(deviceId)}/files/download?path=${encodeURIComponent(path)}`),
-  getSessionRecordingV1: (sessionId: string) =>
-    call(`/api/v1/sessions/${encodeURIComponent(sessionId)}/recording`),
-  sealSessionRecordingV1: (sessionId: string) =>
-    call(`/api/v1/sessions/${encodeURIComponent(sessionId)}/recording/seal`, "POST", {}),
-  getIceServersV1: () => call("/api/v1/sessions/ice-servers"),
-  updateSessionQualityV1: (
-    sessionId: string,
-    quality: { bitrate_kbps?: number; fps?: number; monitor_index?: number }
-  ) => call(`/api/v1/sessions/${encodeURIComponent(sessionId)}/quality`, "PATCH", quality),
-  syncSessionClipboardV1: (sessionId: string, action: "get" | "set", text?: string) =>
-    call(`/api/v1/sessions/${encodeURIComponent(sessionId)}/clipboard`, "POST", { action, text }),
-  sendDesktopInput: (deviceId: string, body: any) =>
-    call(`/api/devices/${encodeURIComponent(deviceId)}/desktop/input`, "POST", body),
-  fleetVersion: () => call("/api/fleet/version"),
-  updateFleet: (targetOs?: string) =>
-    call(`/api/fleet/update${targetOs ? `?target_os=${encodeURIComponent(targetOs)}` : ""}`, "POST", {}),
-  updateDeviceAgent: (deviceId: string) =>
-    call(`/api/devices/${encodeURIComponent(deviceId)}/update`, "POST", {}),
-  resizeTerminal: (deviceId: string, sessionId: string, cols: number, rows: number) =>
-    call(`/api/devices/${encodeURIComponent(deviceId)}/terminal/${encodeURIComponent(sessionId)}/resize`, "POST", { cols, rows }),
-};
 
+    let res = await fetch(this.resolveUrl(path, baseUrlOverride), {
+      ...fetchOpts,
+      headers,
+    });
+
+    if (res.status === 403 && isMutating && this.session?.mode === "session") {
+      this.csrfToken = null;
+      const freshCsrf = await this.ensureCsrfToken();
+      if (freshCsrf) {
+        headers["X-CSRF-Token"] = freshCsrf;
+        res = await fetch(this.resolveUrl(path, baseUrlOverride), {
+          ...fetchOpts,
+          headers,
+        });
+      }
+    }
+
+    if (!res.ok) {
+      let detail = `HTTP ${res.status}`;
+      try {
+        const errBody = await res.json();
+        detail =
+          typeof errBody?.detail === "string"
+            ? errBody.detail
+            : errBody?.detail?.message ?? JSON.stringify(errBody?.detail ?? errBody);
+      } catch {
+        // Fallback
+      }
+      throw new Error(detail);
+    }
+
+    const text = await res.text();
+    if (!text) return {} as T;
+    return JSON.parse(text) as T;
+  }
+
+  // Health & Readiness
+  async pingHealth(controlUrl = ""): Promise<{ data: HealthResponse; latencyMs: number }> {
+    const start = performance.now();
+    const data = await this.request<HealthResponse>("/health", { baseUrlOverride: controlUrl });
+    return { data, latencyMs: Math.max(1, Math.round(performance.now() - start)) };
+  }
+
+  async getReadiness(): Promise<ReadinessResponse> {
+    return this.request<ReadinessResponse>("/health/ready");
+  }
+
+  async getProductionChecklist(): Promise<Record<string, unknown>> {
+    return this.request<Record<string, unknown>>("/health/production-checklist");
+  }
+
+  // Auth
+  async loginWithPassword(controlUrl: string, username: string, password: string): Promise<AuthSession> {
+    const data = await this.request<{
+      session_token: string;
+      username: string;
+      role: string;
+      tenant: string;
+    }>("/api/auth/login", {
+      method: "POST",
+      baseUrlOverride: controlUrl,
+      body: JSON.stringify({ username, password }),
+    });
+    const session: AuthSession = {
+      mode: "session",
+      token: data.session_token,
+      username: data.username,
+      role: data.role,
+      tenant: data.tenant || "default",
+      controlUrl: normalizeBaseUrl(controlUrl),
+    };
+    this.setSession(session);
+    return session;
+  }
+
+  async verifyAdminToken(controlUrl: string, adminToken: string): Promise<AuthSession> {
+    const tempClient = new ApiClient({
+      mode: "admin_token",
+      token: adminToken,
+      username: "admin",
+      role: "admin",
+      tenant: "default",
+      controlUrl: normalizeBaseUrl(controlUrl),
+    });
+    const me = await tempClient.request<{ username: string; role: string; tenant: string }>("/api/auth/me");
+    const session: AuthSession = {
+      mode: "admin_token",
+      token: adminToken,
+      username: me.username || "admin",
+      role: me.role || "admin",
+      tenant: me.tenant || "default",
+      controlUrl: normalizeBaseUrl(controlUrl),
+    };
+    this.setSession(session);
+    return session;
+  }
+
+  async exchangeOidcCode(controlUrl: string, code: string): Promise<AuthSession> {
+    const res = await this.request<{ session_token: string }>("/api/auth/oidc/exchange", {
+      method: "POST",
+      baseUrlOverride: controlUrl,
+      body: JSON.stringify({ code }),
+    });
+    const session: AuthSession = {
+      mode: "session",
+      token: res.session_token,
+      username: "oidc-user",
+      role: "viewer",
+      tenant: "default",
+      controlUrl: normalizeBaseUrl(controlUrl),
+    };
+    this.setSession(session);
+    const me = await this.request<{ username: string; role: string; tenant: string }>("/api/auth/me");
+    session.username = me.username;
+    session.role = me.role;
+    session.tenant = me.tenant || "default";
+    return session;
+  }
+
+  async isOidcConfigured(controlUrl = ""): Promise<boolean> {
+    try {
+      const res = await this.request<{ enabled: boolean }>("/api/auth/oidc/configured", {
+        baseUrlOverride: controlUrl,
+      });
+      return Boolean(res.enabled);
+    } catch {
+      return false;
+    }
+  }
+
+  async logout(): Promise<void> {
+    if (this.session?.mode === "session") {
+      try {
+        await this.request("/api/auth/logout", { method: "POST" });
+      } catch {
+        // Ignore
+      }
+    }
+    this.setSession(null);
+  }
+
+  // Devices & Telemetry
+  async listDevices(): Promise<DeviceRecord[]> {
+    return this.request<DeviceRecord[]>("/api/devices");
+  }
+
+  async enrollDevice(payload: {
+    name: string;
+    hostname: string;
+    os: string;
+    policy?: Record<string, unknown>;
+  }): Promise<EnrollResult> {
+    return this.request<EnrollResult>("/api/devices/enroll", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async revokeDevice(deviceId: string): Promise<{ device_id: string; revoked: boolean }> {
+    return this.request(`/api/devices/${encodeURIComponent(deviceId)}/revoke`, { method: "POST" });
+  }
+
+  async getDeviceOverview(deviceId: string): Promise<DeviceOverview> {
+    return this.request<DeviceOverview>(`/api/devices/${encodeURIComponent(deviceId)}/overview`);
+  }
+
+  async refreshDeviceTelemetry(deviceId: string, tools?: string[]): Promise<unknown> {
+    return this.request(`/api/devices/${encodeURIComponent(deviceId)}/refresh`, {
+      method: "POST",
+      body: JSON.stringify(tools ? { tools } : {}),
+    });
+  }
+
+  async setDeviceMetadata(deviceId: string, group: string, tags: string[]): Promise<{ group: string; tags: string[] }> {
+    return this.request(`/api/devices/${encodeURIComponent(deviceId)}/metadata`, {
+      method: "PUT",
+      body: JSON.stringify({ group, tags }),
+    });
+  }
+
+  async getDeviceTelemetry(deviceId: string, limit = 30): Promise<TelemetryPoint[]> {
+    const res = await this.request<{ telemetry: TelemetryPoint[] }>(
+      `/api/devices/${encodeURIComponent(deviceId)}/telemetry?limit=${limit}`,
+    );
+    return res.telemetry || [];
+  }
+
+  async setDevicePolicy(deviceId: string, policy: Record<string, unknown>): Promise<unknown> {
+    return this.request(`/api/devices/${encodeURIComponent(deviceId)}/policy`, {
+      method: "PUT",
+      body: JSON.stringify(policy),
+    });
+  }
+
+  async resetDevicePolicy(deviceId: string): Promise<unknown> {
+    return this.request(`/api/devices/${encodeURIComponent(deviceId)}/policy`, { method: "DELETE" });
+  }
+
+  async getFleetTelemetry(): Promise<FleetTelemetrySummary> {
+    return this.request<FleetTelemetrySummary>("/api/fleet/telemetry");
+  }
+
+  async getFleetHealth(): Promise<Record<string, unknown>> {
+    return this.request<Record<string, unknown>>("/api/fleet/health");
+  }
+
+  async getDesktopCapabilities(): Promise<Record<string, unknown>> {
+    return this.request<Record<string, unknown>>("/api/fleet/desktop-capabilities");
+  }
+
+  // Tasks & Approvals
+  async listTasks(deviceId?: string): Promise<TaskRecord[]> {
+    const q = deviceId ? `?device_id=${encodeURIComponent(deviceId)}` : "";
+    return this.request<TaskRecord[]>(`/api/tasks${q}`);
+  }
+
+  async getTask(taskId: string): Promise<TaskRecord> {
+    return this.request<TaskRecord>(`/api/tasks/${encodeURIComponent(taskId)}`);
+  }
+
+  async submitTask(payload: { device_id: string; tool: string; args: Record<string, unknown> }): Promise<Record<string, unknown>> {
+    return this.request("/api/tasks", { method: "POST", body: JSON.stringify(payload) });
+  }
+
+  async cancelTask(taskId: string): Promise<{ task_id: string; status: string }> {
+    return this.request(`/api/tasks/${encodeURIComponent(taskId)}/cancel`, { method: "POST" });
+  }
+
+  async clearFinishedTasks(): Promise<{ deleted_count: number }> {
+    return this.request("/api/tasks", { method: "DELETE" });
+  }
+
+  async listApprovals(): Promise<ApprovalRecord[]> {
+    return this.request<ApprovalRecord[]>("/api/approvals");
+  }
+
+  async decideApproval(approvalId: string, decision: "approved" | "denied", reason?: string): Promise<unknown> {
+    return this.request(`/api/approvals/${encodeURIComponent(approvalId)}/decide`, {
+      method: "POST",
+      body: JSON.stringify({ decision, reason }),
+    });
+  }
+
+  async replanApproval(approvalId: string, reason: string): Promise<unknown> {
+    return this.request(`/api/approvals/${encodeURIComponent(approvalId)}/replan`, {
+      method: "POST",
+      body: JSON.stringify({ reason }),
+    });
+  }
+
+  // Policies
+  async getPolicy(): Promise<{ version: number; policy: PolicyState; note?: string }> {
+    return this.request("/api/policies");
+  }
+
+  async getPolicyHistory(): Promise<PolicyHistoryEntry[]> {
+    return this.request<PolicyHistoryEntry[]>("/api/policies/history");
+  }
+
+  async savePolicy(policy: PolicyState): Promise<{ version: number; policy: PolicyState }> {
+    return this.request("/api/policies", { method: "POST", body: JSON.stringify(policy) });
+  }
+
+  async simulatePolicy(tool: string, policy?: Partial<PolicyState>): Promise<Record<string, unknown>> {
+    return this.request("/api/policy/simulate", {
+      method: "POST",
+      body: JSON.stringify({ tool, ...(policy ? { policy } : {}) }),
+    });
+  }
+
+  // Audit & Logs
+  async listAudit(tool?: string): Promise<AuditRecord[]> {
+    const q = tool ? `?tool=${encodeURIComponent(tool)}` : "";
+    return this.request<AuditRecord[]>(`/api/audit${q}`);
+  }
+
+  async verifyAuditChain(): Promise<AuditVerifyResult> {
+    return this.request<AuditVerifyResult>("/api/audit/verify");
+  }
+
+  async exportAudit(): Promise<{ format: string; count: number; events: AuditRecord[] }> {
+    return this.request("/api/audit/export");
+  }
+
+  async getServiceLogs(service: "control" | "mcp" | "oauth" | "nginx", lines = 120): Promise<{ service: string; lines: string[] }> {
+    return this.request(`/api/logs?service=${encodeURIComponent(service)}&lines=${lines}`);
+  }
+
+  // Emergency & Webhooks & Alerts
+  async setEmergencyStop(active: boolean): Promise<{ emergency_stop: boolean }> {
+    return this.request(active ? "/api/emergency-stop" : "/api/emergency-stop/clear", { method: "POST" });
+  }
+
+  async getWebhookSetting(): Promise<{ webhook_url: string; configured: boolean }> {
+    return this.request("/api/settings/webhook");
+  }
+
+  async setWebhookSetting(webhookUrl: string): Promise<{ webhook_url: string; configured: boolean }> {
+    return this.request("/api/settings/webhook", { method: "POST", body: JSON.stringify({ webhook_url: webhookUrl }) });
+  }
+
+  async testWebhookSetting(): Promise<Record<string, unknown>> {
+    return this.request("/api/settings/webhook/test", { method: "POST" });
+  }
+
+  async getAlertsConfig(): Promise<AlertConfigState> {
+    return this.request<AlertConfigState>("/api/alerts/config");
+  }
+
+  async updateAlertsConfig(cfg: AlertConfigState): Promise<{ saved: boolean }> {
+    return this.request("/api/alerts/config", { method: "PUT", body: JSON.stringify(cfg) });
+  }
+
+  async testAlerts(): Promise<{ results: Record<string, boolean> }> {
+    return this.request("/api/alerts/test", { method: "POST" });
+  }
+
+  async listAlertDeliveries(): Promise<AlertDelivery[]> {
+    return this.request<AlertDelivery[]>("/api/alerts/deliveries");
+  }
+
+  // Terminal
+  async listTerminalSessions(deviceId: string): Promise<TerminalSessionSummary[]> {
+    const res = await this.request<{ sessions: TerminalSessionSummary[] }>(
+      `/api/devices/${encodeURIComponent(deviceId)}/terminal/sessions`,
+    );
+    return res.sessions || [];
+  }
+
+  async createTerminalSession(deviceId: string, cols = 110, rows = 30): Promise<TerminalSessionSummary> {
+    return this.request(`/api/devices/${encodeURIComponent(deviceId)}/terminal/sessions`, {
+      method: "POST",
+      body: JSON.stringify({ cols, rows }),
+    });
+  }
+
+  async sendTerminalInput(deviceId: string, sessionId: string, input: string): Promise<void> {
+    await this.request(`/api/devices/${encodeURIComponent(deviceId)}/terminal/${encodeURIComponent(sessionId)}/input`, {
+      method: "POST",
+      body: JSON.stringify({ input }),
+    });
+  }
+
+  async closeTerminalSession(deviceId: string, sessionId: string): Promise<void> {
+    await this.request(`/api/devices/${encodeURIComponent(deviceId)}/terminal/${encodeURIComponent(sessionId)}`, {
+      method: "DELETE",
+    });
+  }
+
+  // Workflows & Supervisor Roles
+  async listWorkflowTemplates(): Promise<WorkflowTemplate[]> {
+    const res = await this.request<{ templates: WorkflowTemplate[] }>("/api/workflows/templates");
+    return res.templates || [];
+  }
+
+  async listWorkflows(): Promise<WorkflowRecord[]> {
+    return this.request<WorkflowRecord[]>("/api/workflows");
+  }
+
+  async submitWorkflow(payload: {
+    name: string;
+    device_id?: string;
+    steps: Array<{ tool: string; args?: Record<string, unknown> }>;
+    stop_on_failure?: boolean;
+  }): Promise<{ workflow_id: string; status: string }> {
+    return this.request("/api/workflows", { method: "POST", body: JSON.stringify(payload) });
+  }
+
+  async cancelWorkflow(workflowId: string): Promise<unknown> {
+    return this.request(`/api/workflows/${encodeURIComponent(workflowId)}/cancel`, { method: "POST" });
+  }
+
+  async retryWorkflow(workflowId: string): Promise<unknown> {
+    return this.request(`/api/workflows/${encodeURIComponent(workflowId)}/retry`, {
+      method: "POST",
+      body: JSON.stringify({ from_failed_step: true }),
+    });
+  }
+
+  async listRoles(): Promise<{ roles: RoleAgentRecord[]; profiles: string[] }> {
+    return this.request("/api/roles");
+  }
+
+  async toggleRole(roleId: string, enabled: boolean): Promise<unknown> {
+    return this.request(`/api/roles/${encodeURIComponent(roleId)}/enable?enabled=${enabled}`, {
+      method: "POST",
+    });
+  }
+
+  async supervisorHandoff(payload: {
+    device_id: string;
+    goal: string;
+    profile: string;
+    mode?: string;
+  }): Promise<Record<string, unknown>> {
+    return this.request("/api/supervisor/handoff", { method: "POST", body: JSON.stringify(payload) });
+  }
+
+  // Fleet Broadcast, Schedules & Triggers
+  async broadcastFleet(payload: {
+    tool: string;
+    args: Record<string, unknown>;
+    target_os?: string;
+    target_device_ids?: string[];
+  }): Promise<{ batch_id: string; device_count: number }> {
+    return this.request("/api/fleet/broadcast", { method: "POST", body: JSON.stringify(payload) });
+  }
+
+  async getBroadcastStatus(batchId: string): Promise<BroadcastBatchStatus> {
+    return this.request(`/api/fleet/broadcast/${encodeURIComponent(batchId)}`);
+  }
+
+  async listSchedules(): Promise<ScheduleRecord[]> {
+    return this.request<ScheduleRecord[]>("/api/schedules");
+  }
+
+  async createSchedule(payload: {
+    name: string;
+    device_id: string;
+    interval_seconds: number;
+    tool: string;
+    args: Record<string, unknown>;
+  }): Promise<unknown> {
+    return this.request("/api/schedules", { method: "POST", body: JSON.stringify(payload) });
+  }
+
+  async toggleSchedule(scheduleId: string): Promise<unknown> {
+    return this.request(`/api/schedules/${encodeURIComponent(scheduleId)}/toggle`, { method: "POST" });
+  }
+
+  async runScheduleNow(scheduleId: string): Promise<unknown> {
+    return this.request(`/api/schedules/${encodeURIComponent(scheduleId)}/run-now`, { method: "POST" });
+  }
+
+  async deleteSchedule(scheduleId: string): Promise<unknown> {
+    return this.request(`/api/schedules/${encodeURIComponent(scheduleId)}`, { method: "DELETE" });
+  }
+
+  async listTriggers(): Promise<TriggerRecord[]> {
+    return this.request<TriggerRecord[]>("/api/triggers");
+  }
+
+  async createTrigger(payload: {
+    name: string;
+    device_id: string;
+    metric: string;
+    operator: string;
+    threshold: number;
+    action_type: string;
+    action_target: string;
+    action_args: Record<string, unknown>;
+  }): Promise<unknown> {
+    return this.request("/api/triggers", { method: "POST", body: JSON.stringify(payload) });
+  }
+
+  async toggleTrigger(triggerId: string): Promise<unknown> {
+    return this.request(`/api/triggers/${encodeURIComponent(triggerId)}/toggle`, { method: "POST" });
+  }
+
+  async testTrigger(triggerId: string): Promise<unknown> {
+    return this.request(`/api/triggers/${encodeURIComponent(triggerId)}/test`, { method: "POST" });
+  }
+
+  async deleteTrigger(triggerId: string): Promise<unknown> {
+    return this.request(`/api/triggers/${encodeURIComponent(triggerId)}`, { method: "DELETE" });
+  }
+
+  // Connections, OAuth & MCP
+  async getConnections(): Promise<ConnectionsSummary> {
+    return this.request<ConnectionsSummary>("/api/connections");
+  }
+
+  async deleteOAuthClient(clientId: string): Promise<unknown> {
+    return this.request(`/api/connections/clients/${encodeURIComponent(clientId)}`, { method: "DELETE" });
+  }
+
+  async getMcpToolPolicies(): Promise<Record<string, unknown>> {
+    return this.request("/api/mcp/tool-policies");
+  }
+
+  async saveMcpToolPolicies(policies: Record<string, unknown>): Promise<Record<string, unknown>> {
+    return this.request("/api/mcp/tool-policies", {
+      method: "PUT",
+      body: JSON.stringify({ policies }),
+    });
+  }
+
+  async getM365Status(): Promise<Record<string, unknown>> {
+    return this.request("/api/connectors/m365/status");
+  }
+
+  // Users & Backups
+  async listUsers(): Promise<UserRecord[]> {
+    return this.request<UserRecord[]>("/api/auth/users");
+  }
+
+  async createUser(payload: {
+    username: string;
+    password: string;
+    role: "viewer" | "operator" | "admin";
+  }): Promise<unknown> {
+    return this.request("/api/auth/users", { method: "POST", body: JSON.stringify(payload) });
+  }
+
+  async updateUser(username: string, role: "viewer" | "operator" | "admin", disabled: boolean): Promise<unknown> {
+    return this.request(`/api/auth/users/${encodeURIComponent(username)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ role, disabled }),
+    });
+  }
+
+  async listBackups(): Promise<{ items: BackupItem[]; backend: string }> {
+    return this.request("/api/admin/backups");
+  }
+
+  async createBackup(): Promise<BackupItem> {
+    return this.request("/api/admin/backups", { method: "POST" });
+  }
+
+  async restoreBackup(filename: string): Promise<Record<string, unknown>> {
+    return this.request(`/api/admin/backups/${encodeURIComponent(filename)}/restore`, { method: "POST" });
+  }
+
+  // Desktop Live Frame & Input
+  async getMonitors(deviceId: string): Promise<MonitorDescriptor[]> {
+    const res = await this.request<{ monitors: MonitorDescriptor[] }>(
+      `/api/devices/${encodeURIComponent(deviceId)}/desktop/monitors`,
+    );
+    return res.monitors || [];
+  }
+
+  async fetchLiveFrameUrl(deviceId: string, scale = 0.75, quality = 75): Promise<string> {
+    const res = await fetch(
+      this.resolveUrl(
+        `/api/devices/${encodeURIComponent(deviceId)}/desktop/live.jpg?scale=${scale}&quality=${quality}&t=${Date.now()}`,
+      ),
+      { headers: { ...this.authHeaders() } },
+    );
+    if (!res.ok) {
+      let detail = `HTTP ${res.status}`;
+      try {
+        const j = await res.json();
+        if (j?.detail) detail = j.detail;
+      } catch {
+        // Ignore
+      }
+      throw new Error(detail);
+    }
+    const blob = await res.blob();
+    return URL.createObjectURL(blob);
+  }
+
+  async sendDesktopInput(
+    deviceId: string,
+    payload: {
+      action: string;
+      x?: number;
+      y?: number;
+      normalized?: boolean;
+      screen_width?: number;
+      screen_height?: number;
+      button?: string;
+      clicks?: number;
+      delta?: number;
+      text?: string;
+      key?: string;
+    },
+  ): Promise<unknown> {
+    return this.request(`/api/devices/${encodeURIComponent(deviceId)}/desktop/input`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  }
+}

@@ -39,7 +39,7 @@ public sealed class ControlPlaneClient : IDisposable
     {
         _monitor = monitor;
         _executor = executor;
-        _http = new HttpClient { Timeout = TimeSpan.FromSeconds(45) };
+        _http = new HttpClient { Timeout = TimeSpan.FromSeconds(120) };
         _http.DefaultRequestHeaders.UserAgent.ParseAdd("AI-Bridge-Windows-CSharp-Client/0.3.0");
     }
 
@@ -71,32 +71,117 @@ public sealed class ControlPlaneClient : IDisposable
         }
     }
 
-    public async Task<(bool Ok, string DeviceToken, string DeviceId, string Detail)> EnrollAsync(
+    public async Task<(bool Ok, string DeviceToken, string DeviceId, string Tenant, string Username, string Detail)> LoginAndEnrollAsync(
         string controlUrl,
-        string enrollmentToken,
-        string deviceId,
+        string username,
+        string password,
+        string deviceName,
+        string tenant = "default",
         CancellationToken ct = default)
     {
         var baseUrl = NormalizeUrl(controlUrl);
         try
         {
-            var payload = JsonSerializer.Serialize(new
+            // 1. Authenticate user session via /api/auth/login
+            var loginPayload = JsonSerializer.Serialize(new
             {
-                enrollment_token = enrollmentToken.Trim(),
-                device_id = deviceId.Trim(),
+                username = username.Trim(),
+                password,
+            });
+            using var loginReq = new HttpRequestMessage(HttpMethod.Post, $"{baseUrl}/api/auth/login");
+            loginReq.Content = new StringContent(loginPayload, Encoding.UTF8, "application/json");
+            using var loginResp = await _http.SendAsync(loginReq, ct);
+            var loginBody = await loginResp.Content.ReadAsStringAsync(ct);
+            if (!loginResp.IsSuccessStatusCode)
+            {
+                return (false, "", "", tenant, "", ExtractApiDetail(loginBody, $"Sign in failed (HTTP {(int)loginResp.StatusCode})"));
+            }
+
+            using var loginDoc = JsonDocument.Parse(loginBody);
+            var lRoot = loginDoc.RootElement;
+            var sessionToken = lRoot.TryGetProperty("session_token", out var sEl) ? sEl.GetString() ?? "" : "";
+            var resolvedUser = lRoot.TryGetProperty("username", out var uEl) ? uEl.GetString() ?? username : username;
+            var resolvedTenant = lRoot.TryGetProperty("tenant", out var tEl) ? tEl.GetString() ?? tenant : tenant;
+            if (string.IsNullOrWhiteSpace(sessionToken))
+            {
+                return (false, "", "", resolvedTenant, resolvedUser, "Server did not return a session token.");
+            }
+
+            // 2. Enroll this Windows workstation using the authenticated session token
+            var enrollPayload = JsonSerializer.Serialize(new
+            {
+                name = string.IsNullOrWhiteSpace(deviceName) ? Environment.MachineName : deviceName.Trim(),
                 hostname = Environment.MachineName,
                 os = "Windows",
-                platform = "windows",
-                agent_version = "0.3.0-csharp",
+                tenant = resolvedTenant,
             });
-            using var req = new HttpRequestMessage(HttpMethod.Post, $"{baseUrl}/api/agent/enroll");
+            using var enrollReq = new HttpRequestMessage(HttpMethod.Post, $"{baseUrl}/api/devices/enroll");
+            enrollReq.Headers.Add("X-Session-Token", sessionToken);
+            enrollReq.Content = new StringContent(enrollPayload, Encoding.UTF8, "application/json");
+            using var enrollResp = await _http.SendAsync(enrollReq, ct);
+            var enrollBody = await enrollResp.Content.ReadAsStringAsync(ct);
+            if (!enrollResp.IsSuccessStatusCode)
+            {
+                return (false, "", "", resolvedTenant, resolvedUser, ExtractApiDetail(enrollBody, $"Device enrollment failed (HTTP {(int)enrollResp.StatusCode})"));
+            }
+
+            using var enrollDoc = JsonDocument.Parse(enrollBody);
+            var eRoot = enrollDoc.RootElement;
+            var tok = eRoot.TryGetProperty("device_token", out var dTokEl) ? dTokEl.GetString() ?? ""
+                : eRoot.TryGetProperty("token", out var t2El) ? t2El.GetString() ?? "" : "";
+            var devId = eRoot.TryGetProperty("device_id", out var dIdEl) ? dIdEl.GetString() ?? deviceName : deviceName;
+
+            return (!string.IsNullOrEmpty(tok), tok, devId, resolvedTenant, resolvedUser,
+                string.IsNullOrEmpty(tok) ? "No device_token returned by server." : "Signed in and device enrolled.");
+        }
+        catch (Exception ex)
+        {
+            return (false, "", "", tenant, "", ex.Message);
+        }
+    }
+
+    public async Task<(bool Ok, string DeviceToken, string DeviceId, string Detail)> EnrollAsync(
+        string controlUrl,
+        string providedToken,
+        string deviceId,
+        CancellationToken ct = default)
+    {
+        var baseUrl = NormalizeUrl(controlUrl);
+        var cleanTok = providedToken.Trim();
+        try
+        {
+            // 1. Check whether the token is already a valid provisioned device token via /api/agent/whoami
+            using (var whoReq = new HttpRequestMessage(HttpMethod.Get, $"{baseUrl}/api/agent/whoami"))
+            {
+                whoReq.Headers.Add("X-Device-Token", cleanTok);
+                using var whoResp = await _http.SendAsync(whoReq, ct);
+                if (whoResp.IsSuccessStatusCode)
+                {
+                    var whoBody = await whoResp.Content.ReadAsStringAsync(ct);
+                    using var whoDoc = JsonDocument.Parse(whoBody);
+                    var resolvedId = whoDoc.RootElement.TryGetProperty("device_id", out var idEl)
+                        ? idEl.GetString() ?? deviceId
+                        : deviceId;
+                    return (true, cleanTok, resolvedId, "Device token verified.");
+                }
+            }
+
+            // 2. Otherwise treat the provided token as an Admin Enrollment Token for POST /api/devices/enroll
+            var payload = JsonSerializer.Serialize(new
+            {
+                name = string.IsNullOrWhiteSpace(deviceId) ? Environment.MachineName : deviceId.Trim(),
+                hostname = Environment.MachineName,
+                os = "Windows",
+            });
+            using var req = new HttpRequestMessage(HttpMethod.Post, $"{baseUrl}/api/devices/enroll");
+            req.Headers.Add("X-Admin-Token", cleanTok);
             req.Content = new StringContent(payload, Encoding.UTF8, "application/json");
             using var resp = await _http.SendAsync(req, ct);
             var body = await resp.Content.ReadAsStringAsync(ct);
 
             if (!resp.IsSuccessStatusCode)
             {
-                return (false, "", "", $"HTTP {(int)resp.StatusCode}: {body}");
+                return (false, "", "", ExtractApiDetail(body, $"HTTP {(int)resp.StatusCode}"));
             }
 
             using var doc = JsonDocument.Parse(body);
@@ -112,15 +197,36 @@ public sealed class ControlPlaneClient : IDisposable
         }
     }
 
+    private static string ExtractApiDetail(string body, string fallback)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(body);
+            if (doc.RootElement.TryGetProperty("detail", out var d) && d.GetString() is { Length: > 0 } msg)
+            {
+                return msg;
+            }
+        }
+        catch
+        {
+            // Ignore non-JSON error payloads
+        }
+        return string.IsNullOrWhiteSpace(body) ? fallback : body;
+    }
+
     public async Task<(bool Ok, string LatestVersion, string Detail)> CheckUpdateAsync(
         string controlUrl,
         string currentVersion,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        string? customManifestUrl = null)
     {
         var baseUrl = NormalizeUrl(controlUrl);
+        var manifestUrl = string.IsNullOrWhiteSpace(customManifestUrl)
+            ? $"{baseUrl}/api/updates/manifest"
+            : customManifestUrl.Trim();
         try
         {
-            using var resp = await _http.GetAsync($"{baseUrl}/api/updates/manifest", ct);
+            using var resp = await _http.GetAsync(manifestUrl, ct);
             var body = await resp.Content.ReadAsStringAsync(ct);
             if (!resp.IsSuccessStatusCode)
             {
@@ -147,12 +253,25 @@ public sealed class ControlPlaneClient : IDisposable
         var baseUrl = NormalizeUrl(controlUrl);
         try
         {
+            // Match Control Plane DevicePolicyIn schema (desktop_enabled, allow_file_deletion, inherit_global, etc.)
+            var serverPayload = new
+            {
+                inherit_global = false,
+                allow_writes = policy.AllowWrites,
+                allow_tier3 = policy.AllowTier3,
+                desktop_enabled = policy.AllowDesktopControl,
+                allow_shell = policy.AllowShell,
+                allow_package_install = policy.AllowPackageInstall,
+                allow_file_deletion = policy.AllowTier4,
+                max_tier_unattended = Math.Clamp(policy.MaxTierUnattended, 1, 4),
+                allowed_apps = policy.AllowedApps,
+            };
             using var req = new HttpRequestMessage(HttpMethod.Put, $"{baseUrl}/api/agent/policy");
             req.Headers.Add("X-Device-Token", token);
-            req.Content = new StringContent(JsonSerializer.Serialize(policy), Encoding.UTF8, "application/json");
+            req.Content = new StringContent(JsonSerializer.Serialize(serverPayload), Encoding.UTF8, "application/json");
             using var resp = await _http.SendAsync(req, ct);
             var body = await resp.Content.ReadAsStringAsync(ct);
-            return (resp.IsSuccessStatusCode, resp.IsSuccessStatusCode ? "Policy synced to Control Plane" : $"HTTP {(int)resp.StatusCode}: {body}");
+            return (resp.IsSuccessStatusCode, resp.IsSuccessStatusCode ? "Policy synced to Control Plane" : ExtractApiDetail(body, $"HTTP {(int)resp.StatusCode}"));
         }
         catch (Exception ex)
         {
@@ -160,7 +279,11 @@ public sealed class ControlPlaneClient : IDisposable
         }
     }
 
-    public async Task<(bool Ok, AgentPolicyConfig? Policy, string Detail)> FetchPolicyAsync(string controlUrl, string token, CancellationToken ct = default)
+    public async Task<(bool Ok, AgentPolicyConfig? Policy, string Detail)> FetchPolicyAsync(
+        string controlUrl,
+        string token,
+        AgentPolicyConfig? basePolicy = null,
+        CancellationToken ct = default)
     {
         var baseUrl = NormalizeUrl(controlUrl);
         try
@@ -171,9 +294,43 @@ public sealed class ControlPlaneClient : IDisposable
             var body = await resp.Content.ReadAsStringAsync(ct);
             if (!resp.IsSuccessStatusCode)
             {
-                return (false, null, $"HTTP {(int)resp.StatusCode}: {body}");
+                return (false, null, ExtractApiDetail(body, $"HTTP {(int)resp.StatusCode}"));
             }
-            var parsed = JsonSerializer.Deserialize<AgentPolicyConfig>(body, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+
+            using var doc = JsonDocument.Parse(body);
+            var root = doc.RootElement;
+            // /api/agent/policy returns {"device_id", "custom_policy", "effective_policy", "has_custom_policy"}
+            JsonElement polEl = root.TryGetProperty("effective_policy", out var effEl) && effEl.ValueKind == JsonValueKind.Object
+                ? effEl
+                : (root.TryGetProperty("custom_policy", out var custEl) && custEl.ValueKind == JsonValueKind.Object ? custEl : root);
+
+            var parsed = new AgentPolicyConfig
+            {
+                AllowWrites = GetBoolOrDefault(polEl, "allow_writes", basePolicy?.AllowWrites ?? true),
+                AllowTier3 = GetBoolOrDefault(polEl, "allow_tier3", basePolicy?.AllowTier3 ?? true),
+                AllowTier4 = GetBoolOrDefault(polEl, "allow_file_deletion", GetBoolOrDefault(polEl, "allow_tier4", basePolicy?.AllowTier4 ?? false)),
+                AllowShell = GetBoolOrDefault(polEl, "allow_shell", basePolicy?.AllowShell ?? false),
+                AllowDesktopControl = GetBoolOrDefault(polEl, "desktop_enabled", GetBoolOrDefault(polEl, "allow_desktop_control", basePolicy?.AllowDesktopControl ?? false)),
+                AllowPackageInstall = GetBoolOrDefault(polEl, "allow_package_install", basePolicy?.AllowPackageInstall ?? false),
+                AllowClipboard = GetBoolOrDefault(polEl, "allow_clipboard", basePolicy?.AllowClipboard ?? true),
+                RequireLocalApproval = GetBoolOrDefault(polEl, "require_local_approval", basePolicy?.RequireLocalApproval ?? false),
+                MaxTierUnattended = polEl.TryGetProperty("max_tier_unattended", out var mtEl) && mtEl.TryGetInt32(out var mt)
+                    ? Math.Clamp(mt, 1, 4)
+                    : (basePolicy?.MaxTierUnattended ?? 3),
+                AllowedApps = basePolicy?.AllowedApps is not null ? new(basePolicy.AllowedApps) : new(),
+                AllowedCommands = basePolicy?.AllowedCommands is not null ? new(basePolicy.AllowedCommands) : new(),
+            };
+
+            if (polEl.TryGetProperty("allowed_apps", out var appsEl) && appsEl.ValueKind == JsonValueKind.Array)
+            {
+                var apps = new System.Collections.Generic.List<string>();
+                foreach (var a in appsEl.EnumerateArray())
+                {
+                    if (a.GetString() is { Length: > 0 } s) apps.Add(s);
+                }
+                if (apps.Count > 0) parsed.AllowedApps = apps;
+            }
+
             return (true, parsed, "Fetched policy from Control Plane");
         }
         catch (Exception ex)
@@ -181,6 +338,11 @@ public sealed class ControlPlaneClient : IDisposable
             return (false, null, ex.Message);
         }
     }
+
+    private static bool GetBoolOrDefault(JsonElement el, string prop, bool fallback) =>
+        el.TryGetProperty(prop, out var v) && (v.ValueKind == JsonValueKind.True || v.ValueKind == JsonValueKind.False)
+            ? v.GetBoolean()
+            : fallback;
 
     public async Task<(bool Ok, string NewToken, string Detail)> RotateTokenAsync(string controlUrl, string token, CancellationToken ct = default)
     {
@@ -194,11 +356,13 @@ public sealed class ControlPlaneClient : IDisposable
             var body = await resp.Content.ReadAsStringAsync(ct);
             if (!resp.IsSuccessStatusCode)
             {
-                return (false, "", $"HTTP {(int)resp.StatusCode}: {body}");
+                return (false, "", ExtractApiDetail(body, $"HTTP {(int)resp.StatusCode}"));
             }
             using var doc = JsonDocument.Parse(body);
-            var newTok = doc.RootElement.TryGetProperty("token", out var tEl) ? tEl.GetString() ?? "" : "";
-            return (!string.IsNullOrEmpty(newTok), newTok, "Token rotated");
+            var root = doc.RootElement;
+            var newTok = root.TryGetProperty("device_token", out var dtEl) ? dtEl.GetString() ?? ""
+                : root.TryGetProperty("token", out var tEl) ? tEl.GetString() ?? "" : "";
+            return (!string.IsNullOrEmpty(newTok), newTok, string.IsNullOrEmpty(newTok) ? "No device_token in rotate response" : "Token rotated");
         }
         catch (Exception ex)
         {
@@ -216,7 +380,9 @@ public sealed class ControlPlaneClient : IDisposable
         LogMessage?.Invoke("info", $"Starting agent poller -> {NormalizeUrl(config.ControlUrl)}");
 
         _heartbeatTask = Task.Run(() => HeartbeatLoopAsync(config, deviceToken, ct), ct);
-        _wsTask = Task.Run(() => WebSocketSideChannelLoopAsync(config, deviceToken, ct), ct);
+        _wsTask = config.WebSocketEnabled
+            ? Task.Run(() => WebSocketSideChannelLoopAsync(config, deviceToken, ct), ct)
+            : Task.CompletedTask;
         _pollTask = Task.Run(() => PollLoopAsync(config, deviceToken, ct), ct);
     }
 
@@ -264,6 +430,8 @@ public sealed class ControlPlaneClient : IDisposable
     private async Task HeartbeatLoopAsync(AgentGuiConfig config, string token, CancellationToken ct)
     {
         var baseUrl = NormalizeUrl(config.ControlUrl);
+        int intervalSec = Math.Clamp(config.HeartbeatIntervalSeconds, 5, 120);
+        int reqTimeoutSec = Math.Clamp(config.HttpTimeoutSeconds, 5, 120);
         while (!ct.IsCancellationRequested)
         {
             try
@@ -272,6 +440,7 @@ public sealed class ControlPlaneClient : IDisposable
                 var payload = JsonSerializer.Serialize(new
                 {
                     device_id = config.DeviceId,
+                    tenant_id = config.TenantId,
                     os = "Windows",
                     hostname = Environment.MachineName,
                     agent_version = "0.3.0-csharp",
@@ -279,14 +448,23 @@ public sealed class ControlPlaneClient : IDisposable
                     {
                         cpu_percent = t.CpuPercent,
                         memory_percent = t.MemoryPercent,
+                        memory_total_gb = t.MemoryTotalGb,
                         disk_percent = t.DiskPercent,
+                        disk_total_gb = t.DiskTotalGb,
+                        uptime_hours = Math.Round(t.SystemUptime.TotalHours, 1),
                         process_count = t.ProcessCount,
                     },
                 });
                 using var req = new HttpRequestMessage(HttpMethod.Post, $"{baseUrl}/api/agent/heartbeat");
                 req.Headers.Add("X-Device-Token", token);
+                if (!string.IsNullOrWhiteSpace(config.TenantId))
+                {
+                    req.Headers.Add("X-Tenant-ID", config.TenantId);
+                }
                 req.Content = new StringContent(payload, Encoding.UTF8, "application/json");
-                using var resp = await _http.SendAsync(req, ct);
+                using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                timeoutCts.CancelAfter(TimeSpan.FromSeconds(reqTimeoutSec));
+                using var resp = await _http.SendAsync(req, timeoutCts.Token);
                 if (resp.StatusCode == HttpStatusCode.Unauthorized || resp.StatusCode == HttpStatusCode.Forbidden)
                 {
                     StatusChanged?.Invoke("Auth Rejected", "err");
@@ -295,19 +473,20 @@ public sealed class ControlPlaneClient : IDisposable
                     return;
                 }
             }
-            catch (OperationCanceledException) { return; }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { return; }
             catch (Exception ex)
             {
                 LogMessage?.Invoke("warn", $"Heartbeat failed: {ex.Message}");
             }
 
-            try { await Task.Delay(TimeSpan.FromSeconds(15), ct); } catch { return; }
+            try { await Task.Delay(TimeSpan.FromSeconds(intervalSec), ct); } catch { return; }
         }
     }
 
     private async Task WebSocketSideChannelLoopAsync(AgentGuiConfig config, string token, CancellationToken ct)
     {
         var baseUrl = NormalizeUrl(config.ControlUrl);
+        int reconnectSec = Math.Clamp(config.WebSocketReconnectSeconds, 3, 120);
         var wsUrl = baseUrl.StartsWith("https://", StringComparison.OrdinalIgnoreCase)
             ? "wss://" + baseUrl[8..] + "/api/agent/ws"
             : "ws://" + baseUrl[7..] + "/api/agent/ws";
@@ -318,6 +497,10 @@ public sealed class ControlPlaneClient : IDisposable
             {
                 using var ws = new ClientWebSocket();
                 ws.Options.SetRequestHeader("X-Device-Token", token);
+                if (!string.IsNullOrWhiteSpace(config.TenantId))
+                {
+                    ws.Options.SetRequestHeader("X-Tenant-ID", config.TenantId);
+                }
                 await ws.ConnectAsync(new Uri(wsUrl), ct);
                 LogMessage?.Invoke("ok", "WebSocket side-channel connected.");
 
@@ -349,14 +532,14 @@ public sealed class ControlPlaneClient : IDisposable
                 // Side-channel is optional; HTTP long-poll remains primary
             }
 
-            try { await Task.Delay(TimeSpan.FromSeconds(10), ct); } catch { return; }
+            try { await Task.Delay(TimeSpan.FromSeconds(reconnectSec), ct); } catch { return; }
         }
     }
 
     private async Task PollLoopAsync(AgentGuiConfig config, string token, CancellationToken ct)
     {
         var baseUrl = NormalizeUrl(config.ControlUrl);
-        var waitS = Math.Clamp(config.PollIntervalSeconds, 5, 30);
+        var waitS = Math.Clamp(config.PollIntervalSeconds, 5, 60);
         int backoffAttempt = 0;
 
         while (!ct.IsCancellationRequested)
@@ -404,8 +587,9 @@ public sealed class ControlPlaneClient : IDisposable
                     var taskId = taskEl.GetProperty("id").GetString() ?? "";
                     var tool = taskEl.GetProperty("tool").GetString() ?? "";
                     var argsJson = taskEl.TryGetProperty("args_json", out var aEl) ? aEl.GetString() ?? "{}" : "{}";
+                    int? epoch = taskEl.TryGetProperty("epoch", out var epEl) && epEl.TryGetInt32(out var ep) ? ep : null;
 
-                    await ExecuteClaimedTaskAsync(baseUrl, token, config, taskId, tool, argsJson, ct);
+                    await ExecuteClaimedTaskAsync(baseUrl, token, config, taskId, tool, argsJson, epoch, ct);
                 }
                 else
                 {
@@ -430,6 +614,7 @@ public sealed class ControlPlaneClient : IDisposable
         string taskId,
         string tool,
         string argsJson,
+        int? epoch,
         CancellationToken outerCt)
     {
         LogMessage?.Invoke("info", $"Executing task {taskId}: {tool}");
@@ -453,7 +638,7 @@ public sealed class ControlPlaneClient : IDisposable
                     status = "denied";
                     resultJson = JsonSerializer.Serialize(new { error = "Denied by local workstation operator." });
                     sw.Stop();
-                    await PostTaskResultAsync(baseUrl, token, taskId, status, resultJson, outerCt);
+                    await PostTaskResultAsync(baseUrl, token, taskId, "failed", resultJson, epoch, outerCt);
                     var deniedRec = new TaskHistoryRecord
                     {
                         Id = taskId,
@@ -488,7 +673,8 @@ public sealed class ControlPlaneClient : IDisposable
         }
 
         sw.Stop();
-        await PostTaskResultAsync(baseUrl, token, taskId, status, resultJson, outerCt);
+        var serverStatus = status == "succeeded" ? "completed" : (status == "cancelled" ? "cancelled" : "failed");
+        await PostTaskResultAsync(baseUrl, token, taskId, serverStatus, resultJson, epoch, outerCt);
 
         var record = new TaskHistoryRecord
         {
@@ -520,8 +706,11 @@ public sealed class ControlPlaneClient : IDisposable
                 var json = await resp.Content.ReadAsStringAsync(taskCts.Token);
                 using var doc = JsonDocument.Parse(json);
                 var root = doc.RootElement;
+                var stateStr = root.TryGetProperty("status", out var sEl) ? sEl.GetString() ?? "" : "";
                 bool cancel = (root.TryGetProperty("cancelled", out var cEl) && cEl.ValueKind == JsonValueKind.True) ||
-                              (root.TryGetProperty("emergency_stop", out var eEl) && eEl.ValueKind == JsonValueKind.True);
+                              (root.TryGetProperty("emergency_stop", out var eEl) && eEl.ValueKind == JsonValueKind.True) ||
+                              string.Equals(stateStr, "cancelled", StringComparison.OrdinalIgnoreCase) ||
+                              string.Equals(stateStr, "timed_out", StringComparison.OrdinalIgnoreCase);
                 if (cancel)
                 {
                     taskCts.Cancel();
@@ -533,11 +722,20 @@ public sealed class ControlPlaneClient : IDisposable
         }
     }
 
-    private async Task PostTaskResultAsync(string baseUrl, string token, string taskId, string status, string resultJson, CancellationToken ct)
+    private async Task PostTaskResultAsync(
+        string baseUrl,
+        string token,
+        string taskId,
+        string status,
+        string resultJson,
+        int? epoch,
+        CancellationToken ct)
     {
         using var req = new HttpRequestMessage(HttpMethod.Post, $"{baseUrl}/api/agent/tasks/{taskId}/result");
         req.Headers.Add("X-Device-Token", token);
-        var payload = JsonSerializer.Serialize(new { status, result = resultJson });
+        var payload = epoch.HasValue
+            ? JsonSerializer.Serialize(new { status, result = resultJson, epoch = epoch.Value })
+            : JsonSerializer.Serialize(new { status, result = resultJson });
         req.Content = new StringContent(payload, Encoding.UTF8, "application/json");
         using var resp = await _http.SendAsync(req, ct);
         resp.EnsureSuccessStatusCode();

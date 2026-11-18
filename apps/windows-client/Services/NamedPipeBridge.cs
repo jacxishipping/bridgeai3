@@ -17,13 +17,16 @@ namespace AIBridgeClient.Services;
 public static class NamedPipeBridge
 {
     public const string PipeName = "AIBridgeDesktopPipe";
+    public static string ActivePipeName { get; set; } = PipeName;
+    public static string? ActiveHmacSecret { get; set; }
     public const int MaxMessageBytes = 65536;
 
-    public static bool IsDesktopAgentAvailable()
+    public static bool IsDesktopAgentAvailable(string? pipeName = null)
     {
         try
         {
-            return File.Exists($@"\\.\pipe\{PipeName}");
+            var p = string.IsNullOrWhiteSpace(pipeName) ? ActivePipeName : pipeName.Trim();
+            return File.Exists($@"\\.\pipe\{p}");
         }
         catch
         {
@@ -62,17 +65,20 @@ public static class NamedPipeBridge
         string messageType,
         object payload,
         string? hmacSecret = null,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        string? pipeName = null)
     {
-        if (!IsDesktopAgentAvailable())
+        var pipeTarget = string.IsNullOrWhiteSpace(pipeName) ? ActivePipeName : pipeName.Trim();
+        var secret = hmacSecret ?? ActiveHmacSecret;
+        if (!IsDesktopAgentAvailable(pipeTarget))
         {
-            return (false, "C++ desktop agent pipe (AIBridgeDesktopPipe) is not running.");
+            return (false, $"C++ desktop agent pipe ({pipeTarget}) is not running.");
         }
 
-        var envelope = SignEnvelope(messageType, payload, hmacSecret);
+        var envelope = SignEnvelope(messageType, payload, secret);
         var bytes = Encoding.UTF8.GetBytes(envelope + "\n");
 
-        using var pipe = new NamedPipeClientStream(".", PipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
+        using var pipe = new NamedPipeClientStream(".", pipeTarget, PipeDirection.InOut, PipeOptions.Asynchronous);
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeoutCts.CancelAfter(TimeSpan.FromSeconds(4));
 
@@ -103,6 +109,10 @@ public static class NamedPipeBridge
             allow_tier4 = policy.AllowTier4,
             allow_shell = policy.AllowShell,
             allow_desktop_control = policy.AllowDesktopControl,
+            allow_clipboard = policy.AllowClipboard,
+            allow_package_install = policy.AllowPackageInstall,
+            max_tier_unattended = policy.MaxTierUnattended,
             allowed_apps = policy.AllowedApps,
+            allowed_commands = policy.AllowedCommands,
         }, ct: ct);
 }

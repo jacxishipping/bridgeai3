@@ -174,8 +174,12 @@ await RunTest("NativeToolExecutor: edit/move/delete obey tiers and confinement",
         Assert(!okDelBlocked, "Expected delete_workspace_file to fail when AllowTier4=false");
 
         cfg.Policy.AllowTier4 = true;
+        var (okDelCapped, _) = await exec.ExecuteAsync("delete_workspace_file", "{\"path\":\"sub/note2.txt\"}", cfg, CancellationToken.None);
+        Assert(!okDelCapped, "Expected delete_workspace_file to fail when MaxTierUnattended=3");
+
+        cfg.Policy.MaxTierUnattended = 4;
         var (okDel, _) = await exec.ExecuteAsync("delete_workspace_file", "{\"path\":\"sub/note2.txt\"}", cfg, CancellationToken.None);
-        Assert(okDel && !File.Exists(Path.Combine(tempWs, "sub", "note2.txt")), "Expected delete_workspace_file to succeed when AllowTier4=true");
+        Assert(okDel && !File.Exists(Path.Combine(tempWs, "sub", "note2.txt")), "Expected delete_workspace_file to succeed when AllowTier4=true and MaxTierUnattended=4");
     }
     finally
     {
@@ -243,6 +247,123 @@ await RunTest("DiagnosticsService: BuildDiagnosticsJson produces redacted report
     Assert(doc.RootElement.TryGetProperty("windows", out _), "Expected windows section in diagnostics");
     Assert(doc.RootElement.TryGetProperty("desktop_pipe", out _), "Expected desktop_pipe section in diagnostics");
     return Task.CompletedTask;
+});
+
+// 11. Extended Settings & Policy enforcement (MaxTierUnattended, AllowClipboard, AllowedCommands, MaxReadBytes)
+await RunTest("Extended settings: MaxTierUnattended, AllowClipboard, AllowedCommands & MaxReadBytes", async () =>
+{
+    var tempWs = Path.Combine(Path.GetTempPath(), $"aib-test-ext-{Guid.NewGuid():N}");
+    Directory.CreateDirectory(tempWs);
+    try
+    {
+        File.WriteAllText(Path.Combine(tempWs, "big.txt"), new string('A', 2000));
+        var cfg = new AgentGuiConfig
+        {
+            Workspace = tempWs,
+            MaxReadBytes = 1024,
+            Policy = new AgentPolicyConfig
+            {
+                AllowWrites = true,
+                AllowTier3 = true,
+                AllowTier4 = true,
+                AllowShell = true,
+                AllowClipboard = false,
+                MaxTierUnattended = 2,
+                AllowedCommands = new List<string> { "echo" },
+            },
+        };
+        var exec = new NativeToolExecutor(new SystemMonitorService(), Path.Combine(tempWs, "shots"));
+
+        var (okBig, bigJson) = await exec.ExecuteAsync("read_workspace_file", "{\"path\":\"big.txt\"}", cfg, CancellationToken.None);
+        Assert(okBig && bigJson.Contains("...[truncated]"), "MaxReadBytes must truncate large workspace reads");
+
+        var (okClip, _) = await exec.ExecuteAsync("get_clipboard", "{}", cfg, CancellationToken.None);
+        Assert(!okClip, "get_clipboard must fail when AllowClipboard=false");
+
+        var (okTierCap, _) = await exec.ExecuteAsync("capture_desktop_screenshot", "{}", cfg, CancellationToken.None);
+        Assert(!okTierCap, "Tier 3 tool must fail when MaxTierUnattended=2");
+
+        cfg.Policy.MaxTierUnattended = 4;
+        var (okBadCmd, _) = await exec.ExecuteAsync("run_shell", "{\"command\":\"whoami\"}", cfg, CancellationToken.None);
+        Assert(!okBadCmd, "run_shell must block commands outside AllowedCommands");
+    }
+    finally
+    {
+        Directory.Delete(tempWs, recursive: true);
+    }
+});
+
+// 12. ControlPlaneClient protocol alignment (login->enroll, policy wrapper, token rotate, screenshot base64_data)
+await RunTest("ControlPlaneClient: Auth login->enroll, policy schema & token rotation", async () =>
+{
+    var listenerTcp = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
+    listenerTcp.Start();
+    int port = ((System.Net.IPEndPoint)listenerTcp.LocalEndpoint).Port;
+    listenerTcp.Stop();
+
+    var baseUrl = $"http://127.0.0.1:{port}";
+    using var listener = new System.Net.HttpListener();
+    listener.Prefixes.Add(baseUrl + "/");
+    listener.Start();
+
+    string? capturedPutBody = null;
+    using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+    var serverTask = Task.Run(async () =>
+    {
+        while (!cts.IsCancellationRequested)
+        {
+            System.Net.HttpListenerContext ctx;
+            try { ctx = await listener.GetContextAsync(); } catch { break; }
+            string path = ctx.Request.Url?.AbsolutePath ?? "";
+            string reqBody = "";
+            using (var sr = new StreamReader(ctx.Request.InputStream)) reqBody = await sr.ReadToEndAsync();
+
+            string respJson = "{}";
+            if (path == "/api/auth/login")
+            {
+                respJson = "{\"session_token\":\"sess_123\",\"username\":\"alice\",\"role\":\"admin\",\"tenant\":\"acme\"}";
+            }
+            else if (path == "/api/devices/enroll")
+            {
+                respJson = "{\"device_id\":\"dev_abc\",\"device_token\":\"dtok_111\"}";
+            }
+            else if (path == "/api/agent/rotate")
+            {
+                respJson = "{\"device_id\":\"dev_abc\",\"device_token\":\"dtok_222\"}";
+            }
+            else if (path == "/api/agent/policy" && ctx.Request.HttpMethod == "PUT")
+            {
+                capturedPutBody = reqBody;
+                respJson = "{\"saved\":true}";
+            }
+            else if (path == "/api/agent/policy" && ctx.Request.HttpMethod == "GET")
+            {
+                respJson = "{\"device_id\":\"dev_abc\",\"effective_policy\":{\"allow_writes\":true,\"allow_tier3\":true,\"desktop_enabled\":true,\"allow_shell\":false,\"max_tier_unattended\":3,\"allowed_apps\":[\"notepad.exe\"]}}";
+            }
+            var bytes = System.Text.Encoding.UTF8.GetBytes(respJson);
+            ctx.Response.ContentType = "application/json";
+            ctx.Response.ContentLength64 = bytes.Length;
+            await ctx.Response.OutputStream.WriteAsync(bytes);
+            ctx.Response.Close();
+        }
+    });
+
+    using var client = new ControlPlaneClient(new SystemMonitorService(), new NativeToolExecutor(new SystemMonitorService(), Path.GetTempPath()));
+    var (okLogin, dtok, did, ten, user, _) = await client.LoginAndEnrollAsync(baseUrl, "alice", "pass123", "my-win");
+    Assert(okLogin && dtok == "dtok_111" && did == "dev_abc" && ten == "acme" && user == "alice", "LoginAndEnrollAsync failed");
+
+    var (okRot, newTok, _) = await client.RotateTokenAsync(baseUrl, dtok);
+    Assert(okRot && newTok == "dtok_222", "RotateTokenAsync must read device_token");
+
+    var (okSync, _) = await client.SyncPolicyAsync(baseUrl, newTok, new AgentPolicyConfig { AllowDesktopControl = true, AllowTier4 = true });
+    Assert(okSync && capturedPutBody is not null && capturedPutBody.Contains("\"desktop_enabled\":true") && capturedPutBody.Contains("\"allow_file_deletion\":true"), "SyncPolicyAsync must serialize desktop_enabled and allow_file_deletion");
+
+    var (okFetch, fetched, _) = await client.FetchPolicyAsync(baseUrl, newTok);
+    Assert(okFetch && fetched is not null && fetched.AllowDesktopControl && !fetched.AllowShell && fetched.AllowedApps.Contains("notepad.exe"), "FetchPolicyAsync must unwrap effective_policy");
+
+    listener.Stop();
+    await cts.CancelAsync();
+    try { await serverTask; } catch { }
 });
 
 Console.WriteLine($"\nSummary: {passed} passed, {failed} failed ({passed + failed} total)");

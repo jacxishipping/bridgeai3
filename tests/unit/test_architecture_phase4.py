@@ -45,8 +45,6 @@ def test_phase4_route_snapshot_identical():
     """The refactored app exposes exactly the 19747b2 route set."""
     app = create_app()
     expected = set(EXPECTED_ROUTES)
-    # Same environment-conditional entries as the Track A suite: the SPA
-    # catch-all and /assets mount exist only when the dashboard build does.
     repo_root = Path(__file__).resolve().parents[2]
     if (repo_root / "apps" / "dashboard" / "dist").is_dir():
         expected.add(("GET", "/{full_path:path}"))

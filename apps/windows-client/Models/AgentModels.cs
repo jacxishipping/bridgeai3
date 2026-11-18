@@ -24,6 +24,15 @@ public sealed class AgentPolicyConfig
     [JsonPropertyName("require_local_approval")]
     public bool RequireLocalApproval { get; set; } = false;
 
+    [JsonPropertyName("max_tier_unattended")]
+    public int MaxTierUnattended { get; set; } = 3;
+
+    [JsonPropertyName("allow_package_install")]
+    public bool AllowPackageInstall { get; set; } = false;
+
+    [JsonPropertyName("allow_clipboard")]
+    public bool AllowClipboard { get; set; } = true;
+
     [JsonPropertyName("allowed_apps")]
     public List<string> AllowedApps { get; set; } = new()
     {
@@ -33,33 +42,120 @@ public sealed class AgentPolicyConfig
         "explorer.exe",
         "mspaint.exe",
     };
+
+    [JsonPropertyName("allowed_commands")]
+    public List<string> AllowedCommands { get; set; } = new();
 }
 
 public sealed class AgentGuiConfig
 {
+    // Control Plane settings
     [JsonPropertyName("control_url")]
     public string ControlUrl { get; set; } = "http://127.0.0.1:8000";
 
     [JsonPropertyName("device_id")]
     public string DeviceId { get; set; } = Environment.MachineName.ToLowerInvariant();
 
-    [JsonPropertyName("workspace")]
-    public string Workspace { get; set; } = "";
+    [JsonPropertyName("tenant_id")]
+    public string TenantId { get; set; } = "default";
+
+    [JsonPropertyName("signed_in_user")]
+    public string SignedInUser { get; set; } = "";
+
+    [JsonPropertyName("tags")]
+    public List<string> Tags { get; set; } = new() { "windows", "workstation", "dpapi-sealed" };
 
     [JsonPropertyName("poll_interval_s")]
     public int PollIntervalSeconds { get; set; } = 25;
 
-    [JsonPropertyName("theme")]
-    public string Theme { get; set; } = "dark";
+    [JsonPropertyName("heartbeat_interval_s")]
+    public int HeartbeatIntervalSeconds { get; set; } = 15;
+
+    [JsonPropertyName("http_timeout_s")]
+    public int HttpTimeoutSeconds { get; set; } = 45;
+
+    [JsonPropertyName("ws_enabled")]
+    public bool WebSocketEnabled { get; set; } = true;
+
+    [JsonPropertyName("ws_reconnect_s")]
+    public int WebSocketReconnectSeconds { get; set; } = 10;
 
     [JsonPropertyName("auto_connect")]
     public bool AutoConnect { get; set; } = false;
+
+    // General & Window settings
+    [JsonPropertyName("workspace")]
+    public string Workspace { get; set; } = "";
+
+    [JsonPropertyName("screenshot_dir")]
+    public string ScreenshotDirectory { get; set; } = "";
 
     [JsonPropertyName("minimize_to_tray")]
     public bool MinimizeToTray { get; set; } = true;
 
     [JsonPropertyName("notifications_enabled")]
     public bool NotificationsEnabled { get; set; } = true;
+
+    [JsonPropertyName("confirm_destructive_actions")]
+    public bool ConfirmDestructiveActions { get; set; } = true;
+
+    // Agent Execution & Telemetry Limits
+    [JsonPropertyName("default_timeout_s")]
+    public int DefaultTimeoutSeconds { get; set; } = 30;
+
+    [JsonPropertyName("max_timeout_s")]
+    public int MaxTimeoutSeconds { get; set; } = 300;
+
+    [JsonPropertyName("max_read_bytes")]
+    public int MaxReadBytes { get; set; } = 128_000;
+
+    [JsonPropertyName("max_output_bytes")]
+    public int MaxOutputBytes { get; set; } = 64_000;
+
+    [JsonPropertyName("max_list_entries")]
+    public int MaxListEntries { get; set; } = 200;
+
+    [JsonPropertyName("task_history_limit")]
+    public int TaskHistoryLimit { get; set; } = 500;
+
+    [JsonPropertyName("auto_refresh_monitor")]
+    public bool AutoRefreshMonitor { get; set; } = true;
+
+    [JsonPropertyName("monitor_interval_ms")]
+    public int MonitorIntervalMs { get; set; } = 1000;
+
+    // Logging settings
+    [JsonPropertyName("log_level")]
+    public string LogLevel { get; set; } = "INFO";
+
+    [JsonPropertyName("file_logging_enabled")]
+    public bool FileLoggingEnabled { get; set; } = true;
+
+    [JsonPropertyName("max_log_entries")]
+    public int MaxLogEntries { get; set; } = 1000;
+
+    [JsonPropertyName("max_log_file_mb")]
+    public int MaxLogFileMb { get; set; } = 2;
+
+    [JsonPropertyName("auto_scroll_logs")]
+    public bool AutoScrollLogs { get; set; } = true;
+
+    // Appearance settings
+    [JsonPropertyName("theme")]
+    public string Theme { get; set; } = "dark";
+
+    [JsonPropertyName("compact_sidebar")]
+    public bool CompactSidebar { get; set; } = false;
+
+    // Advanced & Pipe IPC settings
+    [JsonPropertyName("desktop_pipe_name")]
+    public string DesktopPipeName { get; set; } = "AIBridgeDesktopPipe";
+
+    [JsonPropertyName("auto_check_updates")]
+    public bool AutoCheckUpdates { get; set; } = false;
+
+    [JsonPropertyName("update_manifest_url")]
+    public string UpdateManifestUrl { get; set; } = "";
 
     [JsonPropertyName("window_width")]
     public double WindowWidth { get; set; } = 1300;

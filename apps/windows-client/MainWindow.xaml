@@ -52,21 +52,25 @@
                             </StackPanel>
                         </StackPanel>
 
-                        <!-- Bottom Control Plane Card -->
-                        <Border DockPanel.Dock="Bottom" Background="{DynamicResource BgCard}" BorderBrush="{DynamicResource BorderHairline}" BorderThickness="1" CornerRadius="12" Padding="12">
-                            <StackPanel>
-                                <Grid Margin="0,0,0,4">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*"/>
-                                        <ColumnDefinition Width="Auto"/>
-                                    </Grid.ColumnDefinitions>
-                                    <TextBlock x:Name="SidebarLinkTitle" Grid.Column="0" Text="Control Plane" FontSize="11" FontWeight="Medium" Foreground="{DynamicResource TextSecondary}"/>
-                                    <Ellipse x:Name="SidebarStatusDot" Grid.Column="1" Width="6" Height="6" Fill="#10B981" VerticalAlignment="Center"/>
-                                </Grid>
-                                <TextBlock x:Name="SidebarStatusText" Text="Disconnected" FontSize="12" FontWeight="SemiBold" Foreground="{DynamicResource TextSecondary}"/>
-                                <TextBlock x:Name="SidebarLinkSub" Text="Outbound-only poller" FontSize="11" Foreground="{DynamicResource TextMuted}" Margin="0,2,0,0"/>
-                            </StackPanel>
-                        </Border>
+                        <!-- Bottom Control Plane Card + Footer Version -->
+                        <StackPanel DockPanel.Dock="Bottom">
+                            <Border Background="{DynamicResource BgCard}" BorderBrush="{DynamicResource BorderHairline}" BorderThickness="1" CornerRadius="12" Padding="12"
+                                    Cursor="Hand" MouseLeftButtonUp="OnOpenNodeDrawerClick" ToolTip="Inspect workstation details">
+                                <StackPanel>
+                                    <Grid Margin="0,0,0,4">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock x:Name="SidebarLinkTitle" Grid.Column="0" Text="Control Plane Link" FontSize="11" FontWeight="Medium" Foreground="{DynamicResource TextSecondary}"/>
+                                        <Ellipse x:Name="SidebarStatusDot" Grid.Column="1" Width="6" Height="6" Fill="#94A3B8" VerticalAlignment="Center"/>
+                                    </Grid>
+                                    <TextBlock x:Name="SidebarStatusText" Text="Disconnected" FontSize="12" FontWeight="SemiBold" Foreground="{DynamicResource TextSecondary}"/>
+                                    <TextBlock x:Name="SidebarLinkSub" Text="Outbound-only poller" FontSize="11" Foreground="{DynamicResource TextMuted}" Margin="0,2,0,0"/>
+                                </StackPanel>
+                            </Border>
+                            <TextBlock x:Name="SidebarFooterVersion" Text="AI Bridge v0.3.0" FontSize="11" Foreground="{DynamicResource TextMuted}" Margin="6,10,0,0"/>
+                        </StackPanel>
 
                         <!-- Navigation -->
                         <StackPanel>
@@ -143,8 +147,24 @@
                                 <TextBlock x:Name="BreadcrumbPageText" Text="Overview" FontSize="12" FontWeight="Medium" Foreground="{DynamicResource TextPrimary}" VerticalAlignment="Center"/>
                             </StackPanel>
 
-                            <!-- Right Controls: Search Ctrl K, Theme Toggle, WI Avatar, Window Captions -->
+                            <!-- Right Controls: Connection Pill, Search Ctrl K, Theme Toggle, WI Avatar, Window Captions -->
                             <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                <Border Background="{DynamicResource BgCard}" BorderBrush="{DynamicResource BorderHairline}" BorderThickness="1"
+                                        CornerRadius="14" Padding="10,4.5" Margin="0,0,8,0" VerticalAlignment="Center"
+                                        Cursor="Hand" MouseLeftButtonUp="OnOpenNodeDrawerClick" ToolTip="Open Node Inspector Drawer">
+                                    <StackPanel Orientation="Horizontal">
+                                        <Grid Width="12" Height="12" VerticalAlignment="Center" Margin="0,0,5,0">
+                                            <Ellipse x:Name="TopStatusPulse" Width="12" Height="12" Fill="#10B981" Opacity="0" RenderTransformOrigin="0.5,0.5">
+                                                <Ellipse.RenderTransform>
+                                                    <ScaleTransform ScaleX="1" ScaleY="1"/>
+                                                </Ellipse.RenderTransform>
+                                            </Ellipse>
+                                            <Ellipse x:Name="TopStatusDot" Width="7" Height="7" Fill="#94A3B8" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                        </Grid>
+                                        <TextBlock x:Name="TopStatusText" Text="Disconnected" FontSize="11.5" FontWeight="Medium" Foreground="{DynamicResource TextSecondary}" VerticalAlignment="Center"/>
+                                    </StackPanel>
+                                </Border>
+
                                 <Button Style="{StaticResource BtnStyle}" Padding="10,4.5" FontSize="11.5"
                                         WindowChrome.IsHitTestVisibleInChrome="True" Click="OnOpenCommandPaletteClick" Margin="0,0,8,0" ToolTip="Command Palette (Ctrl+K)">
                                     <StackPanel Orientation="Horizontal">
@@ -161,9 +181,20 @@
                                     <TextBlock x:Name="ThemeToggleIcon" Text="&#xE708;" FontFamily="Segoe MDL2 Assets" FontSize="12"/>
                                 </Button>
 
-                                <Button WindowChrome.IsHitTestVisibleInChrome="True" Click="OnProfileMenuClick"
-                                        Background="Transparent" BorderThickness="0" Cursor="Hand" Margin="0,0,8,0" ToolTip="Device Profile &amp; Settings">
-                                    <Border Width="24" Height="24" CornerRadius="12" Background="{DynamicResource AccentPrimary}">
+                                <Button x:Name="ProfileMenuBtn" WindowChrome.IsHitTestVisibleInChrome="True" Click="OnProfileMenuClick"
+                                        Background="Transparent" BorderThickness="0" Cursor="Hand" Margin="0,0,8,0" ToolTip="Node Actions &amp; Account Menu">
+                                    <Button.ContextMenu>
+                                        <ContextMenu x:Name="ProfileContextMenu" Style="{StaticResource SaaSContextMenuStyle}">
+                                            <MenuItem Header="Inspect Workstation Drawer" Click="OnOpenNodeDrawerMenuClick"/>
+                                            <MenuItem Header="Ping Control Plane" Click="OnPingClick"/>
+                                            <MenuItem Header="Sync Policy to Server" Click="OnSyncPolicyClick"/>
+                                            <MenuItem Header="Export Diagnostics Bundle" Click="OnExportDiagnosticsBundleClick"/>
+                                            <Separator/>
+                                            <MenuItem Header="Open Settings" Click="OnGoToSettingsMenuClick"/>
+                                            <MenuItem Header="Sign In / Re-Enroll Device" Click="OnOpenEnrollModalClick"/>
+                                        </ContextMenu>
+                                    </Button.ContextMenu>
+                                    <Border Width="26" Height="26" CornerRadius="13" Background="{DynamicResource AccentPrimary}">
                                         <TextBlock x:Name="ProfileInitialsText" Text="WI" FontSize="10.5" FontWeight="SemiBold" Foreground="#FFFFFF"
                                                    HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                     </Border>
@@ -236,42 +267,80 @@
                                         <!-- 4 Minimal KPI Cards -->
                                         <UniformGrid x:Name="OverviewKpiGrid" Grid.Row="0" Columns="4" Margin="-7,0,-7,10">
                                             <Border Background="{DynamicResource BgCard}" BorderBrush="{DynamicResource BorderHairline}" BorderThickness="1" CornerRadius="12" Padding="16" Margin="7" Cursor="Hand" MouseLeftButtonUp="OnCardGoToSettings">
-                                                <StackPanel>
-                                                    <Grid Margin="0,0,0,8">
-                                                        <Grid.ColumnDefinitions>
-                                                            <ColumnDefinition Width="*"/>
-                                                            <ColumnDefinition Width="Auto"/>
-                                                        </Grid.ColumnDefinitions>
-                                                        <TextBlock Grid.Column="0" Text="Connection" FontSize="12" Foreground="{DynamicResource TextMuted}"/>
-                                                        <Ellipse x:Name="KpiStatusDot" Grid.Column="1" Width="8" Height="8" Fill="#94A3B8" VerticalAlignment="Center"/>
-                                                    </Grid>
-                                                    <TextBlock x:Name="KpiStatusText" Text="Disconnected" FontSize="18" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}"/>
-                                                    <TextBlock Text="HTTP · WS Side-Channel" FontSize="11.5" Foreground="{DynamicResource TextMuted}" Margin="0,4,0,0"/>
-                                                </StackPanel>
+                                                <Grid>
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="Auto"/>
+                                                        <ColumnDefinition Width="*"/>
+                                                        <ColumnDefinition Width="Auto"/>
+                                                    </Grid.ColumnDefinitions>
+                                                    <Border Grid.Column="0" Width="34" Height="34" CornerRadius="17" Background="{DynamicResource BadgeBlueBg}" VerticalAlignment="Center" Margin="0,0,12,0">
+                                                        <TextBlock Text="&#xE71B;" FontFamily="Segoe MDL2 Assets" FontSize="14" Foreground="{DynamicResource BadgeBlueFg}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                                    </Border>
+                                                    <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                                        <TextBlock Text="CONNECTION" FontSize="10.5" FontWeight="SemiBold" Foreground="{DynamicResource TextMuted}"/>
+                                                        <StackPanel Orientation="Horizontal" Margin="0,2,0,0">
+                                                            <TextBlock x:Name="KpiStatusText" Text="Disconnected" FontSize="17" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}" VerticalAlignment="Center"/>
+                                                            <Ellipse x:Name="KpiStatusDot" Width="7" Height="7" Fill="#94A3B8" VerticalAlignment="Center" Margin="7,1,0,0"/>
+                                                        </StackPanel>
+                                                        <TextBlock Text="HTTP · WS Side-Channel" FontSize="11" Foreground="{DynamicResource TextMuted}" Margin="0,2,0,0"/>
+                                                    </StackPanel>
+                                                    <TextBlock Grid.Column="2" Text="&#xE76C;" FontFamily="Segoe MDL2 Assets" FontSize="10" Foreground="{DynamicResource TextMuted}" VerticalAlignment="Center" Margin="6,0,0,0"/>
+                                                </Grid>
                                             </Border>
 
                                             <Border Background="{DynamicResource BgCard}" BorderBrush="{DynamicResource BorderHairline}" BorderThickness="1" CornerRadius="12" Padding="16" Margin="7" Cursor="Hand" MouseLeftButtonUp="OnCardGoToTasks">
-                                                <StackPanel>
-                                                    <TextBlock Text="Tasks Recorded" FontSize="12" Foreground="{DynamicResource TextMuted}" Margin="0,0,0,8"/>
-                                                    <TextBlock x:Name="KpiTasksText" Text="0" FontSize="18" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}"/>
-                                                    <TextBlock Text="Local persisted history" FontSize="11.5" Foreground="{DynamicResource TextMuted}" Margin="0,4,0,0"/>
-                                                </StackPanel>
+                                                <Grid>
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="Auto"/>
+                                                        <ColumnDefinition Width="*"/>
+                                                        <ColumnDefinition Width="Auto"/>
+                                                    </Grid.ColumnDefinitions>
+                                                    <Border Grid.Column="0" Width="34" Height="34" CornerRadius="17" Background="{DynamicResource BadgePurpleBg}" VerticalAlignment="Center" Margin="0,0,12,0">
+                                                        <TextBlock Text="&#xE8FD;" FontFamily="Segoe MDL2 Assets" FontSize="14" Foreground="{DynamicResource BadgePurpleFg}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                                    </Border>
+                                                    <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                                        <TextBlock Text="TASKS RECORDED" FontSize="10.5" FontWeight="SemiBold" Foreground="{DynamicResource TextMuted}"/>
+                                                        <TextBlock x:Name="KpiTasksText" Text="0" FontSize="17" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}" Margin="0,2,0,0"/>
+                                                        <TextBlock Text="Local persisted history" FontSize="11" Foreground="{DynamicResource TextMuted}" Margin="0,2,0,0"/>
+                                                    </StackPanel>
+                                                    <TextBlock Grid.Column="2" Text="&#xE76C;" FontFamily="Segoe MDL2 Assets" FontSize="10" Foreground="{DynamicResource TextMuted}" VerticalAlignment="Center" Margin="6,0,0,0"/>
+                                                </Grid>
                                             </Border>
 
                                             <Border Background="{DynamicResource BgCard}" BorderBrush="{DynamicResource BorderHairline}" BorderThickness="1" CornerRadius="12" Padding="16" Margin="7">
-                                                <StackPanel>
-                                                    <TextBlock Text="Server Latency" FontSize="12" Foreground="{DynamicResource TextMuted}" Margin="0,0,0,8"/>
-                                                    <TextBlock x:Name="KpiLatencyText" Text="-- ms" FontSize="18" FontWeight="SemiBold" FontFamily="Consolas" Foreground="{DynamicResource SuccessText}"/>
-                                                    <TextBlock Text="Control plane /health" FontSize="11.5" Foreground="{DynamicResource TextMuted}" Margin="0,4,0,0"/>
-                                                </StackPanel>
+                                                <Grid>
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="Auto"/>
+                                                        <ColumnDefinition Width="*"/>
+                                                    </Grid.ColumnDefinitions>
+                                                    <Border Grid.Column="0" Width="34" Height="34" CornerRadius="17" Background="{DynamicResource BadgeGreenBg}" VerticalAlignment="Center" Margin="0,0,12,0">
+                                                        <TextBlock Text="&#xE945;" FontFamily="Segoe MDL2 Assets" FontSize="14" Foreground="{DynamicResource BadgeGreenFg}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                                    </Border>
+                                                    <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                                        <TextBlock Text="SERVER LATENCY" FontSize="10.5" FontWeight="SemiBold" Foreground="{DynamicResource TextMuted}"/>
+                                                        <TextBlock x:Name="KpiLatencyText" Text="-- ms" FontSize="17" FontWeight="SemiBold" FontFamily="Consolas" Foreground="{DynamicResource SuccessText}" Margin="0,2,0,0"/>
+                                                        <TextBlock Text="Control plane /health" FontSize="11" Foreground="{DynamicResource TextMuted}" Margin="0,2,0,0"/>
+                                                    </StackPanel>
+                                                </Grid>
                                             </Border>
 
                                             <Border Background="{DynamicResource BgCard}" BorderBrush="{DynamicResource BorderHairline}" BorderThickness="1" CornerRadius="12" Padding="16" Margin="7" Cursor="Hand" MouseLeftButtonUp="OnCardGoToSecurity">
-                                                <StackPanel>
-                                                    <TextBlock Text="Token Vault" FontSize="12" Foreground="{DynamicResource TextMuted}" Margin="0,0,0,8"/>
-                                                    <TextBlock Text="DPAPI Sealed" FontSize="18" FontWeight="SemiBold" Foreground="{DynamicResource IndigoText}"/>
-                                                    <TextBlock Text="User-scoped CryptProtect" FontSize="11.5" Foreground="{DynamicResource TextMuted}" Margin="0,4,0,0"/>
-                                                </StackPanel>
+                                                <Grid>
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="Auto"/>
+                                                        <ColumnDefinition Width="*"/>
+                                                        <ColumnDefinition Width="Auto"/>
+                                                    </Grid.ColumnDefinitions>
+                                                    <Border Grid.Column="0" Width="34" Height="34" CornerRadius="17" Background="{DynamicResource BadgeIndigoBg}" VerticalAlignment="Center" Margin="0,0,12,0">
+                                                        <TextBlock Text="&#xEA18;" FontFamily="Segoe MDL2 Assets" FontSize="14" Foreground="{DynamicResource BadgeIndigoFg}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                                    </Border>
+                                                    <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                                        <TextBlock Text="TOKEN VAULT" FontSize="10.5" FontWeight="SemiBold" Foreground="{DynamicResource TextMuted}"/>
+                                                        <TextBlock Text="DPAPI Sealed" FontSize="17" FontWeight="SemiBold" Foreground="{DynamicResource IndigoText}" Margin="0,2,0,0"/>
+                                                        <TextBlock Text="User-scoped CryptProtect" FontSize="11" Foreground="{DynamicResource TextMuted}" Margin="0,2,0,0"/>
+                                                    </StackPanel>
+                                                    <TextBlock Grid.Column="2" Text="&#xE76C;" FontFamily="Segoe MDL2 Assets" FontSize="10" Foreground="{DynamicResource TextMuted}" VerticalAlignment="Center" Margin="6,0,0,0"/>
+                                                </Grid>
                                             </Border>
                                         </UniformGrid>
 
@@ -293,8 +362,13 @@
                                                         <ColumnDefinition Width="Auto"/>
                                                     </Grid.ColumnDefinitions>
                                                     <StackPanel Grid.Column="0" Margin="0,0,12,0" VerticalAlignment="Center">
-                                                        <TextBlock Text="Endpoint &amp; Credential Controls" FontSize="13" FontWeight="Medium" Foreground="{DynamicResource TextPrimary}"/>
-                                                        <TextBlock x:Name="OverviewEndpointText" Text="https://www.jxiptvplayer.app" FontSize="12" FontFamily="Consolas" Foreground="{DynamicResource TextMuted}" TextTrimming="CharacterEllipsis" Margin="0,4,0,0"/>
+                                                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                                            <Border Width="22" Height="22" CornerRadius="6" Background="{DynamicResource BadgeBlueBg}" Margin="0,0,8,0">
+                                                                <TextBlock Text="&#xE713;" FontFamily="Segoe MDL2 Assets" FontSize="11" Foreground="{DynamicResource BadgeBlueFg}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                                            </Border>
+                                                            <TextBlock Text="Endpoint &amp; Credential Controls" FontSize="13" FontWeight="Medium" Foreground="{DynamicResource TextPrimary}" VerticalAlignment="Center"/>
+                                                        </StackPanel>
+                                                        <TextBlock x:Name="OverviewEndpointText" Text="https://www.jxiptvplayer.app" FontSize="12" FontFamily="Consolas" Foreground="{DynamicResource TextMuted}" TextTrimming="CharacterEllipsis" Margin="0,5,0,0"/>
                                                     </StackPanel>
                                                     <WrapPanel Grid.Column="1" VerticalAlignment="Center">
                                                         <Button Content="Rotate Token" Style="{StaticResource BtnStyle}" Click="OnRotateTokenClick" Margin="0,2,8,2"/>
@@ -310,8 +384,13 @@
                                                             <ColumnDefinition Width="*"/>
                                                             <ColumnDefinition Width="Auto"/>
                                                         </Grid.ColumnDefinitions>
-                                                        <TextBlock Grid.Column="0" Text="Live CPU (60s)" FontSize="12" FontWeight="Medium" Foreground="{DynamicResource TextSecondary}"/>
-                                                        <TextBlock Grid.Column="1" x:Name="OverviewCpuLiveText" Text="0.0%" FontSize="12" FontWeight="Medium" FontFamily="Consolas" Foreground="{DynamicResource SuccessText}"/>
+                                                        <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                                                            <Border Width="22" Height="22" CornerRadius="6" Background="{DynamicResource BadgePurpleBg}" Margin="0,0,8,0">
+                                                                <TextBlock Text="&#xE9D2;" FontFamily="Segoe MDL2 Assets" FontSize="11" Foreground="{DynamicResource BadgePurpleFg}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                                            </Border>
+                                                            <TextBlock Text="LIVE CPU TELEMETRY (60s)" FontSize="11" FontWeight="SemiBold" Foreground="{DynamicResource TextSecondary}" VerticalAlignment="Center"/>
+                                                        </StackPanel>
+                                                        <TextBlock Grid.Column="1" x:Name="OverviewCpuLiveText" Text="0.0%" FontSize="12" FontWeight="Medium" FontFamily="Consolas" Foreground="{DynamicResource SuccessText}" VerticalAlignment="Center"/>
                                                     </Grid>
                                                     <Canvas x:Name="OverviewCpuSparkCanvas" Height="44" ClipToBounds="True">
                                                         <Polygon x:Name="OverviewCpuSparkFill" Fill="#2A6366F1"/>
@@ -425,8 +504,22 @@
                                     </Grid>
 
                                     <Border Grid.Row="1" Background="{DynamicResource BgCard}" BorderBrush="{DynamicResource BorderHairline}" BorderThickness="1" CornerRadius="12" Padding="0">
-                                        <Grid>
-                                            <DataGrid x:Name="TasksGrid" Style="{StaticResource MinimalDataGridStyle}" AutoGenerateColumns="False" IsReadOnly="True" SelectionChanged="OnTaskSelected">
+                                        <DockPanel>
+                                            <Border DockPanel.Dock="Bottom" BorderBrush="{DynamicResource BorderHairline}" BorderThickness="0,1,0,0" Padding="14,8">
+                                                <Grid>
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="*"/>
+                                                        <ColumnDefinition Width="Auto"/>
+                                                    </Grid.ColumnDefinitions>
+                                                    <TextBlock x:Name="TaskPageInfoText" Grid.Column="0" Text="0 tasks · Page 1 of 1" FontSize="11.5" FontFamily="Consolas" Foreground="{DynamicResource TextMuted}" VerticalAlignment="Center"/>
+                                                    <StackPanel Grid.Column="1" Orientation="Horizontal">
+                                                        <Button x:Name="TaskPrevBtn" Content="Prev" Style="{StaticResource BtnStyle}" Padding="10,4" FontSize="11.5" Click="OnTaskPrevPageClick" Margin="0,0,6,0"/>
+                                                        <Button x:Name="TaskNextBtn" Content="Next" Style="{StaticResource BtnStyle}" Padding="10,4" FontSize="11.5" Click="OnTaskNextPageClick"/>
+                                                    </StackPanel>
+                                                </Grid>
+                                            </Border>
+                                            <Grid>
+                                                <DataGrid x:Name="TasksGrid" Style="{StaticResource MinimalDataGridStyle}" AutoGenerateColumns="False" IsReadOnly="True" SelectionChanged="OnTaskSelected">
                                                 <DataGrid.Columns>
                                                     <DataGridTextColumn Header="Task ID" Binding="{Binding Id}" Width="155" FontFamily="Consolas"/>
                                                     <DataGridTextColumn Header="Tool" Binding="{Binding Tool}" Width="*"/>
@@ -492,7 +585,8 @@
                                             </DataGrid>
                                             <TextBlock x:Name="TasksEmptyState" Visibility="Collapsed" Text="No tasks match the current filter"
                                                        FontSize="12.5" Foreground="{DynamicResource TextMuted}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                                        </Grid>
+                                            </Grid>
+                                        </DockPanel>
                                     </Border>
 
                                     <Border Grid.Row="2" Background="{DynamicResource BgCard}" BorderBrush="{DynamicResource BorderHairline}" BorderThickness="1" CornerRadius="12" Padding="16" Margin="0,14,0,0">
@@ -503,7 +597,10 @@
                                                     <ColumnDefinition Width="Auto"/>
                                                 </Grid.ColumnDefinitions>
                                                 <TextBlock Grid.Column="0" Text="Payload &amp; Result Inspector" FontSize="12" FontWeight="Medium" Foreground="{DynamicResource TextSecondary}" VerticalAlignment="Center"/>
-                                                <Button Grid.Column="1" Content="Copy JSON" Style="{StaticResource BtnStyle}" Padding="10,4" FontSize="12" Click="OnCopyTaskPayloadClick"/>
+                                                <StackPanel Grid.Column="1" Orientation="Horizontal">
+                                                    <Button Content="Open Drawer" Style="{StaticResource BtnStyle}" Padding="10,4" FontSize="12" Click="OnOpenTaskDrawerClick" Margin="0,0,6,0"/>
+                                                    <Button Content="Copy JSON" Style="{StaticResource BtnStyle}" Padding="10,4" FontSize="12" Click="OnCopyTaskPayloadClick"/>
+                                                </StackPanel>
                                             </Grid>
                                             <Border Background="{DynamicResource ConsoleCardBg}" BorderBrush="#1A1E2B" BorderThickness="1" CornerRadius="10" Padding="12">
                                                 <TextBox x:Name="TaskInspectorBox" Background="Transparent" Foreground="#CBD5E1"
@@ -673,10 +770,13 @@
                                                     <TextBlock Text="Capture History" FontSize="12" FontWeight="Medium" Foreground="{DynamicResource TextSecondary}"/>
                                                 </StackPanel>
                                                 <Grid>
-                                                    <ListBox x:Name="CaptureHistoryList" Background="Transparent" BorderThickness="0" SelectionChanged="OnCaptureHistorySelected">
+                                                    <ListBox x:Name="CaptureHistoryList" Background="Transparent" BorderThickness="0"
+                                                             ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                                             SelectionChanged="OnCaptureHistorySelected">
                                                         <ListBox.ItemTemplate>
                                                             <DataTemplate>
-                                                                <TextBlock Text="{Binding Resolution}" FontFamily="Consolas" FontSize="12" Foreground="{DynamicResource TextSecondary}" Margin="0,3"/>
+                                                                <TextBlock Text="{Binding Resolution}" FontFamily="Consolas" FontSize="11.5"
+                                                                           Foreground="{DynamicResource TextSecondary}" TextTrimming="CharacterEllipsis" Margin="0,3"/>
                                                             </DataTemplate>
                                                         </ListBox.ItemTemplate>
                                                     </ListBox>
@@ -739,7 +839,19 @@
                                                 <CheckBox x:Name="PolAllowTier4Chk" Style="{StaticResource ToggleSwitchStyle}" Content="Allow Tier 4: High-risk operations (requires explicit human approval)"/>
                                                 <CheckBox x:Name="PolAllowShellChk" Style="{StaticResource ToggleSwitchStyle}" Content="Allow Shell Execution (run_shell)"/>
                                                 <CheckBox x:Name="PolAllowDesktopChk" Style="{StaticResource ToggleSwitchStyle}" Content="Allow Interactive Desktop Input (SendInput &amp; UI Automation)"/>
+                                                <CheckBox x:Name="PolAllowPackageInstallChk" Style="{StaticResource ToggleSwitchStyle}" Content="Allow Package Installation (install_package)"/>
+                                                <CheckBox x:Name="PolAllowClipboardChk" Style="{StaticResource ToggleSwitchStyle}" Content="Allow Clipboard Synchronization (get_clipboard / set_clipboard)"/>
                                                 <CheckBox x:Name="PolRequireLocalApprovalChk" Style="{StaticResource ToggleSwitchStyle}" Content="Require local workstation approval popup for Tier 3/4 tasks"/>
+
+                                                <StackPanel Orientation="Horizontal" Margin="0,10,0,0" VerticalAlignment="Center">
+                                                    <TextBlock Text="Unattended Max Risk Tier:" FontSize="12" FontWeight="Medium" Foreground="{DynamicResource TextSecondary}" VerticalAlignment="Center" Margin="0,0,12,0"/>
+                                                    <ComboBox x:Name="PolMaxTierCombo" Style="{StaticResource SaaSComboBoxStyle}" Width="240" SelectedIndex="2">
+                                                        <ComboBoxItem Content="Tier 1 — Read-Only" Tag="1"/>
+                                                        <ComboBoxItem Content="Tier 2 — Low-Risk Workspace Writes" Tag="2"/>
+                                                        <ComboBoxItem Content="Tier 3 — Sensitive Desktop &amp; Edits" Tag="3"/>
+                                                        <ComboBoxItem Content="Tier 4 — High-Risk &amp; Shell" Tag="4"/>
+                                                    </ComboBox>
+                                                </StackPanel>
 
                                                 <WrapPanel Margin="0,14,0,0">
                                                     <Button Content="Save Local Policy" Style="{StaticResource PrimaryBtnStyle}" Click="OnSavePolicyClick" Margin="0,4,8,4"/>
@@ -749,7 +861,7 @@
                                             </StackPanel>
                                         </Border>
 
-                                        <UniformGrid x:Name="SecurityBottomGrid" Columns="2" Margin="-7,0,-7,0">
+                                        <UniformGrid x:Name="SecurityBottomGrid" Columns="3" Margin="-7,0,-7,0">
                                             <Border Background="{DynamicResource BgCard}" BorderBrush="{DynamicResource BorderHairline}" BorderThickness="1" CornerRadius="12" Padding="16" Margin="7">
                                                 <StackPanel>
                                                     <TextBlock Text="Allowed Application Matrix" FontSize="12" FontWeight="Medium" Foreground="{DynamicResource TextSecondary}" Margin="0,0,0,12"/>
@@ -760,124 +872,568 @@
                                                         </Grid.ColumnDefinitions>
                                                         <TextBox x:Name="NewAppBox" Style="{StaticResource FieldStyle}" Tag="Add executable (e.g. code.exe)" Margin="0,0,8,0"/>
                                                         <StackPanel Grid.Column="1" Orientation="Horizontal">
-                                                            <Button Content="Add App" Style="{StaticResource BtnStyle}" Padding="10,6" FontSize="12" Click="OnAddAllowedAppClick" Margin="0,0,6,0"/>
+                                                            <Button Content="Add" Style="{StaticResource BtnStyle}" Padding="10,6" FontSize="12" Click="OnAddAllowedAppClick" Margin="0,0,6,0"/>
                                                             <Button Content="Remove" Style="{StaticResource DangerBtnStyle}" Padding="10,6" FontSize="12" Click="OnRemoveAllowedAppClick"/>
                                                         </StackPanel>
                                                     </Grid>
-                                                    <ListBox x:Name="AllowedAppsList" Height="140" Background="{DynamicResource ConsoleCardBg}" Foreground="#CBD5E1"
-                                                             BorderBrush="#1A1E2B" BorderThickness="1" FontFamily="Consolas" FontSize="12" Padding="8"/>
+                                                    <ListBox x:Name="AllowedAppsList" Height="150" Background="{DynamicResource BgInput}" Foreground="{DynamicResource TextPrimary}"
+                                                             BorderBrush="{DynamicResource BorderHairline}" BorderThickness="1" FontFamily="Consolas" FontSize="12" Padding="8"/>
                                                 </StackPanel>
                                             </Border>
 
                                             <Border Background="{DynamicResource BgCard}" BorderBrush="{DynamicResource BorderHairline}" BorderThickness="1" CornerRadius="12" Padding="16" Margin="7">
                                                 <StackPanel>
-                                                    <TextBlock Text="Policy Audit History" FontSize="12" FontWeight="Medium" Foreground="{DynamicResource TextSecondary}" Margin="0,0,0,12"/>
-                                                    <ListBox x:Name="PolicyAuditList" Height="185" Background="{DynamicResource ConsoleCardBg}" Foreground="#94A3B8"
-                                                             BorderBrush="#1A1E2B" BorderThickness="1" FontFamily="Consolas" FontSize="12" Padding="8"/>
+                                                    <TextBlock Text="Allowed Shell Commands (empty = all)" FontSize="12" FontWeight="Medium" Foreground="{DynamicResource TextSecondary}" Margin="0,0,0,12"/>
+                                                    <Grid Margin="0,0,0,10">
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="*"/>
+                                                            <ColumnDefinition Width="Auto"/>
+                                                        </Grid.ColumnDefinitions>
+                                                        <TextBox x:Name="NewCommandBox" Style="{StaticResource FieldStyle}" Tag="Add command (e.g. git)" Margin="0,0,8,0"/>
+                                                        <StackPanel Grid.Column="1" Orientation="Horizontal">
+                                                            <Button Content="Add" Style="{StaticResource BtnStyle}" Padding="10,6" FontSize="12" Click="OnAddAllowedCommandClick" Margin="0,0,6,0"/>
+                                                            <Button Content="Remove" Style="{StaticResource DangerBtnStyle}" Padding="10,6" FontSize="12" Click="OnRemoveAllowedCommandClick"/>
+                                                        </StackPanel>
+                                                    </Grid>
+                                                    <ListBox x:Name="AllowedCommandsList" Height="150" Background="{DynamicResource BgInput}" Foreground="{DynamicResource TextPrimary}"
+                                                             BorderBrush="{DynamicResource BorderHairline}" BorderThickness="1" FontFamily="Consolas" FontSize="12" Padding="8"/>
+                                                </StackPanel>
+                                            </Border>
+
+                                            <Border Background="{DynamicResource BgCard}" BorderBrush="{DynamicResource BorderHairline}" BorderThickness="1" CornerRadius="12" Padding="16" Margin="7">
+                                                <StackPanel>
+                                                    <TextBlock Text="Policy Activity Timeline" FontSize="12" FontWeight="Medium" Foreground="{DynamicResource TextSecondary}" Margin="0,0,0,12"/>
+                                                    <ListBox x:Name="PolicyAuditList" Height="195" Background="{DynamicResource BgInput}" Foreground="{DynamicResource TextSecondary}"
+                                                             BorderBrush="{DynamicResource BorderHairline}" BorderThickness="1" FontFamily="Consolas" FontSize="11.5" Padding="8"
+                                                             ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                                                        <ListBox.ItemTemplate>
+                                                            <DataTemplate>
+                                                                <Grid Margin="0,3">
+                                                                    <Grid.ColumnDefinitions>
+                                                                        <ColumnDefinition Width="16"/>
+                                                                        <ColumnDefinition Width="*"/>
+                                                                    </Grid.ColumnDefinitions>
+                                                                    <StackPanel Grid.Column="0" HorizontalAlignment="Center">
+                                                                        <Ellipse Width="7" Height="7" Fill="{DynamicResource AccentPrimary}" Margin="0,4,0,2"/>
+                                                                        <Rectangle Width="1" Height="14" Fill="{DynamicResource BorderHairline}"/>
+                                                                    </StackPanel>
+                                                                    <TextBlock Grid.Column="1" Text="{Binding}" TextWrapping="Wrap" Foreground="{DynamicResource TextPrimary}"/>
+                                                                </Grid>
+                                                            </DataTemplate>
+                                                        </ListBox.ItemTemplate>
+                                                    </ListBox>
                                                 </StackPanel>
                                             </Border>
                                         </UniformGrid>
+
+                                        <!-- Collapsible Guardrails FAQ Accordion (#20) -->
+                                        <StackPanel Margin="0,14,0,0">
+                                            <TextBlock Text="SECURITY ARCHITECTURE &amp; GUARDRAILS" FontSize="11" FontWeight="SemiBold" Foreground="{DynamicResource TextMuted}" Margin="2,0,0,8"/>
+                                            <Expander Style="{StaticResource SaaSExpanderStyle}" Header="How does Windows DPAPI sealing protect device tokens?" IsExpanded="True">
+                                                <TextBlock FontSize="12" Foreground="{DynamicResource TextSecondary}" TextWrapping="Wrap"
+                                                           Text="Tokens and optional named-pipe HMAC keys are sealed using Win32 CryptProtectData scoped strictly to your current Windows user session, preventing plaintext disk exposure."/>
+                                            </Expander>
+                                            <Expander Style="{StaticResource SaaSExpanderStyle}" Header="Why does AI Bridge use an outbound-only poller &amp; WebSocket side-channel?">
+                                                <TextBlock FontSize="12" Foreground="{DynamicResource TextSecondary}" TextWrapping="Wrap"
+                                                           Text="Outbound TLS long-polling with an optional WebSocket wake channel avoids opening inbound firewall ports while preserving instant cancellation and Emergency All-Stop."/>
+                                            </Expander>
+                                        </StackPanel>
                                     </StackPanel>
                                 </ScrollViewer>
                             </TabItem>
 
                             <!-- VIEW 6: SETTINGS -->
                             <TabItem Header="Settings">
-                                <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-                                    <StackPanel>
-                                        <Border Background="{DynamicResource BgCard}" BorderBrush="{DynamicResource BorderHairline}" BorderThickness="1" CornerRadius="12" Padding="20" Margin="0,0,0,14">
-                                            <StackPanel>
-                                                <Grid Margin="0,0,0,12">
-                                                    <Grid.ColumnDefinitions>
-                                                        <ColumnDefinition Width="*"/>
-                                                        <ColumnDefinition Width="Auto"/>
-                                                    </Grid.ColumnDefinitions>
-                                                    <TextBlock Grid.Column="0" Text="Device Token (DPAPI-sealed)" FontSize="12" FontWeight="Medium" Foreground="{DynamicResource TextSecondary}"/>
-                                                    <TextBlock Grid.Column="1" x:Name="SetValidationBadge" Text="" FontSize="12" FontFamily="Consolas" Foreground="#34D399"/>
-                                                </Grid>
-                                                <Grid>
-                                                    <Grid.ColumnDefinitions>
-                                                        <ColumnDefinition Width="*"/>
-                                                        <ColumnDefinition Width="Auto"/>
-                                                    </Grid.ColumnDefinitions>
-                                                    <PasswordBox x:Name="SetTokenPasswordBox" Style="{StaticResource PasswordFieldStyle}" FontFamily="Consolas"/>
-                                                    <TextBox x:Name="SetTokenPlainBox" Visibility="Collapsed" Style="{StaticResource FieldStyle}" FontFamily="Consolas"/>
-                                                    <StackPanel Grid.Column="1" Orientation="Horizontal" Margin="8,0,0,0">
-                                                        <Button x:Name="ToggleTokenVisBtn" Content="Show" Style="{StaticResource BtnStyle}" Padding="12,6" FontSize="12" Click="OnToggleTokenVisClick" Margin="0,0,6,0"/>
-                                                        <Button Content="Copy" Style="{StaticResource BtnStyle}" Padding="12,6" FontSize="12" Click="OnCopyTokenClick" Margin="0,0,6,0"/>
-                                                        <Button Content="Reload" Style="{StaticResource BtnStyle}" Padding="12,6" FontSize="12" Click="OnReloadTokenClick"/>
-                                                    </StackPanel>
-                                                </Grid>
+                                <Grid>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="*"/>
+                                    </Grid.RowDefinitions>
+
+                                    <!-- Category Filter & Save Bar -->
+                                    <Border Grid.Row="0" Background="{DynamicResource BgCard}" BorderBrush="{DynamicResource BorderHairline}" BorderThickness="1" CornerRadius="12" Padding="12" Margin="0,0,0,14">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+                                            <WrapPanel Grid.Column="0" VerticalAlignment="Center">
+                                                <Button x:Name="SetCatAllBtn" Content="All" Style="{StaticResource ChipActiveStyle}" Click="OnSettingsCategoryClick" Tag="ALL" Margin="0,2,4,2"/>
+                                                <Button x:Name="SetCatGenBtn" Content="General" Style="{StaticResource ChipBtnStyle}" Click="OnSettingsCategoryClick" Tag="GENERAL" Margin="0,2,4,2"/>
+                                                <Button x:Name="SetCatCpBtn" Content="Control Plane" Style="{StaticResource ChipBtnStyle}" Click="OnSettingsCategoryClick" Tag="CONTROL_PLANE" Margin="0,2,4,2"/>
+                                                <Button x:Name="SetCatAgentBtn" Content="Agent" Style="{StaticResource ChipBtnStyle}" Click="OnSettingsCategoryClick" Tag="AGENT" Margin="0,2,4,2"/>
+                                                <Button x:Name="SetCatLogBtn" Content="Logging" Style="{StaticResource ChipBtnStyle}" Click="OnSettingsCategoryClick" Tag="LOGGING" Margin="0,2,4,2"/>
+                                                <Button x:Name="SetCatSecBtn" Content="Security" Style="{StaticResource ChipBtnStyle}" Click="OnSettingsCategoryClick" Tag="SECURITY" Margin="0,2,4,2"/>
+                                                <Button x:Name="SetCatAppBtn" Content="Appearance" Style="{StaticResource ChipBtnStyle}" Click="OnSettingsCategoryClick" Tag="APPEARANCE" Margin="0,2,4,2"/>
+                                                <Button x:Name="SetCatAdvBtn" Content="Advanced" Style="{StaticResource ChipBtnStyle}" Click="OnSettingsCategoryClick" Tag="ADVANCED" Margin="0,2,0,2"/>
+                                            </WrapPanel>
+                                            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Margin="10,0,0,0">
+                                                <Button Content="Reset Defaults" Style="{StaticResource BtnStyle}" Padding="10,6" FontSize="12" Click="OnResetSettingsClick" Margin="0,0,8,0"/>
+                                                <Button Content="Save Configuration" Style="{StaticResource PrimaryBtnStyle}" Padding="14,6" FontSize="12" Click="OnSaveSettingsClick"/>
                                             </StackPanel>
-                                        </Border>
+                                        </Grid>
+                                    </Border>
 
-                                        <Border Background="{DynamicResource BgCard}" BorderBrush="{DynamicResource BorderHairline}" BorderThickness="1" CornerRadius="12" Padding="20" Margin="0,0,0,14">
-                                            <StackPanel>
-                                                <TextBlock Text="Workspace, Polling &amp; Startup" FontSize="12" FontWeight="Medium" Foreground="{DynamicResource TextSecondary}" Margin="0,0,0,14"/>
+                                    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                                        <StackPanel>
+                                            <!-- GENERAL -->
+                                            <Border x:Name="SetSectionGeneral" Background="{DynamicResource BgCard}" BorderBrush="{DynamicResource BorderHairline}" BorderThickness="1" CornerRadius="12" Padding="20" Margin="0,0,0,14">
+                                                <StackPanel>
+                                                    <TextBlock Text="General &amp; Windows Integration" FontSize="13" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}" Margin="0,0,0,12"/>
 
-                                                <TextBlock Text="Control Plane URL" FontSize="12" Foreground="{DynamicResource TextMuted}" Margin="0,0,0,6"/>
-                                                <Grid Margin="0,0,0,12">
-                                                    <Grid.ColumnDefinitions>
-                                                        <ColumnDefinition Width="*"/>
-                                                        <ColumnDefinition Width="Auto"/>
-                                                    </Grid.ColumnDefinitions>
-                                                    <TextBox x:Name="SetControlUrlBox" Style="{StaticResource FieldStyle}" FontFamily="Consolas"/>
-                                                    <Button Grid.Column="1" Content="Test Connection" Style="{StaticResource BtnStyle}" Click="OnTestConnectionClick" Margin="8,0,0,0"/>
-                                                </Grid>
+                                                    <TextBlock Text="Workspace Confinement Directory" FontSize="12" Foreground="{DynamicResource TextMuted}" Margin="0,0,0,6"/>
+                                                    <Grid Margin="0,0,0,12">
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="*"/>
+                                                            <ColumnDefinition Width="Auto"/>
+                                                        </Grid.ColumnDefinitions>
+                                                        <TextBox x:Name="SetWorkspaceBox" Style="{StaticResource FieldStyle}" FontFamily="Consolas"/>
+                                                        <Button Grid.Column="1" Content="Browse..." Style="{StaticResource BtnStyle}" Click="OnBrowseWorkspaceClick" Margin="8,0,0,0"/>
+                                                    </Grid>
 
-                                                <TextBlock Text="Device ID" FontSize="12" Foreground="{DynamicResource TextMuted}" Margin="0,0,0,6"/>
-                                                <TextBox x:Name="SetDeviceIdBox" Style="{StaticResource FieldStyle}" FontFamily="Consolas" Margin="0,0,0,12"/>
+                                                    <TextBlock Text="Screenshot Storage Directory" FontSize="12" Foreground="{DynamicResource TextMuted}" Margin="0,0,0,6"/>
+                                                    <Grid Margin="0,0,0,14">
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="*"/>
+                                                            <ColumnDefinition Width="Auto"/>
+                                                        </Grid.ColumnDefinitions>
+                                                        <TextBox x:Name="SetScreenshotDirBox" Style="{StaticResource FieldStyle}" FontFamily="Consolas"/>
+                                                        <Button Grid.Column="1" Content="Browse..." Style="{StaticResource BtnStyle}" Click="OnBrowseScreenshotDirClick" Margin="8,0,0,0"/>
+                                                    </Grid>
 
-                                                <TextBlock Text="Workspace Confinement Directory" FontSize="12" Foreground="{DynamicResource TextMuted}" Margin="0,0,0,6"/>
-                                                <Grid Margin="0,0,0,12">
-                                                    <Grid.ColumnDefinitions>
-                                                        <ColumnDefinition Width="*"/>
-                                                        <ColumnDefinition Width="Auto"/>
-                                                    </Grid.ColumnDefinitions>
-                                                    <TextBox x:Name="SetWorkspaceBox" Style="{StaticResource FieldStyle}" FontFamily="Consolas"/>
-                                                    <Button Grid.Column="1" Content="Browse..." Style="{StaticResource BtnStyle}" Click="OnBrowseWorkspaceClick" Margin="8,0,0,0"/>
-                                                </Grid>
+                                                    <TextBlock Text="Workstation Tags (press Enter to add)" FontSize="12" Foreground="{DynamicResource TextMuted}" Margin="0,0,0,6"/>
+                                                    <WrapPanel Margin="0,0,0,14" VerticalAlignment="Center">
+                                                        <ItemsControl x:Name="SetTagsItems">
+                                                            <ItemsControl.ItemsPanel>
+                                                                <ItemsPanelTemplate>
+                                                                    <WrapPanel VerticalAlignment="Center"/>
+                                                                </ItemsPanelTemplate>
+                                                            </ItemsControl.ItemsPanel>
+                                                            <ItemsControl.ItemTemplate>
+                                                                <DataTemplate>
+                                                                    <Border Background="{DynamicResource BgElevated}" BorderBrush="{DynamicResource BorderHairline}"
+                                                                            BorderThickness="1" CornerRadius="12" Padding="9,4" Margin="0,2,6,2">
+                                                                        <StackPanel Orientation="Horizontal">
+                                                                            <TextBlock Text="{Binding}" FontSize="11.5" FontFamily="Consolas" Foreground="{DynamicResource TextPrimary}" VerticalAlignment="Center"/>
+                                                                            <Button Content="×" Margin="6,0,0,0" Padding="2,0" FontSize="12" Background="Transparent" BorderThickness="0"
+                                                                                    Foreground="{DynamicResource TextMuted}" Cursor="Hand" Click="OnRemoveTagClick" Tag="{Binding}"/>
+                                                                        </StackPanel>
+                                                                    </Border>
+                                                                </DataTemplate>
+                                                            </ItemsControl.ItemTemplate>
+                                                        </ItemsControl>
+                                                        <TextBox x:Name="NewTagBox" Width="150" Style="{StaticResource FieldStyle}" Padding="8,5" FontSize="11.5"
+                                                                 Tag="Add tag + Enter..." PreviewKeyDown="OnNewTagKeyDown" Margin="0,2,0,2"/>
+                                                    </WrapPanel>
 
-                                                <TextBlock Text="Long-Poll Interval (seconds, 5–30)" FontSize="12" Foreground="{DynamicResource TextMuted}" Margin="0,0,0,6"/>
-                                                <TextBox x:Name="SetPollIntervalBox" Width="100" HorizontalAlignment="Left" Style="{StaticResource FieldStyle}" FontFamily="Consolas" Margin="0,0,0,14"/>
-
-                                                <CheckBox x:Name="SetAutoStartChk" Style="{StaticResource ToggleSwitchStyle}" Content="Launch automatically when Windows starts (HKCU Run)"/>
-                                                <CheckBox x:Name="SetAutoConnectChk" Style="{StaticResource ToggleSwitchStyle}" Content="Connect to Control Plane automatically on startup" Margin="0,4,0,0"/>
-                                                <CheckBox x:Name="SetMinimizeToTrayChk" Style="{StaticResource ToggleSwitchStyle}" Content="Minimize to system tray instead of exiting on close" Margin="0,4,0,0"/>
-                                                <CheckBox x:Name="SetNotificationsChk" Style="{StaticResource ToggleSwitchStyle}" Content="Show Windows tray notifications for tasks &amp; approvals" Margin="0,4,0,16"/>
-
-                                                <WrapPanel>
-                                                    <Button Content="Save Configuration" Style="{StaticResource PrimaryBtnStyle}" Click="OnSaveSettingsClick" Margin="0,4,8,4"/>
-                                                    <Button Content="Enroll with Token..." Style="{StaticResource BtnStyle}" Click="OnOpenEnrollModalClick" Margin="0,4,8,4"/>
-                                                    <Button Content="Reset Defaults" Style="{StaticResource BtnStyle}" Click="OnResetSettingsClick" Margin="0,4,0,4"/>
-                                                </WrapPanel>
-                                            </StackPanel>
-                                        </Border>
-
-                                        <Border Background="{DynamicResource BgCard}" BorderBrush="{DynamicResource BorderHairline}" BorderThickness="1" CornerRadius="12" Padding="16">
-                                            <Grid>
-                                                <Grid.ColumnDefinitions>
-                                                    <ColumnDefinition Width="*"/>
-                                                    <ColumnDefinition Width="Auto"/>
-                                                </Grid.ColumnDefinitions>
-                                                <StackPanel Grid.Column="0" VerticalAlignment="Center">
-                                                    <TextBlock Text="Diagnostics, Logs &amp; Signed Updates" FontSize="12" FontWeight="Medium" Foreground="{DynamicResource TextPrimary}"/>
-                                                    <TextBlock x:Name="SetUpdateStatusText" Text="Current version: v0.3.0" FontSize="12" FontFamily="Consolas" Foreground="{DynamicResource TextMuted}" Margin="0,3,0,0"/>
+                                                    <CheckBox x:Name="SetAutoStartChk" Style="{StaticResource ToggleSwitchStyle}" Content="Launch automatically when Windows starts (HKCU Run)"/>
+                                                    <CheckBox x:Name="SetMinimizeToTrayChk" Style="{StaticResource ToggleSwitchStyle}" Content="Minimize to system tray instead of exiting on close" Margin="0,4,0,0"/>
+                                                    <CheckBox x:Name="SetNotificationsChk" Style="{StaticResource ToggleSwitchStyle}" Content="Show Windows tray notifications for tasks &amp; approvals" Margin="0,4,0,0"/>
+                                                    <CheckBox x:Name="SetConfirmDestructiveChk" Style="{StaticResource ToggleSwitchStyle}" Content="Confirm before ending processes, clearing tasks, or resetting defaults" Margin="0,4,0,0"/>
                                                 </StackPanel>
-                                                <WrapPanel Grid.Column="1" VerticalAlignment="Center">
-                                                    <Button Content="Copy Diagnostics" Style="{StaticResource BtnStyle}" Click="OnCopyDiagnosticsClick" Margin="0,2,8,2"/>
-                                                    <Button Content="Export Bundle (.zip)" Style="{StaticResource BtnStyle}" Click="OnExportDiagnosticsBundleClick" Margin="0,2,8,2"/>
-                                                    <Button Content="Open Logs" Style="{StaticResource BtnStyle}" Click="OnOpenLogsFolderClick" Margin="0,2,8,2"/>
-                                                    <Button Content="Check Updates" Style="{StaticResource BtnStyle}" Click="OnCheckUpdatesClick" Margin="0,2,0,2"/>
-                                                </WrapPanel>
-                                            </Grid>
-                                        </Border>
-                                    </StackPanel>
-                                </ScrollViewer>
+                                            </Border>
+
+                                            <!-- CONTROL PLANE -->
+                                            <Border x:Name="SetSectionControlPlane" Background="{DynamicResource BgCard}" BorderBrush="{DynamicResource BorderHairline}" BorderThickness="1" CornerRadius="12" Padding="20" Margin="0,0,0,14">
+                                                <StackPanel>
+                                                    <Grid Margin="0,0,0,12">
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="*"/>
+                                                            <ColumnDefinition Width="Auto"/>
+                                                        </Grid.ColumnDefinitions>
+                                                        <TextBlock Grid.Column="0" Text="Control Plane &amp; Transport" FontSize="13" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}"/>
+                                                        <TextBlock Grid.Column="1" x:Name="SetValidationBadge" Text="" FontSize="12" FontFamily="Consolas" Foreground="{DynamicResource SuccessText}"/>
+                                                    </Grid>
+
+                                                    <TextBlock Text="Control Plane URL" FontSize="12" Foreground="{DynamicResource TextMuted}" Margin="0,0,0,6"/>
+                                                    <Grid Margin="0,0,0,12">
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="*"/>
+                                                            <ColumnDefinition Width="Auto"/>
+                                                        </Grid.ColumnDefinitions>
+                                                        <TextBox x:Name="SetControlUrlBox" Style="{StaticResource FieldStyle}" FontFamily="Consolas"/>
+                                                        <Button Grid.Column="1" Content="Test Connection" Style="{StaticResource BtnStyle}" Click="OnTestConnectionClick" Margin="8,0,0,0"/>
+                                                    </Grid>
+
+                                                    <UniformGrid Columns="2" Margin="-6,0,-6,12">
+                                                        <StackPanel Margin="6,0">
+                                                            <TextBlock Text="Device ID" FontSize="12" Foreground="{DynamicResource TextMuted}" Margin="0,0,0,6"/>
+                                                            <TextBox x:Name="SetDeviceIdBox" Style="{StaticResource FieldStyle}" FontFamily="Consolas"/>
+                                                        </StackPanel>
+                                                        <StackPanel Margin="6,0">
+                                                            <TextBlock Text="Tenant ID" FontSize="12" Foreground="{DynamicResource TextMuted}" Margin="0,0,0,6"/>
+                                                            <TextBox x:Name="SetTenantIdBox" Style="{StaticResource FieldStyle}" FontFamily="Consolas"/>
+                                                        </StackPanel>
+                                                    </UniformGrid>
+
+                                                    <UniformGrid Columns="4" Margin="-6,0,-6,14">
+                                                        <StackPanel Margin="6,0">
+                                                            <TextBlock Text="Long-Poll Wait (5–60s)" FontSize="12" Foreground="{DynamicResource TextMuted}" Margin="0,0,0,6"/>
+                                                            <TextBox x:Name="SetPollIntervalBox" Style="{StaticResource FieldStyle}" FontFamily="Consolas"/>
+                                                        </StackPanel>
+                                                        <StackPanel Margin="6,0">
+                                                            <TextBlock Text="Heartbeat (5–120s)" FontSize="12" Foreground="{DynamicResource TextMuted}" Margin="0,0,0,6"/>
+                                                            <TextBox x:Name="SetHeartbeatIntervalBox" Style="{StaticResource FieldStyle}" FontFamily="Consolas"/>
+                                                        </StackPanel>
+                                                        <StackPanel Margin="6,0">
+                                                            <TextBlock Text="HTTP Timeout (5–120s)" FontSize="12" Foreground="{DynamicResource TextMuted}" Margin="0,0,0,6"/>
+                                                            <TextBox x:Name="SetHttpTimeoutBox" Style="{StaticResource FieldStyle}" FontFamily="Consolas"/>
+                                                        </StackPanel>
+                                                        <StackPanel Margin="6,0">
+                                                            <TextBlock Text="WS Reconnect (3–120s)" FontSize="12" Foreground="{DynamicResource TextMuted}" Margin="0,0,0,6"/>
+                                                            <TextBox x:Name="SetWsReconnectBox" Style="{StaticResource FieldStyle}" FontFamily="Consolas"/>
+                                                        </StackPanel>
+                                                    </UniformGrid>
+
+                                                    <CheckBox x:Name="SetAutoConnectChk" Style="{StaticResource ToggleSwitchStyle}" Content="Connect to Control Plane automatically on startup"/>
+                                                    <CheckBox x:Name="SetWsEnabledChk" Style="{StaticResource ToggleSwitchStyle}" Content="Enable WebSocket side-channel for instant wake &amp; emergency stop" Margin="0,4,0,0"/>
+                                                </StackPanel>
+                                            </Border>
+
+                                            <!-- AGENT -->
+                                            <Border x:Name="SetSectionAgent" Background="{DynamicResource BgCard}" BorderBrush="{DynamicResource BorderHairline}" BorderThickness="1" CornerRadius="12" Padding="20" Margin="0,0,0,14">
+                                                <StackPanel>
+                                                    <TextBlock Text="Agent Execution Limits &amp; Telemetry" FontSize="13" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}" Margin="0,0,0,12"/>
+
+                                                    <UniformGrid Columns="3" Margin="-6,0,-6,12">
+                                                        <StackPanel Margin="6,0">
+                                                            <TextBlock Text="Default Tool Timeout (s)" FontSize="12" Foreground="{DynamicResource TextMuted}" Margin="0,0,0,6"/>
+                                                            <TextBox x:Name="SetDefaultTimeoutBox" Style="{StaticResource FieldStyle}" FontFamily="Consolas"/>
+                                                        </StackPanel>
+                                                        <StackPanel Margin="6,0">
+                                                            <TextBlock Text="Max Tool Timeout (s)" FontSize="12" Foreground="{DynamicResource TextMuted}" Margin="0,0,0,6"/>
+                                                            <TextBox x:Name="SetMaxTimeoutBox" Style="{StaticResource FieldStyle}" FontFamily="Consolas"/>
+                                                        </StackPanel>
+                                                        <StackPanel Margin="6,0">
+                                                            <TextBlock Text="Monitor Poll Interval (ms)" FontSize="12" Foreground="{DynamicResource TextMuted}" Margin="0,0,0,6"/>
+                                                            <TextBox x:Name="SetMonitorIntervalBox" Style="{StaticResource FieldStyle}" FontFamily="Consolas"/>
+                                                        </StackPanel>
+                                                    </UniformGrid>
+
+                                                    <UniformGrid Columns="4" Margin="-6,0,-6,14">
+                                                        <StackPanel Margin="6,0">
+                                                            <TextBlock Text="Max Read Bytes" FontSize="12" Foreground="{DynamicResource TextMuted}" Margin="0,0,0,6"/>
+                                                            <TextBox x:Name="SetMaxReadBytesBox" Style="{StaticResource FieldStyle}" FontFamily="Consolas"/>
+                                                        </StackPanel>
+                                                        <StackPanel Margin="6,0">
+                                                            <TextBlock Text="Max Output Bytes" FontSize="12" Foreground="{DynamicResource TextMuted}" Margin="0,0,0,6"/>
+                                                            <TextBox x:Name="SetMaxOutputBytesBox" Style="{StaticResource FieldStyle}" FontFamily="Consolas"/>
+                                                        </StackPanel>
+                                                        <StackPanel Margin="6,0">
+                                                            <TextBlock Text="Max List Entries" FontSize="12" Foreground="{DynamicResource TextMuted}" Margin="0,0,0,6"/>
+                                                            <TextBox x:Name="SetMaxListEntriesBox" Style="{StaticResource FieldStyle}" FontFamily="Consolas"/>
+                                                        </StackPanel>
+                                                        <StackPanel Margin="6,0">
+                                                            <TextBlock Text="Task History Limit" FontSize="12" Foreground="{DynamicResource TextMuted}" Margin="0,0,0,6"/>
+                                                            <TextBox x:Name="SetTaskHistoryLimitBox" Style="{StaticResource FieldStyle}" FontFamily="Consolas"/>
+                                                        </StackPanel>
+                                                    </UniformGrid>
+
+                                                    <CheckBox x:Name="SetAutoRefreshMonChk" Style="{StaticResource ToggleSwitchStyle}" Content="Auto-refresh System Monitor CPU, Memory, Disk &amp; Network telemetry"/>
+                                                </StackPanel>
+                                            </Border>
+
+                                            <!-- LOGGING -->
+                                            <Border x:Name="SetSectionLogging" Background="{DynamicResource BgCard}" BorderBrush="{DynamicResource BorderHairline}" BorderThickness="1" CornerRadius="12" Padding="20" Margin="0,0,0,14">
+                                                <StackPanel>
+                                                    <TextBlock Text="Logging &amp; Activity Console" FontSize="13" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}" Margin="0,0,0,12"/>
+
+                                                    <UniformGrid Columns="3" Margin="-6,0,-6,14">
+                                                        <StackPanel Margin="6,0">
+                                                            <TextBlock Text="Minimum Log Level" FontSize="12" Foreground="{DynamicResource TextMuted}" Margin="0,0,0,6"/>
+                                                            <ComboBox x:Name="SetLogLevelCombo" Style="{StaticResource SaaSComboBoxStyle}">
+                                                                <ComboBoxItem Content="DEBUG" Tag="DEBUG"/>
+                                                                <ComboBoxItem Content="INFO" Tag="INFO"/>
+                                                                <ComboBoxItem Content="WARN" Tag="WARN"/>
+                                                                <ComboBoxItem Content="ERR" Tag="ERR"/>
+                                                            </ComboBox>
+                                                        </StackPanel>
+                                                        <StackPanel Margin="6,0">
+                                                            <TextBlock Text="In-Memory Log Buffer" FontSize="12" Foreground="{DynamicResource TextMuted}" Margin="0,0,0,6"/>
+                                                            <TextBox x:Name="SetMaxLogEntriesBox" Style="{StaticResource FieldStyle}" FontFamily="Consolas"/>
+                                                        </StackPanel>
+                                                        <StackPanel Margin="6,0">
+                                                            <TextBlock Text="Max Log File Size (MB)" FontSize="12" Foreground="{DynamicResource TextMuted}" Margin="0,0,0,6"/>
+                                                            <TextBox x:Name="SetMaxLogFileMbBox" Style="{StaticResource FieldStyle}" FontFamily="Consolas"/>
+                                                        </StackPanel>
+                                                    </UniformGrid>
+
+                                                    <CheckBox x:Name="SetFileLoggingChk" Style="{StaticResource ToggleSwitchStyle}" Content="Persist rolling client logs to ~/.ai-bridge/logs/ai-bridge-client.log"/>
+                                                    <CheckBox x:Name="SetAutoScrollDefaultChk" Style="{StaticResource ToggleSwitchStyle}" Content="Auto-scroll Live Activity Console by default" Margin="0,4,0,0"/>
+                                                </StackPanel>
+                                            </Border>
+
+                                            <!-- SECURITY -->
+                                            <Border x:Name="SetSectionSecurity" Background="{DynamicResource BgCard}" BorderBrush="{DynamicResource BorderHairline}" BorderThickness="1" CornerRadius="12" Padding="20" Margin="0,0,0,14">
+                                                <StackPanel>
+                                                    <TextBlock Text="Security, Token Vault &amp; C++ Pipe IPC" FontSize="13" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}" Margin="0,0,0,12"/>
+
+                                                    <TextBlock Text="Device Token (DPAPI-sealed)" FontSize="12" Foreground="{DynamicResource TextMuted}" Margin="0,0,0,6"/>
+                                                    <Grid Margin="0,0,0,12">
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="*"/>
+                                                            <ColumnDefinition Width="Auto"/>
+                                                        </Grid.ColumnDefinitions>
+                                                        <PasswordBox x:Name="SetTokenPasswordBox" Style="{StaticResource PasswordFieldStyle}" FontFamily="Consolas"/>
+                                                        <TextBox x:Name="SetTokenPlainBox" Visibility="Collapsed" Style="{StaticResource FieldStyle}" FontFamily="Consolas"/>
+                                                        <StackPanel Grid.Column="1" Orientation="Horizontal" Margin="8,0,0,0">
+                                                            <Button x:Name="ToggleTokenVisBtn" Content="Show" Style="{StaticResource BtnStyle}" Padding="12,6" FontSize="12" Click="OnToggleTokenVisClick" Margin="0,0,6,0"/>
+                                                            <Button Content="Copy" Style="{StaticResource BtnStyle}" Padding="12,6" FontSize="12" Click="OnCopyTokenClick" Margin="0,0,6,0"/>
+                                                            <Button Content="Reload" Style="{StaticResource BtnStyle}" Padding="12,6" FontSize="12" Click="OnReloadTokenClick" Margin="0,0,6,0"/>
+                                                            <Button Content="Enroll..." Style="{StaticResource BtnStyle}" Padding="12,6" FontSize="12" Click="OnOpenEnrollModalClick" Margin="0,0,6,0"/>
+                                                            <Button Content="Clear Token" Style="{StaticResource DangerBtnStyle}" Padding="12,6" FontSize="12" Click="OnClearTokenClick"/>
+                                                        </StackPanel>
+                                                    </Grid>
+
+                                                    <UniformGrid Columns="2" Margin="-6,0,-6,0">
+                                                        <StackPanel Margin="6,0">
+                                                            <TextBlock Text="C++ Desktop Named Pipe Name" FontSize="12" Foreground="{DynamicResource TextMuted}" Margin="0,0,0,6"/>
+                                                            <TextBox x:Name="SetPipeNameBox" Style="{StaticResource FieldStyle}" FontFamily="Consolas"/>
+                                                        </StackPanel>
+                                                        <StackPanel Margin="6,0">
+                                                            <TextBlock Text="Named-Pipe HMAC Secret (optional, DPAPI-sealed)" FontSize="12" Foreground="{DynamicResource TextMuted}" Margin="0,0,0,6"/>
+                                                            <PasswordBox x:Name="SetPipeHmacSecretBox" Style="{StaticResource PasswordFieldStyle}" FontFamily="Consolas"/>
+                                                        </StackPanel>
+                                                    </UniformGrid>
+                                                </StackPanel>
+                                            </Border>
+
+                                            <!-- APPEARANCE -->
+                                            <Border x:Name="SetSectionAppearance" Background="{DynamicResource BgCard}" BorderBrush="{DynamicResource BorderHairline}" BorderThickness="1" CornerRadius="12" Padding="20" Margin="0,0,0,14">
+                                                <StackPanel>
+                                                    <TextBlock Text="Appearance &amp; Workspace Layout" FontSize="13" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}" Margin="0,0,0,12"/>
+
+                                                    <TextBlock Text="Application Theme" FontSize="12" Foreground="{DynamicResource TextMuted}" Margin="0,0,0,6"/>
+                                                    <ComboBox x:Name="SetThemeCombo" Style="{StaticResource SaaSComboBoxStyle}" Width="240" HorizontalAlignment="Left" Margin="0,0,0,14">
+                                                        <ComboBoxItem Content="Dark Theme" Tag="dark"/>
+                                                        <ComboBoxItem Content="Light Theme" Tag="light"/>
+                                                        <ComboBoxItem Content="Follow Windows System" Tag="system"/>
+                                                    </ComboBox>
+
+                                                    <CheckBox x:Name="SetCompactSidebarChk" Style="{StaticResource ToggleSwitchStyle}" Content="Start with compact icon-only navigation sidebar"/>
+                                                </StackPanel>
+                                            </Border>
+
+                                            <!-- ADVANCED -->
+                                            <Border x:Name="SetSectionAdvanced" Background="{DynamicResource BgCard}" BorderBrush="{DynamicResource BorderHairline}" BorderThickness="1" CornerRadius="12" Padding="20">
+                                                <StackPanel>
+                                                    <TextBlock Text="Advanced, Diagnostics &amp; Updates" FontSize="13" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}" Margin="0,0,0,12"/>
+
+                                                    <TextBlock Text="Custom Update Manifest URL (optional override)" FontSize="12" Foreground="{DynamicResource TextMuted}" Margin="0,0,0,6"/>
+                                                    <TextBox x:Name="SetUpdateManifestUrlBox" Style="{StaticResource FieldStyle}" FontFamily="Consolas" Tag="https://.../api/updates/manifest" Margin="0,0,0,12"/>
+
+                                                    <CheckBox x:Name="SetAutoCheckUpdatesChk" Style="{StaticResource ToggleSwitchStyle}" Content="Check for signed releases automatically on startup" Margin="0,0,0,12"/>
+
+                                                    <Grid>
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="*"/>
+                                                            <ColumnDefinition Width="Auto"/>
+                                                        </Grid.ColumnDefinitions>
+                                                        <TextBlock Grid.Column="0" x:Name="SetUpdateStatusText" Text="Current version: v0.3.0" FontSize="12" FontFamily="Consolas" Foreground="{DynamicResource TextMuted}" VerticalAlignment="Center"/>
+                                                        <WrapPanel Grid.Column="1" VerticalAlignment="Center">
+                                                            <Button Content="Copy Diagnostics" Style="{StaticResource BtnStyle}" Click="OnCopyDiagnosticsClick" Margin="0,2,8,2"/>
+                                                            <Button Content="Export Bundle (.zip)" Style="{StaticResource BtnStyle}" Click="OnExportDiagnosticsBundleClick" Margin="0,2,8,2"/>
+                                                            <Button Content="Open Logs" Style="{StaticResource BtnStyle}" Click="OnOpenLogsFolderClick" Margin="0,2,8,2"/>
+                                                            <Button Content="Open Config Dir" Style="{StaticResource BtnStyle}" Click="OnOpenConfigDirClick" Margin="0,2,8,2"/>
+                                                            <Button Content="Check Updates" Style="{StaticResource BtnStyle}" Click="OnCheckUpdatesClick" Margin="0,2,0,2"/>
+                                                        </WrapPanel>
+                                                    </Grid>
+                                                </StackPanel>
+                                            </Border>
+                                        </StackPanel>
+                                    </ScrollViewer>
+                                </Grid>
                             </TabItem>
                         </TabControl>
                     </Grid>
                 </Grid>
+            </Grid>
+
+            <!-- FULL-WINDOW SIGN-IN & DEVICE ENROLLMENT PAGE (shown automatically when not enrolled) -->
+            <Grid x:Name="SignInPageOverlay" Grid.RowSpan="2" Visibility="Collapsed" Background="{DynamicResource BgCanvas}">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="48"/>
+                    <RowDefinition Height="*"/>
+                </Grid.RowDefinitions>
+
+                <!-- Draggable Caption & Theme Controls -->
+                <Border Grid.Row="0" Background="{DynamicResource BgCanvas}" BorderBrush="{DynamicResource BorderHairline}" BorderThickness="0,0,0,1" Padding="20,0,12,0">
+                    <Grid VerticalAlignment="Center">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                            <Border Width="22" Height="22" CornerRadius="6" Background="{DynamicResource AccentPrimary}" Margin="0,0,8,0">
+                                <TextBlock Text="AI" FontSize="10" FontWeight="SemiBold" Foreground="#FFFFFF" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            </Border>
+                            <TextBlock Text="AI Bridge" FontSize="13" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}" VerticalAlignment="Center"/>
+                            <TextBlock Text=" · Device Onboarding" FontSize="12" Foreground="{DynamicResource TextMuted}" VerticalAlignment="Center"/>
+                        </StackPanel>
+                        <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                            <Button Style="{StaticResource BtnStyle}" Padding="7,6" WindowChrome.IsHitTestVisibleInChrome="True"
+                                    Click="OnToggleThemeClick" Margin="0,0,8,0" ToolTip="Toggle Dark / Light Theme">
+                                <TextBlock x:Name="SignInThemeIcon" Text="&#xE708;" FontFamily="Segoe MDL2 Assets" FontSize="12"/>
+                            </Button>
+                            <Button Content="&#xE921;" Style="{StaticResource CaptionBtnStyle}" Click="OnMinimizeWindowClick" ToolTip="Minimize"/>
+                            <Button Content="&#xE922;" Style="{StaticResource CaptionBtnStyle}" Click="OnMaximizeRestoreClick" ToolTip="Maximize / Restore"/>
+                            <Button Content="&#xE8BB;" Style="{StaticResource CaptionBtnStyle}" Click="OnCloseToTrayClick" ToolTip="Close"/>
+                        </StackPanel>
+                    </Grid>
+                </Border>
+
+                <!-- Centered SaaS Sign-In & Onboarding Wizard Card -->
+                <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                    <Border Width="472" VerticalAlignment="Center" HorizontalAlignment="Center" Margin="24"
+                            Background="{DynamicResource BgCard}" BorderBrush="{DynamicResource BorderHairline}" BorderThickness="1" CornerRadius="14" Padding="28">
+                        <StackPanel PreviewKeyDown="OnSignInKeyDown">
+                            <StackPanel Orientation="Horizontal" Margin="0,0,0,14">
+                                <Border Width="34" Height="34" CornerRadius="9" Background="{DynamicResource AccentPrimary}" Margin="0,0,12,0">
+                                    <TextBlock Text="AI" FontSize="13" FontWeight="Bold" Foreground="#FFFFFF" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                </Border>
+                                <StackPanel VerticalAlignment="Center">
+                                    <TextBlock Text="Sign in to AI Bridge" FontSize="18" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}"/>
+                                    <TextBlock Text="Enroll this Windows workstation with your Control Plane" FontSize="12" Foreground="{DynamicResource TextSecondary}" Margin="0,2,0,0"/>
+                                </StackPanel>
+                            </StackPanel>
+
+                            <!-- Multi-Step Progress Bar (#09) -->
+                            <ProgressBar x:Name="SignInWizProgress" Height="4" Minimum="0" Maximum="100" Value="50"
+                                         Foreground="{DynamicResource AccentPrimary}" Background="{DynamicResource BgElevated}" BorderThickness="0" Margin="0,0,0,12"/>
+                            <UniformGrid Columns="2" Margin="0,0,0,16">
+                                <Button x:Name="WizTab1Btn" Content="1 · Endpoint &amp; Auth" Style="{StaticResource ChipActiveStyle}" Click="OnWizStepTabClick" Tag="1" Margin="0,0,4,0"/>
+                                <Button x:Name="WizTab2Btn" Content="2 · Workstation Guardrails" Style="{StaticResource ChipBtnStyle}" Click="OnWizStepTabClick" Tag="2" Margin="4,0,0,0"/>
+                            </UniformGrid>
+
+                            <!-- STEP 1: ENDPOINT & AUTH -->
+                            <StackPanel x:Name="SignInStep1Panel">
+                                <Border Background="{DynamicResource BgInput}" BorderBrush="{DynamicResource BorderHairline}" BorderThickness="1" CornerRadius="9" Padding="4" Margin="0,0,0,16">
+                                    <UniformGrid Columns="2">
+                                        <Button x:Name="SignInModeAccountBtn" Content="Sign In with Account" Style="{StaticResource ChipActiveStyle}" Click="OnSignInModeClick" Tag="ACCOUNT"/>
+                                        <Button x:Name="SignInModeTokenBtn" Content="Use Device / Admin Token" Style="{StaticResource ChipBtnStyle}" Click="OnSignInModeClick" Tag="TOKEN"/>
+                                    </UniformGrid>
+                                </Border>
+
+                                <TextBlock Text="Control Plane URL" FontSize="12" Foreground="{DynamicResource TextMuted}" Margin="0,0,0,6"/>
+                                <Grid Margin="0,0,0,12">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBox x:Name="SignInUrlBox" Style="{StaticResource FieldStyle}" FontFamily="Consolas"/>
+                                    <Button Grid.Column="1" Content="Ping" Style="{StaticResource BtnStyle}" Padding="12,7" Click="OnSignInPingClick" Margin="8,0,0,0"/>
+                                </Grid>
+
+                                <TextBlock Text="Workstation Name / Device ID" FontSize="12" Foreground="{DynamicResource TextMuted}" Margin="0,0,0,6"/>
+                                <TextBox x:Name="SignInDeviceNameBox" Style="{StaticResource FieldStyle}" FontFamily="Consolas" Margin="0,0,0,12"/>
+
+                                <StackPanel x:Name="SignInAccountPanel">
+                                    <TextBlock Text="Username" FontSize="12" Foreground="{DynamicResource TextMuted}" Margin="0,0,0,6"/>
+                                    <TextBox x:Name="SignInUsernameBox" Style="{StaticResource FieldStyle}" Tag="admin or user email" Margin="0,0,0,12"/>
+
+                                    <TextBlock Text="Password" FontSize="12" Foreground="{DynamicResource TextMuted}" Margin="0,0,0,6"/>
+                                    <PasswordBox x:Name="SignInPasswordBox" Style="{StaticResource PasswordFieldStyle}" Margin="0,0,0,14"/>
+
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <Button Grid.Column="0" x:Name="SignInAccountSubmitBtn" Content="Sign In &amp; Enroll Device" Style="{StaticResource PrimaryBtnStyle}"
+                                                Padding="14,10" FontSize="13" Click="OnSignInAccountSubmitClick"/>
+                                        <Button Grid.Column="1" Content="Guardrails →" Style="{StaticResource BtnStyle}" Padding="12,10" Margin="8,0,0,0" Click="OnWizStepTabClick" Tag="2"/>
+                                    </Grid>
+                                </StackPanel>
+
+                                <StackPanel x:Name="SignInTokenPanel" Visibility="Collapsed">
+                                    <TextBlock Text="Device Token or Admin Token" FontSize="12" Foreground="{DynamicResource TextMuted}" Margin="0,0,0,6"/>
+                                    <PasswordBox x:Name="SignInTokenBox" Style="{StaticResource PasswordFieldStyle}" FontFamily="Consolas" Margin="0,0,0,14"/>
+
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <Button Grid.Column="0" x:Name="SignInTokenSubmitBtn" Content="Verify &amp; Connect" Style="{StaticResource PrimaryBtnStyle}"
+                                                Padding="14,10" FontSize="13" Click="OnSignInTokenSubmitClick"/>
+                                        <Button Grid.Column="1" Content="Guardrails →" Style="{StaticResource BtnStyle}" Padding="12,10" Margin="8,0,0,0" Click="OnWizStepTabClick" Tag="2"/>
+                                    </Grid>
+                                </StackPanel>
+                            </StackPanel>
+
+                            <!-- STEP 2: INITIAL GUARDRAILS PRESET -->
+                            <StackPanel x:Name="SignInStep2Panel" Visibility="Collapsed">
+                                <TextBlock Text="Choose initial execution permissions for this workstation before connecting:"
+                                           FontSize="12" Foreground="{DynamicResource TextSecondary}" TextWrapping="Wrap" Margin="0,0,0,12"/>
+                                <CheckBox x:Name="WizAllowWritesChk" IsChecked="True" Style="{StaticResource ToggleSwitchStyle}" Content="Allow Tier 2: Workspace file writes"/>
+                                <CheckBox x:Name="WizAllowTier3Chk" IsChecked="True" Style="{StaticResource ToggleSwitchStyle}" Content="Allow Tier 3: Desktop vision &amp; screenshots"/>
+                                <CheckBox x:Name="WizAllowDesktopChk" IsChecked="False" Style="{StaticResource ToggleSwitchStyle}" Content="Allow Interactive Desktop Control (SendInput / UI Automation)"/>
+                                <CheckBox x:Name="WizAllowShellChk" IsChecked="False" Style="{StaticResource ToggleSwitchStyle}" Content="Allow Shell Execution (run_shell)" Margin="0,0,0,14"/>
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <Button Grid.Column="0" Content="← Back" Style="{StaticResource BtnStyle}" Padding="12,10" Click="OnWizStepTabClick" Tag="1" Margin="0,0,8,0"/>
+                                    <Button Grid.Column="1" Content="Apply Guardrails &amp; Sign In" Style="{StaticResource PrimaryBtnStyle}" Padding="14,10" FontSize="13" Click="OnWizApplyAndSubmitClick"/>
+                                </Grid>
+                            </StackPanel>
+
+                            <TextBlock x:Name="SignInStatusText" Text="" FontSize="11.5" FontFamily="Consolas" Foreground="{DynamicResource WarningText}"
+                                       TextWrapping="Wrap" Margin="0,12,0,0" Visibility="Collapsed"/>
+
+                            <Border Height="1" Background="{DynamicResource BorderHairline}" Margin="0,18,0,14"/>
+
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Text="Sealed with Windows DPAPI (CurrentUser)" FontSize="11" Foreground="{DynamicResource TextMuted}" VerticalAlignment="Center"/>
+                                <Button Grid.Column="1" Content="Continue offline →" Style="{StaticResource ChipBtnStyle}" Click="OnSignInContinueOfflineClick"/>
+                            </Grid>
+                        </StackPanel>
+                    </Border>
+                </ScrollViewer>
+            </Grid>
+
+            <!-- SLIDE-OVER INSPECTOR DRAWER (#17) -->
+            <Grid x:Name="InspectorDrawerOverlay" Grid.RowSpan="2" Visibility="Collapsed" Background="#77000000" MouseDown="OnDrawerBackdropClick">
+                <Border x:Name="InspectorDrawerPanel" HorizontalAlignment="Right" Width="430"
+                        Background="{DynamicResource BgCard}" BorderBrush="{DynamicResource BorderHairline}" BorderThickness="1,0,0,0" Padding="22">
+                    <Border.RenderTransform>
+                        <TranslateTransform x:Name="DrawerSlideTransform" X="0"/>
+                    </Border.RenderTransform>
+                    <DockPanel>
+                        <Grid DockPanel.Dock="Top" Margin="0,0,0,14">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Grid.Column="0">
+                                <TextBlock x:Name="DrawerTitleText" Text="Workstation Inspector" FontSize="16" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}"/>
+                                <TextBlock x:Name="DrawerSubtitleText" Text="Live runtime metadata" FontSize="12" Foreground="{DynamicResource TextSecondary}" Margin="0,2,0,0"/>
+                            </StackPanel>
+                            <Button Grid.Column="1" Content="&#xE8BB;" Style="{StaticResource IconBtnStyle}" Click="OnCloseDrawerClick" ToolTip="Close Drawer"/>
+                        </Grid>
+
+                        <Border DockPanel.Dock="Bottom" BorderBrush="{DynamicResource BorderHairline}" BorderThickness="0,1,0,0" Padding="0,14,0,0" Margin="0,14,0,0">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <Button Grid.Column="0" Content="Copy Details" Style="{StaticResource BtnStyle}" HorizontalAlignment="Left" Click="OnCopyDrawerDetailClick"/>
+                                <Button Grid.Column="1" Content="Done" Style="{StaticResource PrimaryBtnStyle}" Click="OnCloseDrawerClick"/>
+                            </Grid>
+                        </Border>
+
+                        <Border Background="{DynamicResource ConsoleCardBg}" BorderBrush="#1A1E2B" BorderThickness="1" CornerRadius="10" Padding="12">
+                            <TextBox x:Name="DrawerDetailBox" Background="Transparent" Foreground="#CBD5E1" BorderThickness="0"
+                                     FontFamily="Consolas" FontSize="12" IsReadOnly="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"/>
+                        </Border>
+                    </DockPanel>
+                </Border>
             </Grid>
 
             <!-- TOAST -->

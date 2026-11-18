@@ -45,9 +45,9 @@ public sealed class NativeToolExecutor
                 "get_service_status" or "windows_service_status" => await GetServiceStatusAsync(args, ct),
                 "get_recent_logs" or "windows_event_logs" => await GetEventLogsAsync(args, ct),
                 "list_processes" => ListProcesses(args),
-                "list_workspace" => ListWorkspace(config.Workspace, args),
-                "read_workspace_file" or "read_file" => ReadWorkspaceFile(config.Workspace, args),
-                "search_workspace" => SearchWorkspace(config.Workspace, args),
+                "list_workspace" => ListWorkspace(config, args),
+                "read_workspace_file" or "read_file" => ReadWorkspaceFile(config, args),
+                "search_workspace" => SearchWorkspace(config, args),
                 "create_workspace_file" or "write_file" => CreateWorkspaceFile(config, args),
                 "edit_workspace_file" => EditWorkspaceFile(config, args),
                 "move_workspace_file" => MoveWorkspaceFile(config, args),
@@ -56,15 +56,17 @@ public sealed class NativeToolExecutor
                 "get_screen_size" => GetScreenSize(),
                 "get_desktop_status" or "desktop_get_status" => new
                 {
-                    pipe_available = NamedPipeBridge.IsDesktopAgentAvailable(),
-                    pipe_name = NamedPipeBridge.PipeName,
+                    pipe_available = NamedPipeBridge.IsDesktopAgentAvailable(config.DesktopPipeName),
+                    pipe_name = string.IsNullOrWhiteSpace(config.DesktopPipeName) ? NamedPipeBridge.PipeName : config.DesktopPipeName,
                     desktop_control_enabled = config.Policy.AllowDesktopControl,
+                    clipboard_enabled = config.Policy.AllowClipboard,
+                    max_tier_unattended = config.Policy.MaxTierUnattended,
                     allowed_apps = config.Policy.AllowedApps,
                 },
                 "list_desktop_windows" => ListDesktopWindows(args),
                 "focus_window" => FocusDesktopWindow(config, args),
                 "launch_approved_application" => LaunchApprovedApplication(config, args),
-                "get_clipboard" or "desktop_clipboard_get" => new { text = WindowManagementService.GetClipboardText() },
+                "get_clipboard" or "desktop_clipboard_get" => GetClipboard(config),
                 "set_clipboard" or "desktop_clipboard_set" => SetClipboard(config, args),
                 "get_ui_tree" or "find_elements" or "list_ui_elements" => FindUiElements(args),
                 "click_element" or "click_text" => ClickUiElement(config, args),
@@ -223,17 +225,18 @@ public sealed class NativeToolExecutor
         return candidate;
     }
 
-    private static object ListWorkspace(string workspaceRoot, JsonElement args)
+    private static object ListWorkspace(AgentGuiConfig config, JsonElement args)
     {
         var rel = args.TryGetProperty("path", out var p) ? p.GetString() ?? "" : "";
-        var target = ConfineWorkspacePath(workspaceRoot, rel);
+        var target = ConfineWorkspacePath(config.Workspace, rel);
         if (!Directory.Exists(target))
         {
             throw new DirectoryNotFoundException($"Directory not found: {rel}");
         }
 
+        int maxList = Math.Clamp(config.MaxListEntries, 10, 1000);
         var entries = Directory.EnumerateFileSystemEntries(target)
-            .Take(200)
+            .Take(maxList)
             .Select(e => new
             {
                 name = Path.GetFileName(e),
@@ -245,10 +248,10 @@ public sealed class NativeToolExecutor
         return new { path = rel, entries };
     }
 
-    private static object ReadWorkspaceFile(string workspaceRoot, JsonElement args)
+    private static object ReadWorkspaceFile(AgentGuiConfig config, JsonElement args)
     {
         var rel = args.TryGetProperty("path", out var p) ? p.GetString() ?? "" : "";
-        var target = ConfineWorkspacePath(workspaceRoot, rel);
+        var target = ConfineWorkspacePath(config.Workspace, rel);
         var fileName = Path.GetFileName(target);
         if (fileName.StartsWith(".env", StringComparison.OrdinalIgnoreCase) ||
             fileName.EndsWith(".pem", StringComparison.OrdinalIgnoreCase) ||
@@ -257,14 +260,15 @@ public sealed class NativeToolExecutor
             throw new UnauthorizedAccessException($"Reading secret file '{fileName}' is blocked by policy.");
         }
         var content = File.ReadAllText(target);
-        if (content.Length > 100_000)
+        int maxRead = Math.Clamp(config.MaxReadBytes, 1024, 2_000_000);
+        if (content.Length > maxRead)
         {
-            content = content[..100_000] + "\n...[truncated]";
+            content = content[..maxRead] + "\n...[truncated]";
         }
         return new { path = rel, content };
     }
 
-    private static object SearchWorkspace(string workspaceRoot, JsonElement args)
+    private static object SearchWorkspace(AgentGuiConfig config, JsonElement args)
     {
         var query = args.TryGetProperty("query", out var q) ? q.GetString() ?? "" : "";
         if (string.IsNullOrWhiteSpace(query))
@@ -272,7 +276,8 @@ public sealed class NativeToolExecutor
             throw new ArgumentException("Search query is required.");
         }
 
-        var root = ConfineWorkspacePath(workspaceRoot, "");
+        var root = ConfineWorkspacePath(config.Workspace, "");
+        int maxMatches = Math.Clamp(config.MaxListEntries, 10, 1000);
         var matches = new List<object>();
         foreach (var file in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories).Take(500))
         {
@@ -282,7 +287,7 @@ public sealed class NativeToolExecutor
                 if (text.Contains(query, StringComparison.OrdinalIgnoreCase))
                 {
                     matches.Add(new { path = Path.GetRelativePath(root, file) });
-                    if (matches.Count >= 50) break;
+                    if (matches.Count >= maxMatches) break;
                 }
             }
             catch
@@ -295,7 +300,7 @@ public sealed class NativeToolExecutor
 
     private static object CreateWorkspaceFile(AgentGuiConfig config, JsonElement args)
     {
-        if (!config.Policy.AllowWrites)
+        if (!config.Policy.AllowWrites || config.Policy.MaxTierUnattended < 2)
         {
             throw new UnauthorizedAccessException("Policy denied: Tier 2 workspace writes are disabled.");
         }
@@ -311,7 +316,7 @@ public sealed class NativeToolExecutor
 
     private static object EditWorkspaceFile(AgentGuiConfig config, JsonElement args)
     {
-        if (!config.Policy.AllowTier3)
+        if (!config.Policy.AllowTier3 || config.Policy.MaxTierUnattended < 3)
         {
             throw new UnauthorizedAccessException("Policy denied: Tier 3 sensitive operations are disabled.");
         }
@@ -345,7 +350,7 @@ public sealed class NativeToolExecutor
 
     private static object MoveWorkspaceFile(AgentGuiConfig config, JsonElement args)
     {
-        if (!config.Policy.AllowTier3)
+        if (!config.Policy.AllowTier3 || config.Policy.MaxTierUnattended < 3)
         {
             throw new UnauthorizedAccessException("Policy denied: Tier 3 sensitive operations are disabled.");
         }
@@ -367,7 +372,7 @@ public sealed class NativeToolExecutor
 
     private static object DeleteWorkspaceFile(AgentGuiConfig config, JsonElement args)
     {
-        if (!config.Policy.AllowTier4)
+        if (!config.Policy.AllowTier4 || config.Policy.MaxTierUnattended < 4)
         {
             throw new UnauthorizedAccessException("Policy denied: Tier 4 high-risk operations are disabled.");
         }
@@ -390,17 +395,21 @@ public sealed class NativeToolExecutor
         }
     }
 
+    private string ResolveScreenshotDir(AgentGuiConfig config) =>
+        string.IsNullOrWhiteSpace(config.ScreenshotDirectory) ? _screenshotDir : config.ScreenshotDirectory;
+
     private object CaptureScreenshot(AgentGuiConfig config, JsonElement args)
     {
-        if (!config.Policy.AllowTier3)
+        if (!config.Policy.AllowTier3 || config.Policy.MaxTierUnattended < 3)
         {
             throw new UnauthorizedAccessException("Policy denied: Tier 3 sensitive operations are disabled.");
         }
+        var dir = ResolveScreenshotDir(config);
         bool fullDesktop = args.TryGetProperty("full_desktop", out var fdEl) && fdEl.ValueKind == JsonValueKind.True;
         int monitorIdx = args.TryGetProperty("monitor_index", out var mEl) && mEl.TryGetInt32(out var m) ? m : 0;
         var shot = fullDesktop
-            ? ScreenCaptureService.CaptureVirtualDesktop(_screenshotDir)
-            : ScreenCaptureService.CapturePrimaryScreen(_screenshotDir, monitorIdx);
+            ? ScreenCaptureService.CaptureVirtualDesktop(dir)
+            : ScreenCaptureService.CapturePrimaryScreen(dir, monitorIdx);
         return new
         {
             path = shot.FilePath,
@@ -408,26 +417,28 @@ public sealed class NativeToolExecutor
             width = shot.Width,
             height = shot.Height,
             size_bytes = shot.SizeBytes,
+            base64_data = shot.Base64Png,
             image_base64 = shot.Base64Png,
         };
     }
 
     private object CaptureWindowScreenshot(AgentGuiConfig config, JsonElement args)
     {
-        if (!config.Policy.AllowTier3)
+        if (!config.Policy.AllowTier3 || config.Policy.MaxTierUnattended < 3)
         {
             throw new UnauthorizedAccessException("Policy denied: Tier 3 sensitive operations are disabled.");
         }
         var title = args.TryGetProperty("title", out var tEl) ? tEl.GetString()
             : args.TryGetProperty("query", out var qEl) ? qEl.GetString() : null;
         long? hwnd = args.TryGetProperty("handle", out var hEl) && hEl.TryGetInt64(out var h) ? h : null;
-        var shot = ScreenCaptureService.CaptureWindow(_screenshotDir, title, hwnd);
+        var shot = ScreenCaptureService.CaptureWindow(ResolveScreenshotDir(config), title, hwnd);
         return new
         {
             path = shot.FilePath,
             width = shot.Width,
             height = shot.Height,
             size_bytes = shot.SizeBytes,
+            base64_data = shot.Base64Png,
             image_base64 = shot.Base64Png,
         };
     }
@@ -493,9 +504,22 @@ public sealed class NativeToolExecutor
         return new { status = "launched", app = clean, pid = proc.Id };
     }
 
+    private static object GetClipboard(AgentGuiConfig config)
+    {
+        if (!config.Policy.AllowClipboard)
+        {
+            throw new UnauthorizedAccessException("Policy denied: clipboard synchronization is disabled.");
+        }
+        return new { text = WindowManagementService.GetClipboardText() };
+    }
+
     private static object SetClipboard(AgentGuiConfig config, JsonElement args)
     {
         RequireDesktopControl(config);
+        if (!config.Policy.AllowClipboard)
+        {
+            throw new UnauthorizedAccessException("Policy denied: clipboard synchronization is disabled.");
+        }
         var text = args.TryGetProperty("text", out var tEl) ? tEl.GetString() ?? "" : "";
         WindowManagementService.SetClipboardText(text);
         return new { status = "ok", length = text.Length };
@@ -503,7 +527,7 @@ public sealed class NativeToolExecutor
 
     private static void RequireDesktopControl(AgentGuiConfig config)
     {
-        if (!config.Policy.AllowTier3 || !config.Policy.AllowDesktopControl)
+        if (!config.Policy.AllowTier3 || config.Policy.MaxTierUnattended < 3 || !config.Policy.AllowDesktopControl)
         {
             throw new UnauthorizedAccessException("Policy denied: interactive desktop control is disabled.");
         }
@@ -623,7 +647,7 @@ public sealed class NativeToolExecutor
 
     private static async Task<object> RunShellAsync(AgentGuiConfig config, JsonElement args, CancellationToken ct)
     {
-        if (!config.Policy.AllowTier4 || !config.Policy.AllowShell)
+        if (!config.Policy.AllowTier4 || config.Policy.MaxTierUnattended < 4 || !config.Policy.AllowShell)
         {
             throw new UnauthorizedAccessException("Policy denied: Tier 4 shell execution is disabled.");
         }
@@ -634,9 +658,21 @@ public sealed class NativeToolExecutor
             throw new ArgumentException("Shell command is required.");
         }
 
+        if (config.Policy.AllowedCommands.Count > 0)
+        {
+            var firstToken = Path.GetFileName(command.Trim().Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries)[0]);
+            if (!config.Policy.AllowedCommands.Any(c =>
+                string.Equals(Path.GetFileName(c.Trim()), firstToken, StringComparison.OrdinalIgnoreCase)))
+            {
+                throw new UnauthorizedAccessException($"Policy denied: command '{firstToken}' is not in AllowedCommands.");
+            }
+        }
+
+        int defaultSec = Math.Clamp(config.DefaultTimeoutSeconds, 1, 3600);
+        int maxSec = Math.Clamp(config.MaxTimeoutSeconds, defaultSec, 3600);
         var timeoutSec = args.TryGetProperty("timeout", out var tEl) && tEl.TryGetInt32(out var t)
-            ? Math.Clamp(t, 1, 300)
-            : 60;
+            ? Math.Clamp(t, 1, maxSec)
+            : defaultSec;
 
         var cwd = ConfineWorkspacePath(config.Workspace, "");
         var psi = new ProcessStartInfo
@@ -665,11 +701,16 @@ public sealed class NativeToolExecutor
             var stdoutTask = proc.StandardOutput.ReadToEndAsync(cts.Token);
             var stderrTask = proc.StandardError.ReadToEndAsync(cts.Token);
             await proc.WaitForExitAsync(cts.Token);
+            var stdout = await stdoutTask;
+            var stderr = await stderrTask;
+            int maxOut = Math.Clamp(config.MaxOutputBytes, 1024, 2_000_000);
+            if (stdout.Length > maxOut) stdout = stdout[..maxOut] + "\n...[truncated]";
+            if (stderr.Length > maxOut) stderr = stderr[..maxOut] + "\n...[truncated]";
             return new
             {
                 returncode = proc.ExitCode,
-                stdout = await stdoutTask,
-                stderr = await stderrTask,
+                stdout,
+                stderr,
             };
         }
         catch (OperationCanceledException)

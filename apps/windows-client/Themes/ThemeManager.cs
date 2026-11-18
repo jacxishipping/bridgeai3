@@ -1,14 +1,36 @@
 using System;
 using System.Windows;
 using System.Windows.Media;
+using Microsoft.Win32;
 
 namespace AIBridgeClient.Themes;
 
 public static class ThemeManager
 {
+    public static string ResolveEffectiveTheme(string theme)
+    {
+        if (string.Equals(theme, "system", StringComparison.OrdinalIgnoreCase))
+        {
+            try
+            {
+                using var key = Registry.CurrentUser.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Themes\Personalize", false);
+                if (key?.GetValue("AppsUseLightTheme") is int val)
+                {
+                    return val == 1 ? "light" : "dark";
+                }
+            }
+            catch
+            {
+                // Default to dark on registry error
+            }
+            return "dark";
+        }
+        return string.Equals(theme, "light", StringComparison.OrdinalIgnoreCase) ? "light" : "dark";
+    }
+
     public static void ApplyTheme(string theme)
     {
-        bool isLight = string.Equals(theme, "light", StringComparison.OrdinalIgnoreCase);
+        bool isLight = string.Equals(ResolveEffectiveTheme(theme), "light", StringComparison.OrdinalIgnoreCase);
         var res = System.Windows.Application.Current.Resources;
 
         if (isLight)
@@ -44,6 +66,16 @@ public static class ThemeManager
             SetBrush(res, "IndigoText", 0x4F, 0x46, 0xE5);     // #4F46E5
             SetBrush(res, "ErrorText", 0xDC, 0x26, 0x26);      // #DC2626
             SetBrush(res, "WarningText", 0xD9, 0x77, 0x06);    // #D97706
+
+            // Circular KPI Icon Badges (Light)
+            SetBrush(res, "BadgeBlueBg", 0xEB, 0xF5, 0xFF);
+            SetBrush(res, "BadgeBlueFg", 0x25, 0x63, 0xEB);
+            SetBrush(res, "BadgePurpleBg", 0xF3, 0xEE, 0xFF);
+            SetBrush(res, "BadgePurpleFg", 0x7C, 0x3A, 0xED);
+            SetBrush(res, "BadgeGreenBg", 0xEC, 0xFD, 0xF5);
+            SetBrush(res, "BadgeGreenFg", 0x05, 0x96, 0x69);
+            SetBrush(res, "BadgeIndigoBg", 0xEE, 0xF2, 0xFF);
+            SetBrush(res, "BadgeIndigoFg", 0x4F, 0x46, 0xE5);
         }
         else
         {
@@ -78,6 +110,16 @@ public static class ThemeManager
             SetBrush(res, "IndigoText", 0x81, 0x8C, 0xF8);     // #818CF8
             SetBrush(res, "ErrorText", 0xF8, 0x71, 0x71);      // #F87171
             SetBrush(res, "WarningText", 0xFB, 0xBF, 0x24);    // #FBBF24
+
+            // Circular KPI Icon Badges (Dark)
+            SetBrush(res, "BadgeBlueBg", 0x17, 0x25, 0x44);
+            SetBrush(res, "BadgeBlueFg", 0x60, 0xA5, 0xFA);
+            SetBrush(res, "BadgePurpleBg", 0x25, 0x1A, 0x4A);
+            SetBrush(res, "BadgePurpleFg", 0xA7, 0x8B, 0xFA);
+            SetBrush(res, "BadgeGreenBg", 0x0E, 0x2B, 0x24);
+            SetBrush(res, "BadgeGreenFg", 0x34, 0xD3, 0x99);
+            SetBrush(res, "BadgeIndigoBg", 0x1E, 0x22, 0x48);
+            SetBrush(res, "BadgeIndigoFg", 0x81, 0x8C, 0xF8);
         }
 
         SetBrush(res, "SuccessColor", 0x10, 0xB9, 0x81);

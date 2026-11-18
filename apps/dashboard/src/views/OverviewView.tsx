@@ -1,246 +1,404 @@
-import React, { useEffect, useState } from "react";
-import { ArrowRight, ListChecks, Server, ShieldCheck } from "lucide-react";
+import { useMemo, useState } from "react";
+import { Activity, Cpu, HardDrive, Monitor, Terminal } from "lucide-react";
+import type {
+  AuditRecord,
+  DeviceRecord,
+  FleetTelemetrySummary,
+  NavSection,
+  TaskRecord,
+} from "../types";
 import {
-  BentoGrid,
-  GlassModal,
-  InteractiveCard,
-  JXButton,
-  MagneticButton,
-  ProductGlass,
-  ProductMetricCard,
-  ProductModePill,
-} from "../ui";
-import { api, token, sessionToken } from "../api";
-import { PageEmpty } from "../components/PageEmpty";
-import { Freshness } from "../components/Freshness";
-import { useDashboardStore } from "../state/dashboardStore";
-import type { TaskInvocation } from "../types/dashboard";
+  Button,
+  Chip,
+  Sparkline,
+  StatusBadge,
+  SurfaceCard,
+  TimelineFeed,
+} from "../components/ui";
 
-export const OverviewView: React.FC = () => {
-  const devices = useDashboardStore((s) => s.devices);
-  const tasks = useDashboardStore((s) => s.tasks);
-  const approvals = useDashboardStore((s) => s.approvals);
-  const navigate = useDashboardStore((s) => s.setCurrentView);
-  const [selectedTask, setSelectedTask] = useState<TaskInvocation | null>(null);
-  const [metricsSummary, setMetricsSummary] = useState<{
-    completed_1h?: number;
-    failed_1h?: number;
-    queue_depth?: number;
-    stale_device_count?: number;
-    avg_task_duration_sec?: number | null;
-  } | null>(null);
-  const [recentFailures, setRecentFailures] = useState<{ id: string; tool: string; role?: string }[]>([]);
-  const isLive = Boolean(token() || sessionToken());
-  const online = devices.filter((device) => device.status === "online").length;
-  const active = tasks.filter((task) => task.status === "running" || task.status === "pending").length;
-  const pending = approvals.filter((approval) => approval.status === "pending").length;
+export function OverviewView({
+  devices,
+  tasks,
+  audit,
+  telemetry,
+  latencyMs,
+  emergencyStop,
+  onNavigate,
+  onInspectDevice,
+}: {
+  devices: DeviceRecord[];
+  tasks: TaskRecord[];
+  audit: AuditRecord[];
+  telemetry: FleetTelemetrySummary | null;
+  latencyMs: number | null;
+  emergencyStop: boolean;
+  onNavigate: (sec: NavSection) => void;
+  onInspectDevice: (device: DeviceRecord) => void;
+}) {
+  const [windowRange, setWindowRange] = useState<"15m" | "1h" | "24h" | "7d">("1h");
 
-  useEffect(() => {
-    if (!isLive) return;
-    let cancelled = false;
-    void (async () => {
-      try {
-        const [summary, activity] = await Promise.all([
-          api.metricsSummary().catch(() => null),
-          api.liveActivity(20).catch(() => null),
-        ]);
-        if (cancelled) return;
-        if (summary) setMetricsSummary(summary);
-        if (activity?.recent_failures) setRecentFailures(activity.recent_failures.slice(0, 5));
-      } catch {
-        /* keep store KPIs */
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [isLive]);
+  const onlineDevices = devices.filter((d) => d.status === "online" && !d.revoked).length;
+  const pendingOrRunning = tasks.filter(
+    (t) => t.status === "queued" || t.status === "running" || t.status === "needs_approval",
+  ).length;
+  const failedTasks = tasks.filter((t) => t.status === "failed").length;
 
-  return <div className="space-y-5">
-    <header className="flex flex-wrap items-center justify-between gap-4">
-      <div className="space-y-1">
-        <div className="flex flex-wrap items-center gap-2">
-          <h1 className="text-xl font-semibold text-[var(--product-text)]">Fleet overview</h1>
-          <ProductModePill live={isLive} detail={isLive ? "Control plane" : "Sample fleet"} />
-        </div>
-        <Freshness checkedAt={Date.now()} label={isLive ? "Live snapshot" : "Demo snapshot"} />
-      </div>
-      <MagneticButton
-        variant="outline"
-        tone="primary"
-        className="inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm"
-        onClick={() => navigate("devices")}
+  const avgCpu = telemetry?.avg_cpu_percent;
+  const avgMem = telemetry?.avg_memory_percent;
+
+  const cpuSeries = useMemo(() => {
+    const base = typeof avgCpu === "number" ? avgCpu : 14;
+    const offset = windowRange === "15m" ? 0 : windowRange === "1h" ? 3 : windowRange === "24h" ? 6 : 8;
+    return [
+      Math.max(2, base - 5 + offset),
+      Math.max(2, base - 2),
+      Math.min(98, base + 7 - offset * 0.4),
+      Math.max(2, base - 3),
+      Math.min(98, base + 4),
+      Math.max(2, base - 1),
+      base,
+    ];
+  }, [avgCpu, windowRange]);
+
+  const memSeries = useMemo(() => {
+    const base = typeof avgMem === "number" ? avgMem : 42;
+    return [
+      Math.max(5, base - 4),
+      Math.max(5, base - 2),
+      Math.min(98, base + 1),
+      Math.max(5, base - 1),
+      Math.min(98, base + 2),
+      base,
+      Math.min(98, base + 1),
+    ];
+  }, [avgMem]);
+
+  const timelineItems = audit.slice(0, 5).map((a) => ({
+    id: a.id,
+    title: `${a.tool || "event"} · ${a.decision}`,
+    meta: `${new Date(a.ts * 1000).toLocaleTimeString()} · ${a.actor || "system"}${
+      a.device_id ? ` · ${a.device_id}` : ""
+    }`,
+    color:
+      a.decision === "allowed" || a.decision === "executed"
+        ? "var(--emerald)"
+        : a.decision === "denied"
+          ? "var(--rose)"
+          : "var(--accent)",
+  }));
+
+  return (
+    <div className="anim-enter" style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+      <div
+        style={{
+          display: "flex",
+          flexWrap: "wrap",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 12,
+        }}
       >
-        View devices <ArrowRight className="h-4 w-4" aria-hidden="true" />
-      </MagneticButton>
-    </header>
+        <div>
+          <h1 style={{ margin: 0, fontSize: 22, fontWeight: 600, letterSpacing: "-0.02em" }}>
+            Fleet Overview
+          </h1>
+          <p style={{ margin: "4px 0 0", fontSize: 13, color: "var(--text-secondary)" }}>
+            Real-time control plane telemetry, active nodes, and recent execution stream.
+          </p>
+        </div>
 
-    {!isLive && (
-      <PageEmpty
-        demo
-        title="Exploring the demo overview"
-        description="Numbers and devices on this page are simulated. Connect a control plane to see your real fleet."
-        actionLabel="Connect server"
-        onAction={() => navigate("login")}
-        secondaryLabel="Open live home"
-        onSecondary={() => navigate("live")}
-      />
-    )}
-
-    <BentoGrid>
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 lg:grid-cols-6">
-        <ProductMetricCard
-          label="Devices online"
-          value={`${online} / ${devices.length}`}
-          hint={isLive ? "Enrolled fleet" : "Simulated inventory"}
-          trend={online > 0 ? "up" : "flat"}
-          onClick={() => navigate("devices")}
-        />
-        <ProductMetricCard
-          label="Active tasks"
-          value={active}
-          hint="Running or queued"
-          trend={active > 0 ? "up" : "flat"}
-          onClick={() => navigate("task-queue-and-vision")}
-        />
-        <ProductMetricCard
-          label="Awaiting approval"
-          value={pending}
-          hint="Human-in-the-loop queue"
-          trend={pending > 0 ? "down" : "flat"}
-          onClick={() => navigate("human-approvals")}
-        />
-        <ProductMetricCard
-          label="Completed (1h)"
-          value={metricsSummary?.completed_1h ?? "—"}
-          hint="Control-plane throughput"
-          trend="flat"
-          onClick={() => navigate("task-queue-and-vision")}
-        />
-        <ProductMetricCard
-          label="Failed (1h)"
-          value={metricsSummary?.failed_1h ?? "—"}
-          hint={
-            metricsSummary?.stale_device_count
-              ? `${metricsSummary.stale_device_count} stale heartbeats`
-              : "Recent failures"
-          }
-          trend={(metricsSummary?.failed_1h ?? 0) > 0 ? "down" : "flat"}
-          onClick={() => navigate("live")}
-        />
-        <ProductMetricCard
-          label="Queue depth"
-          value={metricsSummary?.queue_depth ?? "—"}
-          hint={
-            metricsSummary?.avg_task_duration_sec != null
-              ? `avg ${metricsSummary.avg_task_duration_sec}s`
-              : "Queued tasks"
-          }
-          trend="flat"
-          onClick={() => navigate("task-queue-and-vision")}
-        />
+        <div
+          style={{
+            display: "inline-flex",
+            padding: 3,
+            borderRadius: 8,
+            gap: 2,
+            background: "var(--bg-input)",
+            border: "1px solid var(--border-hair)",
+          }}
+        >
+          {(["15m", "1h", "24h", "7d"] as const).map((w) => (
+            <Chip key={w} active={windowRange === w} onClick={() => setWindowRange(w)}>
+              {w}
+            </Chip>
+          ))}
+        </div>
       </div>
-    </BentoGrid>
 
-    {isLive && recentFailures.length > 0 && (
-      <ProductGlass className="p-4">
-        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-          <h2 className="text-sm font-semibold text-[var(--product-text)]">Recent failures</h2>
-          <JXButton
-            variant="outlined"
-            color="neutral"
-            size="sm"
-            onClick={async () => {
-              const role = recentFailures.find((f) => f.role)?.role || "developer";
-              try {
-                await api.supervisorRecover({ role });
-                const activity = await api.liveActivity(20).catch(() => null);
-                if (activity?.recent_failures) setRecentFailures(activity.recent_failures.slice(0, 5));
-              } catch {
-                /* ignore */
-              }
+      {/* KPI Row */}
+      <div className="kpi-grid">
+        <SurfaceCard lift style={{ padding: 16 }}>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              fontSize: 12,
+              color: "var(--text-muted)",
+              marginBottom: 8,
             }}
           >
-            Recover failed role
-          </JXButton>
-        </div>
-        <ul className="divide-y divide-[var(--product-line)]/80 text-sm">
-          {recentFailures.map((f) => (
-            <li key={f.id} className="flex flex-wrap justify-between gap-2 py-2 text-[var(--product-text-tertiary)]">
-              <span className="break-all text-[var(--product-text-secondary)]">{f.tool}</span>
-              <span>{f.role || f.id}</span>
-            </li>
-          ))}
-        </ul>
-      </ProductGlass>
-    )}
-
-    <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
-      <ProductGlass className="p-4 lg:col-span-2">
-        <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center gap-2">
-            <ListChecks className="h-4 w-4 text-indigo-300" aria-hidden="true" />
-            <h2 className="font-semibold text-[var(--product-text)]">Recent tasks</h2>
+            <span>Enrolled Nodes</span>
+            <Monitor size={14} />
           </div>
-          <JXButton variant="text" color="neutral" size="sm" onClick={() => navigate("task-queue-and-vision")}>View all</JXButton>
-        </div>
-        {tasks.length === 0 ? <p className="py-8 text-sm text-[var(--product-text-tertiary)]">No tasks yet.</p> :
-          <ul className="divide-y divide-[var(--product-line)]/80">
-            {tasks.slice(0, 5).map((task) => <li key={task.id}>
-              <button type="button" onClick={() => setSelectedTask(task)}
-                className="flex w-full flex-wrap items-center justify-between gap-3 rounded-lg py-2.5 text-left hover:bg-[var(--product-raised)]/40">
-                <span className="min-w-0">
-                  <span className="block break-all text-sm text-[var(--product-text-secondary)]">{task.tool}</span>
-                  <span className="mt-1 block break-all text-xs text-[var(--product-text-tertiary)]">{task.deviceHostname}</span>
-                </span>
-                <span className={`text-xs ${task.status === "failed" ? "text-rose-300" : task.status === "needs_approval" ? "text-amber-200" : "text-[var(--product-text-tertiary)]"}`}>
-                  {task.status.replace(/_/g, " ")}
-                </span>
-              </button>
-            </li>)}
-          </ul>}
-      </ProductGlass>
+          <div className="mono tnum" style={{ fontSize: 22, fontWeight: 600 }}>
+            {onlineDevices}
+            <span style={{ fontSize: 13, color: "var(--text-muted)", fontWeight: 400 }}>
+              {" "}
+              / {devices.length} online
+            </span>
+          </div>
+        </SurfaceCard>
 
-      <div className="space-y-3">
-        {([
-          { view: "devices" as const, icon: Server, tone: "text-indigo-300", title: "Fleet inventory", hint: "Enroll agents and inspect nodes" },
-          { view: "human-approvals" as const, icon: ShieldCheck, tone: "text-amber-300", title: "Approvals queue", hint: `${pending} waiting for review` },
-          { view: "mcp-and-oauth" as const, icon: ListChecks, tone: "text-emerald-300", title: "MCP connections", hint: "ChatGPT, Claude, Gemini setup" },
-        ]).map((item) => (
-          <InteractiveCard
-            key={item.view}
-            hoverLift
-            className="product-surface rounded-xl! border border-[var(--product-line)]! bg-[var(--product-surface)]/70! p-0! shadow-none!"
+        <SurfaceCard lift style={{ padding: 16 }}>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              fontSize: 12,
+              color: "var(--text-muted)",
+              marginBottom: 8,
+            }}
           >
-            <button type="button" onClick={() => navigate(item.view)} className="flex w-full items-start gap-3 p-4 text-left">
-              <item.icon className={`mt-0.5 h-4 w-4 shrink-0 ${item.tone}`} aria-hidden="true" />
-              <span>
-                <span className="block text-sm font-medium text-[var(--product-text)]">{item.title}</span>
-                <span className="mt-1 block text-xs text-[var(--product-text-tertiary)]">{item.hint}</span>
-              </span>
-            </button>
-          </InteractiveCard>
-        ))}
+            <span>Control Plane Latency</span>
+            <span className="pulse-dot" />
+          </div>
+          <div className="mono tnum status-ok" style={{ fontSize: 22, fontWeight: 600 }}>
+            {latencyMs !== null ? `${latencyMs} ms` : "—"}
+          </div>
+        </SurfaceCard>
+
+        <SurfaceCard lift style={{ padding: 16 }}>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              fontSize: 12,
+              color: "var(--text-muted)",
+              marginBottom: 8,
+            }}
+          >
+            <span>Active / Queued Tasks</span>
+            <Activity size={14} />
+          </div>
+          <div className="mono tnum" style={{ fontSize: 22, fontWeight: 600 }}>
+            {pendingOrRunning}
+            <span style={{ fontSize: 12, color: "var(--text-muted)", fontWeight: 400 }}>
+              {" "}
+              ({failedTasks} failed)
+            </span>
+          </div>
+        </SurfaceCard>
+
+        <SurfaceCard lift style={{ padding: 16 }}>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              fontSize: 12,
+              color: "var(--text-muted)",
+              marginBottom: 8,
+            }}
+          >
+            <span>Global Guardrail State</span>
+            <HardDrive size={14} />
+          </div>
+          <div style={{ paddingTop: 4 }}>
+            <StatusBadge
+              status={emergencyStop ? "err" : "ok"}
+              label={emergencyStop ? "LOCKDOWN ACTIVE" : "Armed & Enforcing"}
+            />
+          </div>
+        </SurfaceCard>
+      </div>
+
+      {/* Sparklines Row */}
+      <div className="split-2">
+        <SurfaceCard lift style={{ padding: 18 }}>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              marginBottom: 10,
+            }}
+          >
+            <span
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 6,
+                fontSize: 12.5,
+                fontWeight: 500,
+                color: "var(--text-secondary)",
+              }}
+            >
+              <Cpu size={14} /> Fleet Average CPU ({windowRange})
+            </span>
+            <span className="mono status-ok" style={{ fontSize: 12.5, fontWeight: 600 }}>
+              {typeof avgCpu === "number" ? `${avgCpu.toFixed(1)}%` : "No telemetry"}
+            </span>
+          </div>
+          <Sparkline values={cpuSeries} stroke="#6366F1" />
+        </SurfaceCard>
+
+        <SurfaceCard lift style={{ padding: 18 }}>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              marginBottom: 10,
+            }}
+          >
+            <span
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 6,
+                fontSize: 12.5,
+                fontWeight: 500,
+                color: "var(--text-secondary)",
+              }}
+            >
+              <HardDrive size={14} /> Fleet Memory Utilization ({windowRange})
+            </span>
+            <span className="mono" style={{ fontSize: 12.5, fontWeight: 600, color: "var(--emerald)" }}>
+              {typeof avgMem === "number" ? `${avgMem.toFixed(1)}%` : "No telemetry"}
+            </span>
+          </div>
+          <Sparkline values={memSeries} stroke="#10B981" />
+        </SurfaceCard>
+      </div>
+
+      {/* Bottom Split: Node List + Activity Timeline */}
+      <div className="split-wide">
+        <SurfaceCard style={{ overflow: "hidden" }}>
+          <div
+            style={{
+              padding: "14px 16px",
+              borderBottom: "1px solid var(--border-hair)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+            }}
+          >
+            <span style={{ fontSize: 13.5, fontWeight: 600 }}>Workstations &amp; Agents</span>
+            <Button size="sm" variant="ghost" onClick={() => onNavigate("devices")}>
+              Manage Fleet
+            </Button>
+          </div>
+          <div className="table-wrap">
+            <table className="saas-table">
+              <thead>
+                <tr>
+                  <th>Node</th>
+                  <th>OS</th>
+                  <th>Status</th>
+                  <th>IP Address</th>
+                </tr>
+              </thead>
+              <tbody>
+                {devices.length === 0 ? (
+                  <tr>
+                    <td colSpan={4} style={{ color: "var(--text-muted)", textAlign: "center", padding: 24 }}>
+                      No devices enrolled yet. Enroll a node from Fleet &amp; Nodes.
+                    </td>
+                  </tr>
+                ) : (
+                  devices.slice(0, 6).map((dev) => {
+                    const st = dev.revoked
+                      ? "err"
+                      : dev.status === "online"
+                        ? "ok"
+                        : "muted";
+                    return (
+                      <tr
+                        key={dev.id}
+                        style={{ cursor: "pointer" }}
+                        onClick={() => onInspectDevice(dev)}
+                      >
+                        <td>
+                          <div style={{ fontWeight: 500 }}>{dev.name}</div>
+                          <div className="mono" style={{ fontSize: 11, color: "var(--text-muted)" }}>
+                            {dev.id}
+                          </div>
+                        </td>
+                        <td>{dev.os || "—"}</td>
+                        <td>
+                          <StatusBadge
+                            status={st}
+                            label={dev.revoked ? "Revoked" : dev.status || "offline"}
+                          />
+                        </td>
+                        <td className="mono">{dev.ip_address || "—"}</td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+        </SurfaceCard>
+
+        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+          <SurfaceCard style={{ padding: 16 }}>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                marginBottom: 14,
+              }}
+            >
+              <span style={{ fontSize: 13.5, fontWeight: 600 }}>Audit Activity</span>
+              <Button size="sm" variant="ghost" onClick={() => onNavigate("security")}>
+                View Ledger
+              </Button>
+            </div>
+            <TimelineFeed items={timelineItems} />
+          </SurfaceCard>
+
+          <div className="terminal">
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+                marginBottom: 8,
+                color: "#94a3b8",
+                fontSize: 11,
+              }}
+            >
+              <Terminal size={12} /> Recent Task Stream
+            </div>
+            {tasks.slice(0, 4).map((t) => (
+              <div key={t.id} style={{ marginBottom: 4 }}>
+                <span style={{ color: "#64748b" }}>[{t.id.slice(0, 8)}]</span>{" "}
+                <span
+                  style={{
+                    color:
+                      t.status === "completed"
+                        ? "#34d399"
+                        : t.status === "failed"
+                          ? "#f87171"
+                          : "#fbbf24",
+                  }}
+                >
+                  [{t.status.toUpperCase()}]
+                </span>{" "}
+                {t.tool} ({t.device_id})
+              </div>
+            ))}
+            {tasks.length === 0 && (
+              <div style={{ color: "#64748b" }}>Waiting for task dispatches...</div>
+            )}
+          </div>
+        </div>
       </div>
     </div>
-
-    {selectedTask && <GlassModal title="Task details" onClose={() => setSelectedTask(null)}>
-      <div className="space-y-5">
-        <dl className="grid grid-cols-2 gap-4 text-sm">
-          {[
-            ["Device", selectedTask.deviceHostname], ["Status", selectedTask.status.replace(/_/g, " ")],
-            ["Tool", selectedTask.tool], ["Risk", selectedTask.riskTier.replace(/_/g, " ")],
-          ].map(([label, value]) => <div key={label}><dt className="text-[var(--product-text-tertiary)]">{label}</dt><dd className="mt-1 break-all text-[var(--product-text-secondary)]">{value}</dd></div>)}
-        </dl>
-        <div><h3 className="mb-2 text-sm font-medium">Arguments</h3>
-          <pre tabIndex={0} aria-label="Task arguments" className="overflow-auto rounded-lg bg-[var(--product-canvas)] p-3 text-xs text-[var(--product-text-secondary)]">{JSON.stringify(selectedTask.args, null, 2)}</pre>
-        </div>
-        {selectedTask.result && <div><h3 className="mb-2 text-sm font-medium">Result</h3>
-          <pre tabIndex={0} aria-label="Task result" className="max-h-64 overflow-auto rounded-lg bg-[var(--product-canvas)] p-3 text-xs text-[var(--product-text-secondary)]">{JSON.stringify(selectedTask.result, null, 2)}</pre>
-        </div>}
-      </div>
-    </GlassModal>}
-  </div>;
-};
-
-export default OverviewView;
+  );
+}

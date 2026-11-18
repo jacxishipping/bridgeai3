@@ -22,10 +22,12 @@ public sealed class ConfigService
     public string ConfigDir { get; }
     public string ConfigFile { get; }
     public string TokenFile { get; }
+    public string PipeHmacSecretFile { get; }
     public string TaskHistoryFile { get; }
     public string PolicyAuditFile { get; }
     public string LogDir { get; }
     public string ClientLogFile { get; }
+    public string DefaultScreenshotDir { get; }
     private readonly object _logLock = new();
 
     public ConfigService()
@@ -34,10 +36,12 @@ public sealed class ConfigService
         ConfigDir = Path.Combine(home, ".ai-bridge");
         ConfigFile = Path.Combine(ConfigDir, "agent_gui.json");
         TokenFile = Path.Combine(ConfigDir, "device.token");
+        PipeHmacSecretFile = Path.Combine(ConfigDir, "pipe_hmac.token");
         TaskHistoryFile = Path.Combine(ConfigDir, "task_history.json");
         PolicyAuditFile = Path.Combine(ConfigDir, "policy_audit.json");
         LogDir = Path.Combine(ConfigDir, "logs");
         ClientLogFile = Path.Combine(LogDir, "ai-bridge-client.log");
+        DefaultScreenshotDir = Path.Combine(ConfigDir, "screenshots");
         Directory.CreateDirectory(ConfigDir);
         Directory.CreateDirectory(LogDir);
     }
@@ -54,11 +58,24 @@ public sealed class ConfigService
                 {
                     cfg.Policy ??= new AgentPolicyConfig();
                     cfg.Policy.AllowedApps ??= new List<string>();
+                    cfg.Policy.AllowedCommands ??= new List<string>();
                     if (string.IsNullOrWhiteSpace(cfg.Workspace))
                     {
                         cfg.Workspace = Path.Combine(
                             Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
                             "ai-bridge-workspace");
+                    }
+                    if (string.IsNullOrWhiteSpace(cfg.ScreenshotDirectory))
+                    {
+                        cfg.ScreenshotDirectory = DefaultScreenshotDir;
+                    }
+                    if (string.IsNullOrWhiteSpace(cfg.DesktopPipeName))
+                    {
+                        cfg.DesktopPipeName = "AIBridgeDesktopPipe";
+                    }
+                    if (string.IsNullOrWhiteSpace(cfg.TenantId))
+                    {
+                        cfg.TenantId = "default";
                     }
                     return cfg;
                 }
@@ -74,6 +91,7 @@ public sealed class ConfigService
             Workspace = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
                 "ai-bridge-workspace"),
+            ScreenshotDirectory = DefaultScreenshotDir,
         };
     }
 
@@ -103,6 +121,26 @@ public sealed class ConfigService
         DpapiTokenStore.SaveTokenFile(TokenFile, token);
     }
 
+    public void ClearToken()
+    {
+        try { if (File.Exists(TokenFile)) File.Delete(TokenFile); } catch { }
+    }
+
+    public string LoadPipeHmacSecret()
+    {
+        try { return DpapiTokenStore.LoadTokenFile(PipeHmacSecretFile); } catch { return string.Empty; }
+    }
+
+    public void SavePipeHmacSecret(string secret)
+    {
+        if (string.IsNullOrWhiteSpace(secret))
+        {
+            try { if (File.Exists(PipeHmacSecretFile)) File.Delete(PipeHmacSecretFile); } catch { }
+            return;
+        }
+        DpapiTokenStore.SaveTokenFile(PipeHmacSecretFile, secret.Trim());
+    }
+
     public List<TaskHistoryRecord> LoadTaskHistory()
     {
         try
@@ -120,11 +158,12 @@ public sealed class ConfigService
         return new List<TaskHistoryRecord>();
     }
 
-    public void SaveTaskHistory(List<TaskHistoryRecord> records)
+    public void SaveTaskHistory(List<TaskHistoryRecord> records, int maxLimit = TaskHistoryLimit)
     {
-        if (records.Count > TaskHistoryLimit)
+        int cap = Math.Clamp(maxLimit, 50, 2000);
+        if (records.Count > cap)
         {
-            records = records.GetRange(0, TaskHistoryLimit);
+            records = records.GetRange(0, cap);
         }
         var json = JsonSerializer.Serialize(records, JsonOpts);
         var tmp = TaskHistoryFile + ".tmp";
@@ -163,14 +202,15 @@ public sealed class ConfigService
         }
     }
 
-    public void AppendLogLine(string line)
+    public void AppendLogLine(string line, int maxFileMb = 2)
     {
         try
         {
+            long maxBytes = Math.Clamp(maxFileMb, 1, 50) * 1024L * 1024L;
             lock (_logLock)
             {
                 Directory.CreateDirectory(LogDir);
-                if (File.Exists(ClientLogFile) && new FileInfo(ClientLogFile).Length > 2 * 1024 * 1024)
+                if (File.Exists(ClientLogFile) && new FileInfo(ClientLogFile).Length > maxBytes)
                 {
                     var rotated = ClientLogFile + ".1";
                     File.Move(ClientLogFile, rotated, overwrite: true);

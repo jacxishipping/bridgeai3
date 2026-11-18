@@ -74,16 +74,18 @@ public partial class App : System.Windows.Application
         };
 
         int initialTab = 0;
+        bool explicitTab = false;
         foreach (var arg in e.Args)
         {
             if (arg.StartsWith("--tab=", StringComparison.OrdinalIgnoreCase) &&
                 int.TryParse(arg[6..], out var parsedTab))
             {
                 initialTab = parsedTab;
+                explicitTab = true;
             }
         }
 
-        _mainWindow = new MainWindow(initialTab);
+        _mainWindow = new MainWindow(initialTab, suppressAutoSignIn: explicitTab);
         _mainWindow.Show();
     }
 
