@@ -8,7 +8,14 @@ using System.Windows.Forms;
 
 namespace AIBridgeClient.Services;
 
-public sealed record MonitorDescriptor(int Index, string Name, int Width, int Height, bool IsPrimary)
+public sealed record MonitorDescriptor(
+    int Index,
+    string Name,
+    int Width,
+    int Height,
+    bool IsPrimary,
+    int BoundsX = 0,
+    int BoundsY = 0)
 {
     public string DisplayLabel => $"{Index}: {(IsPrimary ? "Primary" : "Display")} ({Width}x{Height})";
     public override string ToString() => DisplayLabel;
@@ -25,7 +32,7 @@ public static class ScreenCaptureService
         for (int i = 0; i < screens.Length; i++)
         {
             var s = screens[i];
-            list.Add(new MonitorDescriptor(i, s.DeviceName, s.Bounds.Width, s.Bounds.Height, s.Primary));
+            list.Add(new MonitorDescriptor(i, s.DeviceName, s.Bounds.Width, s.Bounds.Height, s.Primary, s.Bounds.X, s.Bounds.Y));
         }
         return list;
     }
@@ -39,14 +46,35 @@ public static class ScreenCaptureService
             : (Screen.PrimaryScreen ?? screens.FirstOrDefault());
 
         var bounds = screen?.Bounds ?? new Rectangle(0, 0, 1920, 1080);
+        return CaptureBounds(outputDir, bounds, monitorIndex, $"screenshot_m{monitorIndex}");
+    }
 
+    public static ScreenshotResult CaptureVirtualDesktop(string outputDir)
+    {
+        var vs = SystemInformation.VirtualScreen;
+        return CaptureBounds(outputDir, vs, -1, "screenshot_desktop");
+    }
+
+    public static ScreenshotResult CaptureWindow(string outputDir, string? titleQuery = null, long? handle = null)
+    {
+        DesktopWindowInfo win = (string.IsNullOrWhiteSpace(titleQuery) && (handle is null || handle <= 0))
+            ? WindowManagementService.ResolveWindow(null, WindowManagementService.GetActiveWindowHandle().ToInt64())
+            : WindowManagementService.FocusWindow(titleQuery, handle);
+
+        var rect = new Rectangle(win.X, win.Y, Math.Max(1, win.Width), Math.Max(1, win.Height));
+        return CaptureBounds(outputDir, rect, -2, $"screenshot_win_{win.Pid}");
+    }
+
+    private static ScreenshotResult CaptureBounds(string outputDir, Rectangle bounds, int monitorIndex, string prefix)
+    {
+        Directory.CreateDirectory(outputDir);
         using var bitmap = new Bitmap(bounds.Width, bounds.Height, PixelFormat.Format32bppArgb);
         using (var graphics = Graphics.FromImage(bitmap))
         {
             graphics.CopyFromScreen(bounds.Location, Point.Empty, bounds.Size, CopyPixelOperation.SourceCopy);
         }
 
-        var fileName = $"screenshot_m{monitorIndex}_{DateTimeOffset.Now:yyyyMMdd_HHmmss}.png";
+        var fileName = $"{prefix}_{DateTimeOffset.Now:yyyyMMdd_HHmmss_fff}.png";
         var filePath = Path.Combine(outputDir, fileName);
 
         using var ms = new MemoryStream();

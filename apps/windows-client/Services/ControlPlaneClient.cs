@@ -249,6 +249,10 @@ public sealed class ControlPlaneClient : IDisposable
         if (active)
         {
             _activeTaskCts?.Cancel();
+            if (NamedPipeBridge.IsDesktopAgentAvailable())
+            {
+                _ = Task.Run(() => NamedPipeBridge.ReleaseAllInputAsync(CancellationToken.None));
+            }
             LogMessage?.Invoke("err", "EMERGENCY ALL-STOP ACTIVE: task execution halted.");
         }
         else
@@ -544,9 +548,14 @@ public sealed class ControlPlaneClient : IDisposable
         var t = toolName.Trim();
         var dot = t.LastIndexOf('.');
         if (dot >= 0) t = t[(dot + 1)..];
-        return t is "run_shell" or "mouse_move" or "mouse_click" or "mouse_scroll"
-            or "keyboard_type" or "key_press" or "click_element" or "click_text"
+        return t is "run_shell" or "delete_workspace_file" or "edit_workspace_file" or "move_workspace_file"
+            or "mouse_move" or "mouse_click" or "mouse_scroll" or "mouse_drag"
+            or "desktop_mouse_move" or "desktop_click" or "desktop_scroll" or "desktop_keyboard"
+            or "keyboard_type" or "key_press" or "keyboard_press" or "press_hotkey"
+            or "click_element" or "click_text" or "focus_window" or "launch_approved_application"
+            or "set_clipboard" or "desktop_clipboard_set"
             or "capture_desktop_screenshot" or "take_screenshot" or "capture_desktop_frame"
+            or "desktop_get_screenshot" or "desktop_get_window_screenshot"
             or "start_webrtc_stream" or "stop_webrtc_stream";
     }
 

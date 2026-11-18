@@ -55,6 +55,24 @@ public sealed class AgentGuiConfig
     [JsonPropertyName("auto_connect")]
     public bool AutoConnect { get; set; } = false;
 
+    [JsonPropertyName("minimize_to_tray")]
+    public bool MinimizeToTray { get; set; } = true;
+
+    [JsonPropertyName("notifications_enabled")]
+    public bool NotificationsEnabled { get; set; } = true;
+
+    [JsonPropertyName("window_width")]
+    public double WindowWidth { get; set; } = 1300;
+
+    [JsonPropertyName("window_height")]
+    public double WindowHeight { get; set; } = 840;
+
+    [JsonPropertyName("window_maximized")]
+    public bool WindowMaximized { get; set; } = false;
+
+    [JsonPropertyName("last_tab")]
+    public int LastTab { get; set; } = 0;
+
     [JsonPropertyName("policy")]
     public AgentPolicyConfig Policy { get; set; } = new();
 }

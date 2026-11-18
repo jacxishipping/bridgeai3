@@ -46,6 +46,7 @@ public partial class MainWindow : Window
     private bool? _sidebarManualCompact;
     private bool _tokenVisible;
     private bool _allowRealClose;
+    private bool _consoleExpanded;
 
     private readonly Queue<double> _cpuHistory = new();
     private readonly Queue<double> _memHistory = new();
@@ -86,6 +87,20 @@ public partial class MainWindow : Window
         _config = _configService.LoadConfig();
         _deviceToken = _configService.LoadToken();
         _taskHistory = _configService.LoadTaskHistory();
+        foreach (var entry in _configService.LoadPolicyAudit())
+        {
+            _policyAuditHistory.Add(entry);
+        }
+
+        if (_config.WindowWidth >= MinWidth && _config.WindowHeight >= MinHeight)
+        {
+            Width = _config.WindowWidth;
+            Height = _config.WindowHeight;
+        }
+        if (_config.WindowMaximized)
+        {
+            WindowState = WindowState.Maximized;
+        }
 
         var screenshotDir = System.IO.Path.Combine(_configService.ConfigDir, "screenshots");
         _executor = new NativeToolExecutor(_monitor, screenshotDir);
@@ -117,13 +132,17 @@ public partial class MainWindow : Window
         LoadHardwareInfo();
         LoadConfigIntoUi();
         RefreshMonitorList();
+        LoadSavedCaptureHistory(screenshotDir);
         RefreshTaskGrid();
         RefreshProcessesGrid();
         RefreshSystemMonitor();
         ApplyResponsiveLayout(Width);
-        if (initialTab > 0 && initialTab < TabMeta.Length)
+        int startTab = initialTab > 0 && initialTab < TabMeta.Length
+            ? initialTab
+            : (_config.LastTab > 0 && _config.LastTab < TabMeta.Length ? _config.LastTab : 0);
+        if (startTab > 0)
         {
-            SelectTab(initialTab);
+            SelectTab(startTab);
         }
         AppendLog("info", "AI Bridge Native C# Client initialized.");
 
@@ -232,8 +251,10 @@ public partial class MainWindow : Window
     private void LoadHardwareInfo()
     {
         var hw = _monitor.GetHardwareInfo();
+        var (product, displayVer, build) = DiagnosticsService.GetWindowsEditionAndBuild();
+        var verLabel = string.IsNullOrWhiteSpace(displayVer) ? $"Build {build}" : $"{displayVer} (Build {build})";
         MonGpuText.Text = hw.GpuName;
-        MonCpuModelText.Text = $"{hw.CpuName} ({hw.LogicalCores} threads)";
+        MonCpuModelText.Text = $"{hw.CpuName} ({hw.LogicalCores} threads) · {product} {verLabel}";
     }
 
     private void BuildPaletteCommands()
@@ -251,6 +272,8 @@ public partial class MainWindow : Window
             new PaletteCommand("Action: Pause / Resume", () => OnTogglePauseClick(this, new RoutedEventArgs())),
             new PaletteCommand("Action: Ping Control Plane", () => OnPingClick(this, new RoutedEventArgs())),
             new PaletteCommand("Action: Capture Screenshot", () => { SelectTab(3); OnCaptureScreenshotClick(this, new RoutedEventArgs()); }),
+            new PaletteCommand("Action: Expand / Collapse Console", () => { SelectTab(0); OnToggleExpandConsoleClick(this, new RoutedEventArgs()); }),
+            new PaletteCommand("Action: Copy Diagnostics Report", () => OnCopyDiagnosticsClick(this, new RoutedEventArgs())),
             new PaletteCommand("Action: Toggle Light / Dark Theme", () => OnToggleThemeClick(this, new RoutedEventArgs())),
         });
     }
@@ -361,12 +384,16 @@ public partial class MainWindow : Window
     private void SetupSystemTray()
     {
         var menu = new ContextMenuStrip();
-        menu.Items.Add("Show Window", null, (_, _) => ShowFromTray());
-        menu.Items.Add("Start / Stop Agent", null, (_, _) => OnToggleAgentClick(this, new RoutedEventArgs()));
-        menu.Items.Add("Pause / Resume", null, (_, _) => OnTogglePauseClick(this, new RoutedEventArgs()));
-        menu.Items.Add("Ping Control Plane", null, (_, _) => OnPingClick(this, new RoutedEventArgs()));
+        menu.Items.Add("Show Window", null, (_, _) => Dispatcher.Invoke(ShowFromTray));
+        menu.Items.Add("Start / Stop Agent", null, (_, _) => Dispatcher.Invoke(() => OnToggleAgentClick(this, new RoutedEventArgs())));
+        menu.Items.Add("Pause / Resume", null, (_, _) => Dispatcher.Invoke(() => OnTogglePauseClick(this, new RoutedEventArgs())));
+        menu.Items.Add("Ping Control Plane", null, (_, _) => Dispatcher.Invoke(() => OnPingClick(this, new RoutedEventArgs())));
         menu.Items.Add(new ToolStripSeparator());
-        menu.Items.Add("Exit", null, (_, _) => ExitApplication());
+        menu.Items.Add("Capture Screenshot", null, (_, _) => Dispatcher.Invoke(() => { SelectTab(3); OnCaptureScreenshotClick(this, new RoutedEventArgs()); }));
+        menu.Items.Add("Toggle Light / Dark Theme", null, (_, _) => Dispatcher.Invoke(() => OnToggleThemeClick(this, new RoutedEventArgs())));
+        menu.Items.Add("Open Logs Folder", null, (_, _) => Dispatcher.Invoke(() => OnOpenLogsFolderClick(this, new RoutedEventArgs())));
+        menu.Items.Add(new ToolStripSeparator());
+        menu.Items.Add("Exit", null, (_, _) => Dispatcher.Invoke(ExitApplication));
 
         _trayIcon = new NotifyIcon
         {
@@ -375,23 +402,48 @@ public partial class MainWindow : Window
             Visible = true,
             ContextMenuStrip = menu,
         };
-        _trayIcon.DoubleClick += (_, _) => ShowFromTray();
+        _trayIcon.DoubleClick += (_, _) => Dispatcher.Invoke(ShowFromTray);
     }
 
     private void ShowFromTray()
     {
         Show();
-        WindowState = WindowState.Normal;
+        if (WindowState == WindowState.Minimized)
+        {
+            WindowState = WindowState.Normal;
+        }
         Activate();
+    }
+
+    private void PersistWindowBounds()
+    {
+        _config.WindowMaximized = WindowState == WindowState.Maximized;
+        if (WindowState == WindowState.Normal)
+        {
+            _config.WindowWidth = ActualWidth > 0 ? ActualWidth : Width;
+            _config.WindowHeight = ActualHeight > 0 ? ActualHeight : Height;
+        }
+        _config.LastTab = MainTabs.SelectedIndex >= 0 ? MainTabs.SelectedIndex : 0;
+        _configService.SaveConfig(_config);
     }
 
     protected override void OnClosing(System.ComponentModel.CancelEventArgs e)
     {
-        if (!_allowRealClose)
+        PersistWindowBounds();
+        if (!_allowRealClose && _config.MinimizeToTray)
         {
             e.Cancel = true;
             Hide();
-            _trayIcon?.ShowBalloonTip(2000, "AI Bridge", "Client minimized to system tray.", ToolTipIcon.Info);
+            if (_config.NotificationsEnabled)
+            {
+                _trayIcon?.ShowBalloonTip(2000, "AI Bridge", "Client minimized to system tray.", ToolTipIcon.Info);
+            }
+            return;
+        }
+        if (!_allowRealClose)
+        {
+            e.Cancel = true;
+            ExitApplication();
             return;
         }
         base.OnClosing(e);
@@ -400,6 +452,7 @@ public partial class MainWindow : Window
     private async void ExitApplication()
     {
         _allowRealClose = true;
+        PersistWindowBounds();
         _monitorTimer.Stop();
         await _client.StopAsync();
         _client.Dispose();
@@ -484,6 +537,8 @@ public partial class MainWindow : Window
         SetPollIntervalBox.Text = _config.PollIntervalSeconds.ToString();
         SetAutoStartChk.IsChecked = _configService.IsAutoStartEnabled();
         SetAutoConnectChk.IsChecked = _config.AutoConnect;
+        SetMinimizeToTrayChk.IsChecked = _config.MinimizeToTray;
+        SetNotificationsChk.IsChecked = _config.NotificationsEnabled;
         SetTokenPasswordBox.Password = _deviceToken;
         SetTokenPlainBox.Text = _deviceToken;
     }
@@ -493,6 +548,40 @@ public partial class MainWindow : Window
         var monitors = ScreenCaptureService.GetMonitors();
         VisionMonitorCombo.ItemsSource = monitors;
         if (monitors.Count > 0) VisionMonitorCombo.SelectedIndex = 0;
+
+        var (_, _, vw, vh, _, _) = DesktopInputService.GetVirtualScreenSize();
+        var summary = string.Join("\n", monitors.Select(m =>
+            $"• Display {m.Index}{(m.IsPrimary ? " [Primary]" : "")}: {m.Width}x{m.Height} @ ({m.BoundsX},{m.BoundsY})"));
+        VisionDisplayInfoText.Text = $"{monitors.Count} display(s) · Virtual {vw}x{vh}\n{summary}";
+    }
+
+    private void LoadSavedCaptureHistory(string screenshotDir)
+    {
+        try
+        {
+            if (!Directory.Exists(screenshotDir)) return;
+            var files = new DirectoryInfo(screenshotDir)
+                .GetFiles("*.png")
+                .OrderByDescending(f => f.LastWriteTimeUtc)
+                .Take(30);
+            foreach (var f in files)
+            {
+                _captureHistory.Add(new CaptureHistoryItem(
+                    f.FullName,
+                    0,
+                    $"{f.LastWriteTime:MM-dd HH:mm} · {f.Name} ({Math.Max(1, f.Length / 1024)} KB)",
+                    $"{Math.Max(1, f.Length / 1024)} KB",
+                    f.LastWriteTime.ToString("HH:mm:ss")));
+            }
+            if (_captureHistory.Count > 0)
+            {
+                CaptureHistoryEmptyText.Visibility = Visibility.Collapsed;
+            }
+        }
+        catch
+        {
+            // Ignore unreadable screenshots directory
+        }
     }
 
     private void SetAgentButtonState(bool running, bool paused)
@@ -551,13 +640,18 @@ public partial class MainWindow : Window
         };
         _logBuffer.Add(entry);
         if (_logBuffer.Count > 1000) _logBuffer.RemoveAt(0);
+        _configService.AppendLogLine($"{DateTimeOffset.Now:yyyy-MM-dd} {entry.FormattedLine}");
         RenderLogs();
     }
 
     private void RenderLogs()
     {
+        var query = LogSearchBox?.Text?.Trim() ?? "";
         var filtered = _logBuffer.Where(x =>
-            _logFilter == "ALL" || x.Level == _logFilter || (_logFilter == "INFO" && x.Level == "OK"));
+            (_logFilter == "ALL" || x.Level == _logFilter || (_logFilter == "INFO" && x.Level == "OK")) &&
+            (string.IsNullOrEmpty(query) ||
+             x.Message.Contains(query, StringComparison.OrdinalIgnoreCase) ||
+             x.Level.Contains(query, StringComparison.OrdinalIgnoreCase)));
 
         _visibleLogs.Clear();
         foreach (var item in filtered)
@@ -568,6 +662,27 @@ public partial class MainWindow : Window
         if (LogAutoScrollChk?.IsChecked == true && _visibleLogs.Count > 0)
         {
             ActivityLogList.ScrollIntoView(_visibleLogs[^1]);
+        }
+    }
+
+    private void OnLogSearchChanged(object sender, TextChangedEventArgs e) => RenderLogs();
+
+    private void OnToggleExpandConsoleClick(object sender, RoutedEventArgs e)
+    {
+        _consoleExpanded = !_consoleExpanded;
+        var vis = _consoleExpanded ? Visibility.Collapsed : Visibility.Visible;
+        OverviewKpiGrid.Visibility = vis;
+        OverviewMiddleGrid.Visibility = vis;
+        ExpandConsoleBtn.Content = _consoleExpanded ? "\uE73F" : "\uE740";
+    }
+
+    private void OnCopySelectedLogBtnClick(object sender, RoutedEventArgs e)
+    {
+        var target = ActivityLogList.SelectedItem as LogEntry ?? _visibleLogs.LastOrDefault();
+        if (target is not null)
+        {
+            System.Windows.Clipboard.SetText(target.FormattedLine);
+            ShowToast("Copied log entry");
         }
     }
 
@@ -619,6 +734,14 @@ public partial class MainWindow : Window
         _configService.SaveTaskHistory(_taskHistory);
         KpiTasksText.Text = _taskHistory.Count.ToString();
         RefreshTaskGrid();
+        if (_config.NotificationsEnabled && !IsActive)
+        {
+            _trayIcon?.ShowBalloonTip(
+                2500,
+                $"AI Bridge · {rec.Tool}",
+                $"Task {rec.Id} {rec.Status} ({rec.DurationMs} ms)",
+                rec.Status == "succeeded" ? ToolTipIcon.Info : ToolTipIcon.Warning);
+        }
     }
 
     private void RefreshTaskGrid()
@@ -924,17 +1047,7 @@ public partial class MainWindow : Window
             int monIdx = VisionMonitorCombo.SelectedItem is MonitorDescriptor m ? m.Index : 0;
             var dir = System.IO.Path.Combine(_configService.ConfigDir, "screenshots");
             var shot = ScreenCaptureService.CapturePrimaryScreen(dir, monIdx);
-            LoadScreenshotPreview(shot.FilePath);
-            VisionMetaText.Text = $"Captured at {DateTimeOffset.Now:HH:mm:ss} · {shot.Width}x{shot.Height}";
-
-            _captureHistory.Insert(0, new CaptureHistoryItem(
-                shot.FilePath,
-                shot.MonitorIndex,
-                $"{DateTimeOffset.Now:HH:mm:ss} · M{shot.MonitorIndex} ({shot.Width}x{shot.Height})",
-                $"{shot.SizeBytes / 1024} KB",
-                DateTimeOffset.Now.ToString("HH:mm:ss")));
-            CaptureHistoryEmptyText.Visibility = Visibility.Collapsed;
-
+            RecordCaptureResult(shot, $"M{shot.MonitorIndex}");
             AppendLog("ok", $"Captured monitor {monIdx} screenshot: {shot.FilePath}");
             ShowToast("Desktop screenshot captured");
         }
@@ -942,6 +1055,43 @@ public partial class MainWindow : Window
         {
             AppendLog("err", $"Screenshot capture failed: {ex.Message}");
         }
+    }
+
+    private void OnCaptureFullDesktopClick(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var dir = System.IO.Path.Combine(_configService.ConfigDir, "screenshots");
+            var shot = ScreenCaptureService.CaptureVirtualDesktop(dir);
+            RecordCaptureResult(shot, "Virtual");
+            AppendLog("ok", $"Captured full virtual desktop ({shot.Width}x{shot.Height}): {shot.FilePath}");
+            ShowToast("Full virtual desktop captured");
+        }
+        catch (Exception ex)
+        {
+            AppendLog("err", $"Virtual desktop capture failed: {ex.Message}");
+        }
+    }
+
+    private void OnOpenScreenshotsFolderClick(object sender, RoutedEventArgs e)
+    {
+        var dir = System.IO.Path.Combine(_configService.ConfigDir, "screenshots");
+        Directory.CreateDirectory(dir);
+        Process.Start(new ProcessStartInfo(dir) { UseShellExecute = true });
+    }
+
+    private void RecordCaptureResult(ScreenshotResult shot, string label)
+    {
+        LoadScreenshotPreview(shot.FilePath);
+        VisionMetaText.Text = $"Captured {DateTimeOffset.Now:HH:mm:ss} · {shot.Width}x{shot.Height} ({Math.Max(1, shot.SizeBytes / 1024)} KB)";
+
+        _captureHistory.Insert(0, new CaptureHistoryItem(
+            shot.FilePath,
+            shot.MonitorIndex,
+            $"{DateTimeOffset.Now:HH:mm:ss} · {label} ({shot.Width}x{shot.Height})",
+            $"{Math.Max(1, shot.SizeBytes / 1024)} KB",
+            DateTimeOffset.Now.ToString("HH:mm:ss")));
+        CaptureHistoryEmptyText.Visibility = Visibility.Collapsed;
     }
 
     private void LoadScreenshotPreview(string path)
@@ -1005,6 +1155,16 @@ public partial class MainWindow : Window
         }
     }
 
+    private void RecordPolicyAudit(string message)
+    {
+        _policyAuditHistory.Insert(0, $"[{DateTimeOffset.Now:yyyy-MM-dd HH:mm:ss}] {message}");
+        while (_policyAuditHistory.Count > 200)
+        {
+            _policyAuditHistory.RemoveAt(_policyAuditHistory.Count - 1);
+        }
+        _configService.SavePolicyAudit(_policyAuditHistory);
+    }
+
     private void OnPresetFullClick(object sender, RoutedEventArgs e)
     {
         PolAllowWritesChk.IsChecked = true;
@@ -1012,7 +1172,7 @@ public partial class MainWindow : Window
         PolAllowTier4Chk.IsChecked = false;
         PolAllowShellChk.IsChecked = false;
         PolAllowDesktopChk.IsChecked = true;
-        _policyAuditHistory.Insert(0, $"[{DateTimeOffset.Now:HH:mm:ss}] Applied preset: Full Desktop");
+        RecordPolicyAudit("Applied preset: Full Desktop");
         ShowToast("Applied Full Desktop preset");
     }
 
@@ -1023,7 +1183,7 @@ public partial class MainWindow : Window
         PolAllowTier4Chk.IsChecked = false;
         PolAllowShellChk.IsChecked = false;
         PolAllowDesktopChk.IsChecked = false;
-        _policyAuditHistory.Insert(0, $"[{DateTimeOffset.Now:HH:mm:ss}] Applied preset: Workstation");
+        RecordPolicyAudit("Applied preset: Workstation");
         ShowToast("Applied Workstation preset");
     }
 
@@ -1034,7 +1194,7 @@ public partial class MainWindow : Window
         PolAllowTier4Chk.IsChecked = false;
         PolAllowShellChk.IsChecked = false;
         PolAllowDesktopChk.IsChecked = false;
-        _policyAuditHistory.Insert(0, $"[{DateTimeOffset.Now:HH:mm:ss}] Applied preset: Lockdown");
+        RecordPolicyAudit("Applied preset: Lockdown");
         ShowToast("Applied Lockdown preset");
     }
 
@@ -1047,7 +1207,7 @@ public partial class MainWindow : Window
             AllowedAppsList.Items.Add(app);
             NewAppBox.Clear();
             UpdateSecurityPostureSummary();
-            _policyAuditHistory.Insert(0, $"[{DateTimeOffset.Now:HH:mm:ss}] Allowed app added: {app}");
+            RecordPolicyAudit($"Allowed app added: {app}");
         }
     }
 
@@ -1058,7 +1218,7 @@ public partial class MainWindow : Window
             _config.Policy.AllowedApps.Remove(app);
             AllowedAppsList.Items.Remove(app);
             UpdateSecurityPostureSummary();
-            _policyAuditHistory.Insert(0, $"[{DateTimeOffset.Now:HH:mm:ss}] Allowed app removed: {app}");
+            RecordPolicyAudit($"Allowed app removed: {app}");
         }
     }
 
@@ -1072,6 +1232,10 @@ public partial class MainWindow : Window
         _config.Policy.RequireLocalApproval = PolRequireLocalApprovalChk.IsChecked == true;
         _configService.SaveConfig(_config);
         UpdateSecurityPostureSummary();
+        if (NamedPipeBridge.IsDesktopAgentAvailable())
+        {
+            _ = Task.Run(() => NamedPipeBridge.UpdateSessionPermissionsAsync(_config.Policy));
+        }
     }
 
     private void RefreshProcessesGrid()
@@ -1137,7 +1301,7 @@ public partial class MainWindow : Window
     private void OnSavePolicyClick(object sender, RoutedEventArgs e)
     {
         SavePolicyFromUi();
-        _policyAuditHistory.Insert(0, $"[{DateTimeOffset.Now:HH:mm:ss}] Saved local policy");
+        RecordPolicyAudit("Saved local policy");
         AppendLog("ok", "Local security policy saved.");
         ShowToast("Local policy saved");
     }
@@ -1152,7 +1316,7 @@ public partial class MainWindow : Window
             return;
         }
         var (ok, detail) = await _client.SyncPolicyAsync(_config.ControlUrl, _deviceToken, _config.Policy);
-        _policyAuditHistory.Insert(0, $"[{DateTimeOffset.Now:HH:mm:ss}] Sync to server: {(ok ? "OK" : "FAILED")}");
+        RecordPolicyAudit($"Sync to server: {(ok ? "OK" : "FAILED")}");
         AppendLog(ok ? "ok" : "err", detail);
         ShowToast(ok ? "Policy synced to Control Plane" : "Policy sync failed");
     }
@@ -1170,7 +1334,7 @@ public partial class MainWindow : Window
             _config.Policy = policy;
             _configService.SaveConfig(_config);
             LoadPolicyIntoUi();
-            _policyAuditHistory.Insert(0, $"[{DateTimeOffset.Now:HH:mm:ss}] Fetched policy from Control Plane");
+            RecordPolicyAudit("Fetched policy from Control Plane");
             AppendLog("ok", detail);
             ShowToast("Fetched policy from Control Plane");
         }
@@ -1227,6 +1391,8 @@ public partial class MainWindow : Window
             _config.PollIntervalSeconds = Math.Clamp(poll, 5, 30);
         }
         _config.AutoConnect = SetAutoConnectChk.IsChecked == true;
+        _config.MinimizeToTray = SetMinimizeToTrayChk.IsChecked == true;
+        _config.NotificationsEnabled = SetNotificationsChk.IsChecked == true;
 
         var tok = (_tokenVisible ? SetTokenPlainBox.Text : SetTokenPasswordBox.Password).Trim();
         _deviceToken = tok;
@@ -1240,6 +1406,63 @@ public partial class MainWindow : Window
         LoadConfigIntoUi();
         AppendLog("ok", "Configuration and DPAPI token saved.");
         ShowToast("Configuration saved");
+    }
+
+    private void OnCopyDiagnosticsClick(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var json = DiagnosticsService.BuildDiagnosticsJson(
+                _config,
+                _monitor,
+                !string.IsNullOrWhiteSpace(_deviceToken),
+                _taskHistory.Count,
+                SidebarStatusText.Text);
+            var recent = string.Join(Environment.NewLine, _logBuffer.TakeLast(50).Select(x => x.FormattedLine));
+            System.Windows.Clipboard.SetText($"{json}\n\n--- recent activity ---\n{recent}");
+            AppendLog("ok", "Copied diagnostics report to clipboard (token redacted).");
+            ShowToast("Diagnostics copied");
+        }
+        catch (Exception ex)
+        {
+            AppendLog("err", $"Failed to copy diagnostics: {ex.Message}");
+        }
+    }
+
+    private void OnExportDiagnosticsBundleClick(object sender, RoutedEventArgs e)
+    {
+        var dlg = new Microsoft.Win32.SaveFileDialog
+        {
+            FileName = $"ai-bridge-diagnostics-{DateTimeOffset.Now:yyyyMMdd-HHmmss}.zip",
+            Filter = "Zip archive (*.zip)|*.zip",
+        };
+        if (dlg.ShowDialog() != true) return;
+
+        try
+        {
+            var recent = string.Join(Environment.NewLine, _logBuffer.Select(x => x.FormattedLine));
+            DiagnosticsService.ExportDiagnosticsBundle(
+                dlg.FileName,
+                _configService,
+                _config,
+                _monitor,
+                recent,
+                !string.IsNullOrWhiteSpace(_deviceToken),
+                _taskHistory.Count,
+                SidebarStatusText.Text);
+            AppendLog("ok", $"Exported diagnostics bundle: {dlg.FileName}");
+            ShowToast("Diagnostics bundle exported");
+        }
+        catch (Exception ex)
+        {
+            AppendLog("err", $"Diagnostics export failed: {ex.Message}");
+        }
+    }
+
+    private void OnOpenLogsFolderClick(object sender, RoutedEventArgs e)
+    {
+        Directory.CreateDirectory(_configService.LogDir);
+        Process.Start(new ProcessStartInfo(_configService.LogDir) { UseShellExecute = true });
     }
 
     private void OnResetSettingsClick(object sender, RoutedEventArgs e)

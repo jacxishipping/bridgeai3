@@ -37,28 +37,48 @@ public sealed class NativeToolExecutor
         {
             object result = tool switch
             {
-                "get_system_info" or "system_info" => GetSystemInfo(),
+                "get_system_info" or "system_info" or "windows_system_info" => GetSystemInfo(),
                 "get_resource_usage" => _monitor.Sample(),
                 "get_memory_usage" => GetMemoryUsage(),
                 "get_disk_usage" => GetDiskUsage(),
                 "get_network_info" => GetNetworkInfo(),
+                "get_service_status" or "windows_service_status" => await GetServiceStatusAsync(args, ct),
+                "get_recent_logs" or "windows_event_logs" => await GetEventLogsAsync(args, ct),
                 "list_processes" => ListProcesses(args),
                 "list_workspace" => ListWorkspace(config.Workspace, args),
                 "read_workspace_file" or "read_file" => ReadWorkspaceFile(config.Workspace, args),
                 "search_workspace" => SearchWorkspace(config.Workspace, args),
-                "create_workspace_file" => CreateWorkspaceFile(config, args),
-                "get_monitors" => new { monitors = ScreenCaptureService.GetMonitors() },
-                "get_desktop_status" => new { pipe_available = NamedPipeBridge.IsDesktopAgentAvailable(), pipe_name = NamedPipeBridge.PipeName },
-                "get_ui_tree" or "find_elements" => FindUiElements(args),
+                "create_workspace_file" or "write_file" => CreateWorkspaceFile(config, args),
+                "edit_workspace_file" => EditWorkspaceFile(config, args),
+                "move_workspace_file" => MoveWorkspaceFile(config, args),
+                "delete_workspace_file" => DeleteWorkspaceFile(config, args),
+                "get_monitors" or "desktop_get_monitors" => new { monitors = ScreenCaptureService.GetMonitors() },
+                "get_screen_size" => GetScreenSize(),
+                "get_desktop_status" or "desktop_get_status" => new
+                {
+                    pipe_available = NamedPipeBridge.IsDesktopAgentAvailable(),
+                    pipe_name = NamedPipeBridge.PipeName,
+                    desktop_control_enabled = config.Policy.AllowDesktopControl,
+                    allowed_apps = config.Policy.AllowedApps,
+                },
+                "list_desktop_windows" => ListDesktopWindows(args),
+                "focus_window" => FocusDesktopWindow(config, args),
+                "launch_approved_application" => LaunchApprovedApplication(config, args),
+                "get_clipboard" or "desktop_clipboard_get" => new { text = WindowManagementService.GetClipboardText() },
+                "set_clipboard" or "desktop_clipboard_set" => SetClipboard(config, args),
+                "get_ui_tree" or "find_elements" or "list_ui_elements" => FindUiElements(args),
                 "click_element" or "click_text" => ClickUiElement(config, args),
                 "start_webrtc_stream" => await SendPipeStreamCommandAsync(config, "START_WEBRTC_SESSION", args, ct),
                 "stop_webrtc_stream" => await SendPipeStreamCommandAsync(config, "STOP_WEBRTC_SESSION", args, ct),
-                "capture_desktop_screenshot" or "take_screenshot" or "capture_desktop_frame" => CaptureScreenshot(config, args),
-                "mouse_move" => MouseMove(config, args),
-                "mouse_click" => MouseClick(config, args),
-                "mouse_scroll" => MouseScroll(config, args),
-                "keyboard_type" => KeyboardType(config, args),
-                "key_press" => KeyPress(config, args),
+                "capture_desktop_screenshot" or "take_screenshot" or "capture_desktop_frame" or "desktop_get_screenshot" => CaptureScreenshot(config, args),
+                "desktop_get_window_screenshot" => CaptureWindowScreenshot(config, args),
+                "mouse_move" or "desktop_mouse_move" => MouseMove(config, args),
+                "mouse_click" or "desktop_click" => MouseClick(config, args),
+                "mouse_scroll" or "desktop_scroll" => MouseScroll(config, args),
+                "mouse_drag" => MouseDrag(config, args),
+                "keyboard_type" or "desktop_keyboard" => KeyboardType(config, args),
+                "key_press" or "keyboard_press" => KeyPress(config, args),
+                "press_hotkey" => PressHotkey(config, args),
                 "run_shell" => await RunShellAsync(config, args, ct),
                 _ => throw new InvalidOperationException($"Tool '{tool}' is not supported by native C# executor."),
             };
@@ -79,16 +99,38 @@ public sealed class NativeToolExecutor
         return dot >= 0 ? trimmed[(dot + 1)..] : trimmed;
     }
 
-    private static object GetSystemInfo() => new
+    private static object GetSystemInfo()
     {
-        hostname = Environment.MachineName,
-        os = "Windows",
-        os_version = Environment.OSVersion.VersionString,
-        architecture = RuntimeInformation.OSArchitecture.ToString(),
-        cpu_count = Environment.ProcessorCount,
-        dotnet_version = RuntimeInformation.FrameworkDescription,
-        user = Environment.UserName,
-    };
+        var (product, displayVer, build) = DiagnosticsService.GetWindowsEditionAndBuild();
+        return new
+        {
+            hostname = Environment.MachineName,
+            os = "Windows",
+            windows_edition = product,
+            windows_display_version = displayVer,
+            windows_build = build,
+            os_version = Environment.OSVersion.VersionString,
+            architecture = RuntimeInformation.OSArchitecture.ToString(),
+            cpu_count = Environment.ProcessorCount,
+            dotnet_version = RuntimeInformation.FrameworkDescription,
+            user = Environment.UserName,
+            desktop_pipe_available = NamedPipeBridge.IsDesktopAgentAvailable(),
+        };
+    }
+
+    private static Task<object> GetServiceStatusAsync(JsonElement args, CancellationToken ct)
+    {
+        var svc = args.TryGetProperty("service", out var sEl) ? sEl.GetString() ?? ""
+            : args.TryGetProperty("name", out var nEl) ? nEl.GetString() ?? "" : "";
+        return DiagnosticsService.GetServiceStatusAsync(svc, ct);
+    }
+
+    private static Task<object> GetEventLogsAsync(JsonElement args, CancellationToken ct)
+    {
+        var logName = args.TryGetProperty("log_name", out var lEl) ? lEl.GetString() ?? "System" : "System";
+        int maxEvents = args.TryGetProperty("max_events", out var cEl) && cEl.TryGetInt32(out var c) ? c : 30;
+        return DiagnosticsService.GetEventLogsAsync(logName, maxEvents, ct);
+    }
 
     private object GetMemoryUsage()
     {
@@ -260,10 +302,92 @@ public sealed class NativeToolExecutor
         var rel = args.TryGetProperty("path", out var p) ? p.GetString() ?? "" : "";
         var content = args.TryGetProperty("content", out var c) ? c.GetString() ?? "" : "";
         var target = ConfineWorkspacePath(config.Workspace, rel);
+        EnsureNotSecretFile(target);
         var dir = Path.GetDirectoryName(target);
         if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
         File.WriteAllText(target, content);
         return new { path = rel, bytes_written = content.Length, status = "created" };
+    }
+
+    private static object EditWorkspaceFile(AgentGuiConfig config, JsonElement args)
+    {
+        if (!config.Policy.AllowTier3)
+        {
+            throw new UnauthorizedAccessException("Policy denied: Tier 3 sensitive operations are disabled.");
+        }
+        var rel = args.TryGetProperty("path", out var p) ? p.GetString() ?? "" : "";
+        var target = ConfineWorkspacePath(config.Workspace, rel);
+        EnsureNotSecretFile(target);
+        if (!File.Exists(target)) throw new FileNotFoundException($"File not found: {rel}");
+
+        var oldText = args.TryGetProperty("old_text", out var oEl) ? oEl.GetString() : null;
+        var newText = args.TryGetProperty("new_text", out var nEl) ? nEl.GetString()
+            : args.TryGetProperty("content", out var cEl) ? cEl.GetString() : null;
+
+        if (oldText is not null && newText is not null)
+        {
+            var existing = File.ReadAllText(target);
+            if (!existing.Contains(oldText, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException("Target old_text was not found in file.");
+            }
+            var updated = existing.Replace(oldText, newText, StringComparison.Ordinal);
+            File.WriteAllText(target, updated);
+            return new { path = rel, bytes_written = updated.Length, status = "edited" };
+        }
+        if (newText is not null)
+        {
+            File.WriteAllText(target, newText);
+            return new { path = rel, bytes_written = newText.Length, status = "replaced" };
+        }
+        throw new ArgumentException("Either (old_text, new_text) or content is required.");
+    }
+
+    private static object MoveWorkspaceFile(AgentGuiConfig config, JsonElement args)
+    {
+        if (!config.Policy.AllowTier3)
+        {
+            throw new UnauthorizedAccessException("Policy denied: Tier 3 sensitive operations are disabled.");
+        }
+        var srcRel = args.TryGetProperty("source", out var sEl) ? sEl.GetString() ?? ""
+            : args.TryGetProperty("src", out var s2) ? s2.GetString() ?? "" : "";
+        var dstRel = args.TryGetProperty("destination", out var dEl) ? dEl.GetString() ?? ""
+            : args.TryGetProperty("dst", out var d2) ? d2.GetString() ?? "" : "";
+
+        var srcFull = ConfineWorkspacePath(config.Workspace, srcRel);
+        var dstFull = ConfineWorkspacePath(config.Workspace, dstRel);
+        EnsureNotSecretFile(srcFull);
+        EnsureNotSecretFile(dstFull);
+
+        var dir = Path.GetDirectoryName(dstFull);
+        if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+        File.Move(srcFull, dstFull, overwrite: false);
+        return new { source = srcRel, destination = dstRel, status = "moved" };
+    }
+
+    private static object DeleteWorkspaceFile(AgentGuiConfig config, JsonElement args)
+    {
+        if (!config.Policy.AllowTier4)
+        {
+            throw new UnauthorizedAccessException("Policy denied: Tier 4 high-risk operations are disabled.");
+        }
+        var rel = args.TryGetProperty("path", out var p) ? p.GetString() ?? "" : "";
+        var target = ConfineWorkspacePath(config.Workspace, rel);
+        EnsureNotSecretFile(target);
+        if (!File.Exists(target)) throw new FileNotFoundException($"File not found: {rel}");
+        File.Delete(target);
+        return new { path = rel, status = "deleted" };
+    }
+
+    private static void EnsureNotSecretFile(string fullPath)
+    {
+        var fileName = Path.GetFileName(fullPath);
+        if (fileName.StartsWith(".env", StringComparison.OrdinalIgnoreCase) ||
+            fileName.EndsWith(".pem", StringComparison.OrdinalIgnoreCase) ||
+            fileName.EndsWith(".key", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new UnauthorizedAccessException($"Access to secret file '{fileName}' is blocked by policy.");
+        }
     }
 
     private object CaptureScreenshot(AgentGuiConfig config, JsonElement args)
@@ -272,8 +396,11 @@ public sealed class NativeToolExecutor
         {
             throw new UnauthorizedAccessException("Policy denied: Tier 3 sensitive operations are disabled.");
         }
+        bool fullDesktop = args.TryGetProperty("full_desktop", out var fdEl) && fdEl.ValueKind == JsonValueKind.True;
         int monitorIdx = args.TryGetProperty("monitor_index", out var mEl) && mEl.TryGetInt32(out var m) ? m : 0;
-        var shot = ScreenCaptureService.CapturePrimaryScreen(_screenshotDir, monitorIdx);
+        var shot = fullDesktop
+            ? ScreenCaptureService.CaptureVirtualDesktop(_screenshotDir)
+            : ScreenCaptureService.CapturePrimaryScreen(_screenshotDir, monitorIdx);
         return new
         {
             path = shot.FilePath,
@@ -283,6 +410,95 @@ public sealed class NativeToolExecutor
             size_bytes = shot.SizeBytes,
             image_base64 = shot.Base64Png,
         };
+    }
+
+    private object CaptureWindowScreenshot(AgentGuiConfig config, JsonElement args)
+    {
+        if (!config.Policy.AllowTier3)
+        {
+            throw new UnauthorizedAccessException("Policy denied: Tier 3 sensitive operations are disabled.");
+        }
+        var title = args.TryGetProperty("title", out var tEl) ? tEl.GetString()
+            : args.TryGetProperty("query", out var qEl) ? qEl.GetString() : null;
+        long? hwnd = args.TryGetProperty("handle", out var hEl) && hEl.TryGetInt64(out var h) ? h : null;
+        var shot = ScreenCaptureService.CaptureWindow(_screenshotDir, title, hwnd);
+        return new
+        {
+            path = shot.FilePath,
+            width = shot.Width,
+            height = shot.Height,
+            size_bytes = shot.SizeBytes,
+            image_base64 = shot.Base64Png,
+        };
+    }
+
+    private static object GetScreenSize()
+    {
+        var (vx, vy, vw, vh, pw, ph) = DesktopInputService.GetVirtualScreenSize();
+        return new
+        {
+            primary_width = pw,
+            primary_height = ph,
+            virtual_left = vx,
+            virtual_top = vy,
+            virtual_width = vw,
+            virtual_height = vh,
+            monitors = ScreenCaptureService.GetMonitors(),
+        };
+    }
+
+    private static object ListDesktopWindows(JsonElement args)
+    {
+        var query = args.TryGetProperty("query", out var qEl) ? qEl.GetString() : null;
+        int limit = args.TryGetProperty("limit", out var lEl) && lEl.TryGetInt32(out var l) ? l : 60;
+        var windows = WindowManagementService.ListVisibleWindows(query, limit);
+        return new { count = windows.Count, windows };
+    }
+
+    private static object FocusDesktopWindow(AgentGuiConfig config, JsonElement args)
+    {
+        RequireDesktopControl(config);
+        var title = args.TryGetProperty("title", out var tEl) ? tEl.GetString()
+            : args.TryGetProperty("query", out var qEl) ? qEl.GetString() : null;
+        long? hwnd = args.TryGetProperty("handle", out var hEl) && hEl.TryGetInt64(out var h) ? h : null;
+        var win = WindowManagementService.FocusWindow(title, hwnd);
+        return new { status = "focused", window = win };
+    }
+
+    private static object LaunchApprovedApplication(AgentGuiConfig config, JsonElement args)
+    {
+        RequireDesktopControl(config);
+        var requested = args.TryGetProperty("app", out var aEl) ? aEl.GetString() ?? ""
+            : args.TryGetProperty("name", out var nEl) ? nEl.GetString() ?? ""
+            : args.TryGetProperty("application", out var apEl) ? apEl.GetString() ?? "" : "";
+        var clean = Path.GetFileName(requested.Trim());
+        if (string.IsNullOrWhiteSpace(clean) ||
+            requested.Contains('/') || requested.Contains('\\') ||
+            !config.Policy.AllowedApps.Contains(clean, StringComparer.OrdinalIgnoreCase))
+        {
+            throw new UnauthorizedAccessException($"Policy denied: application '{requested}' is not in the AllowedApps matrix.");
+        }
+
+        var psi = new ProcessStartInfo
+        {
+            FileName = clean,
+            UseShellExecute = true,
+        };
+        if (args.TryGetProperty("arguments", out var argEl) && argEl.GetString() is { Length: > 0 } appArgs)
+        {
+            if (appArgs.Contains('\0')) throw new ArgumentException("Invalid arguments.");
+            psi.Arguments = appArgs;
+        }
+        using var proc = Process.Start(psi) ?? throw new InvalidOperationException($"Failed to launch '{clean}'.");
+        return new { status = "launched", app = clean, pid = proc.Id };
+    }
+
+    private static object SetClipboard(AgentGuiConfig config, JsonElement args)
+    {
+        RequireDesktopControl(config);
+        var text = args.TryGetProperty("text", out var tEl) ? tEl.GetString() ?? "" : "";
+        WindowManagementService.SetClipboardText(text);
+        return new { status = "ok", length = text.Length };
     }
 
     private static void RequireDesktopControl(AgentGuiConfig config)
@@ -332,9 +548,40 @@ public sealed class NativeToolExecutor
     private static object KeyPress(AgentGuiConfig config, JsonElement args)
     {
         RequireDesktopControl(config);
+        if (args.TryGetProperty("key", out var kEl) && kEl.GetString() is { Length: > 0 } keyName)
+        {
+            ushort vkNamed = DesktopInputService.ResolveVirtualKey(keyName);
+            DesktopInputService.PressKey(vkNamed);
+            return new { status = "ok", key = keyName, vk = vkNamed };
+        }
         ushort vk = args.TryGetProperty("vk", out var vEl) && vEl.TryGetUInt16(out var code) ? code : (ushort)0x0D;
         DesktopInputService.PressKey(vk);
         return new { status = "ok", vk };
+    }
+
+    private static object MouseDrag(AgentGuiConfig config, JsonElement args)
+    {
+        RequireDesktopControl(config);
+        int x1 = args.TryGetProperty("start_x", out var sx) ? sx.GetInt32()
+            : args.TryGetProperty("x1", out var x1El) ? x1El.GetInt32() : 0;
+        int y1 = args.TryGetProperty("start_y", out var sy) ? sy.GetInt32()
+            : args.TryGetProperty("y1", out var y1El) ? y1El.GetInt32() : 0;
+        int x2 = args.TryGetProperty("end_x", out var ex) ? ex.GetInt32()
+            : args.TryGetProperty("x2", out var x2El) ? x2El.GetInt32() : 0;
+        int y2 = args.TryGetProperty("end_y", out var ey) ? ey.GetInt32()
+            : args.TryGetProperty("y2", out var y2El) ? y2El.GetInt32() : 0;
+        string button = args.TryGetProperty("button", out var bEl) ? bEl.GetString() ?? "left" : "left";
+        DesktopInputService.DragMouse(x1, y1, x2, y2, button);
+        return new { status = "ok", x1, y1, x2, y2, button };
+    }
+
+    private static object PressHotkey(AgentGuiConfig config, JsonElement args)
+    {
+        RequireDesktopControl(config);
+        var combo = args.TryGetProperty("combo", out var cEl) ? cEl.GetString() ?? ""
+            : args.TryGetProperty("hotkey", out var hEl) ? hEl.GetString() ?? "" : "";
+        DesktopInputService.PressHotkey(combo);
+        return new { status = "ok", combo };
     }
 
     private static object FindUiElements(JsonElement args)

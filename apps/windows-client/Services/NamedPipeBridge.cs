@@ -6,6 +6,7 @@ using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using AIBridgeClient.Models;
 
 namespace AIBridgeClient.Services;
 
@@ -84,4 +85,24 @@ public static class NamedPipeBridge
         var reply = Encoding.UTF8.GetString(buf, 0, read).Trim();
         return (true, string.IsNullOrEmpty(reply) ? "{\"status\":\"sent\"}" : reply);
     }
+
+    public static Task<(bool Ok, string Response)> PingHeartbeatAsync(CancellationToken ct = default) =>
+        SendCommandAsync("HEARTBEAT_PING", new { client = "windows-csharp-v0.3.0" }, ct: ct);
+
+    public static Task<(bool Ok, string Response)> RequestDesktopStatusAsync(CancellationToken ct = default) =>
+        SendCommandAsync("DESKTOP_STATUS_REPORT", new { }, ct: ct);
+
+    public static Task<(bool Ok, string Response)> ReleaseAllInputAsync(CancellationToken ct = default) =>
+        SendCommandAsync("RELEASE_ALL_INPUT", new { reason = "emergency_stop_or_takeover" }, ct: ct);
+
+    public static Task<(bool Ok, string Response)> UpdateSessionPermissionsAsync(AgentPolicyConfig policy, CancellationToken ct = default) =>
+        SendCommandAsync("UPDATE_SESSION_PERMISSIONS", new
+        {
+            allow_writes = policy.AllowWrites,
+            allow_tier3 = policy.AllowTier3,
+            allow_tier4 = policy.AllowTier4,
+            allow_shell = policy.AllowShell,
+            allow_desktop_control = policy.AllowDesktopControl,
+            allowed_apps = policy.AllowedApps,
+        }, ct: ct);
 }

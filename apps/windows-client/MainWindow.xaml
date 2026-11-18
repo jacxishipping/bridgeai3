@@ -339,12 +339,36 @@
                                                             <Button x:Name="LogFilterInfoBtn" Content="Info" Style="{StaticResource TerminalChipStyle}" Click="OnLogFilterClick" Tag="INFO" Margin="0,2,4,2"/>
                                                             <Button x:Name="LogFilterWarnBtn" Content="Warn" Style="{StaticResource TerminalChipStyle}" Click="OnLogFilterClick" Tag="WARN" Margin="0,2,4,2"/>
                                                             <Button x:Name="LogFilterErrBtn" Content="Error" Style="{StaticResource TerminalChipStyle}" Click="OnLogFilterClick" Tag="ERR" Margin="0,2,4,2"/>
+                                                            <Button Content="Copy" Style="{StaticResource TerminalChipStyle}" Click="OnCopySelectedLogBtnClick" ToolTip="Copy selected (or latest) log entry" Margin="0,2,4,2"/>
                                                             <Button Content="Export" Style="{StaticResource TerminalChipStyle}" Click="OnExportLogClick" Margin="0,2,4,2"/>
-                                                            <Button Content="Clear" Style="{StaticResource TerminalChipStyle}" Click="OnClearLogClick" Margin="0,2,0,2"/>
+                                                            <Button Content="Clear" Style="{StaticResource TerminalChipStyle}" Click="OnClearLogClick" Margin="0,2,8,2"/>
+                                                            <TextBox x:Name="LogSearchBox" Width="150" Height="26" Padding="8,3" FontSize="11.5"
+                                                                     Background="#0D1220" Foreground="#E2E8F0" CaretBrush="#E2E8F0"
+                                                                     BorderBrush="#252C3F" BorderThickness="1" VerticalContentAlignment="Center"
+                                                                     Tag="Filter logs..." TextChanged="OnLogSearchChanged" Margin="0,2,4,2">
+                                                                <TextBox.Template>
+                                                                    <ControlTemplate TargetType="TextBox">
+                                                                        <Border Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="1" CornerRadius="6">
+                                                                            <Grid Margin="8,2">
+                                                                                <ScrollViewer x:Name="PART_ContentHost" VerticalAlignment="Center"/>
+                                                                                <TextBlock x:Name="Watermark" Text="{TemplateBinding Tag}" Foreground="#64748B" FontSize="11.5" IsHitTestVisible="False" VerticalAlignment="Center" Visibility="Collapsed"/>
+                                                                            </Grid>
+                                                                        </Border>
+                                                                        <ControlTemplate.Triggers>
+                                                                            <Trigger Property="Text" Value="">
+                                                                                <Setter TargetName="Watermark" Property="Visibility" Value="Visible"/>
+                                                                            </Trigger>
+                                                                        </ControlTemplate.Triggers>
+                                                                    </ControlTemplate>
+                                                                </TextBox.Template>
+                                                            </TextBox>
                                                         </WrapPanel>
                                                         <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
                                                             <TextBlock Text="Auto-scroll" FontSize="11.5" Foreground="#94A3B8" VerticalAlignment="Center" Margin="0,0,8,0"/>
-                                                            <CheckBox x:Name="LogAutoScrollChk" IsChecked="True" Style="{StaticResource ToggleSwitchStyle}" Margin="0" VerticalAlignment="Center"/>
+                                                            <CheckBox x:Name="LogAutoScrollChk" IsChecked="True" Style="{StaticResource ToggleSwitchStyle}" Margin="0,0,10,0" VerticalAlignment="Center"/>
+                                                            <Button x:Name="ExpandConsoleBtn" Content="&#xE740;" FontFamily="Segoe MDL2 Assets" FontSize="11"
+                                                                    Style="{StaticResource TerminalChipStyle}" Click="OnToggleExpandConsoleClick"
+                                                                    ToolTip="Expand / Collapse Console"/>
                                                         </StackPanel>
                                                     </Grid>
                                                 </Border>
@@ -612,9 +636,11 @@
                                             <WrapPanel Grid.Column="0" VerticalAlignment="Center">
                                                 <ComboBox x:Name="VisionMonitorCombo" Style="{StaticResource SaaSComboBoxStyle}" Width="210" Margin="0,2,8,2" DisplayMemberPath="DisplayLabel"/>
                                                 <Button Content="Capture" Style="{StaticResource PrimaryBtnStyle}" Padding="12,6" FontSize="12" Click="OnCaptureScreenshotClick" Margin="0,2,8,2"/>
+                                                <Button Content="Full Desktop" Style="{StaticResource BtnStyle}" Padding="12,6" FontSize="12" Click="OnCaptureFullDesktopClick" Margin="0,2,8,2"/>
                                                 <Button x:Name="VisionZoomBtn" Content="Zoom: Fit" Style="{StaticResource BtnStyle}" Padding="12,6" FontSize="12" Click="OnVisionZoomToggleClick" Margin="0,2,8,2"/>
                                                 <Button Content="Open" Style="{StaticResource BtnStyle}" Padding="12,6" FontSize="12" Click="OnOpenScreenshotClick" Margin="0,2,8,2"/>
-                                                <Button Content="Copy Path" Style="{StaticResource BtnStyle}" Padding="12,6" FontSize="12" Click="OnCopyScreenshotPathClick" Margin="0,2,0,2"/>
+                                                <Button Content="Copy Path" Style="{StaticResource BtnStyle}" Padding="12,6" FontSize="12" Click="OnCopyScreenshotPathClick" Margin="0,2,8,2"/>
+                                                <Button Content="Open Folder" Style="{StaticResource BtnStyle}" Padding="12,6" FontSize="12" Click="OnOpenScreenshotsFolderClick" Margin="0,2,0,2"/>
                                             </WrapPanel>
                                             <TextBlock x:Name="VisionMetaText" Grid.Column="1" Text="Ready" FontSize="12" Foreground="{DynamicResource TextMuted}" VerticalAlignment="Center" Margin="12,0,0,0"/>
                                         </Grid>
@@ -640,7 +666,12 @@
 
                                         <Border x:Name="VisionHistoryCard" Grid.Column="1" Background="{DynamicResource BgCard}" BorderBrush="{DynamicResource BorderHairline}" BorderThickness="1" CornerRadius="12" Padding="16">
                                             <DockPanel>
-                                                <TextBlock DockPanel.Dock="Top" Text="Capture History" FontSize="12" FontWeight="Medium" Foreground="{DynamicResource TextSecondary}" Margin="0,0,0,12"/>
+                                                <StackPanel DockPanel.Dock="Top" Margin="0,0,0,12">
+                                                    <TextBlock Text="Display Topology" FontSize="11" FontWeight="SemiBold" Foreground="{DynamicResource TextMuted}"/>
+                                                    <TextBlock x:Name="VisionDisplayInfoText" Text="Detecting displays..." FontSize="11.5" FontFamily="Consolas" Foreground="{DynamicResource TextPrimary}" TextWrapping="Wrap" Margin="0,4,0,12"/>
+                                                    <Border Height="1" Background="{DynamicResource BorderHairline}" Margin="0,0,0,12"/>
+                                                    <TextBlock Text="Capture History" FontSize="12" FontWeight="Medium" Foreground="{DynamicResource TextSecondary}"/>
+                                                </StackPanel>
                                                 <Grid>
                                                     <ListBox x:Name="CaptureHistoryList" Background="Transparent" BorderThickness="0" SelectionChanged="OnCaptureHistorySelected">
                                                         <ListBox.ItemTemplate>
@@ -811,7 +842,9 @@
                                                 <TextBox x:Name="SetPollIntervalBox" Width="100" HorizontalAlignment="Left" Style="{StaticResource FieldStyle}" FontFamily="Consolas" Margin="0,0,0,14"/>
 
                                                 <CheckBox x:Name="SetAutoStartChk" Style="{StaticResource ToggleSwitchStyle}" Content="Launch automatically when Windows starts (HKCU Run)"/>
-                                                <CheckBox x:Name="SetAutoConnectChk" Style="{StaticResource ToggleSwitchStyle}" Content="Connect to Control Plane automatically on startup" Margin="0,4,0,16"/>
+                                                <CheckBox x:Name="SetAutoConnectChk" Style="{StaticResource ToggleSwitchStyle}" Content="Connect to Control Plane automatically on startup" Margin="0,4,0,0"/>
+                                                <CheckBox x:Name="SetMinimizeToTrayChk" Style="{StaticResource ToggleSwitchStyle}" Content="Minimize to system tray instead of exiting on close" Margin="0,4,0,0"/>
+                                                <CheckBox x:Name="SetNotificationsChk" Style="{StaticResource ToggleSwitchStyle}" Content="Show Windows tray notifications for tasks &amp; approvals" Margin="0,4,0,16"/>
 
                                                 <WrapPanel>
                                                     <Button Content="Save Configuration" Style="{StaticResource PrimaryBtnStyle}" Click="OnSaveSettingsClick" Margin="0,4,8,4"/>
@@ -827,11 +860,16 @@
                                                     <ColumnDefinition Width="*"/>
                                                     <ColumnDefinition Width="Auto"/>
                                                 </Grid.ColumnDefinitions>
-                                                <StackPanel Grid.Column="0">
-                                                    <TextBlock Text="Signed Release Updates" FontSize="12" FontWeight="Medium" Foreground="{DynamicResource TextPrimary}"/>
+                                                <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                                    <TextBlock Text="Diagnostics, Logs &amp; Signed Updates" FontSize="12" FontWeight="Medium" Foreground="{DynamicResource TextPrimary}"/>
                                                     <TextBlock x:Name="SetUpdateStatusText" Text="Current version: v0.3.0" FontSize="12" FontFamily="Consolas" Foreground="{DynamicResource TextMuted}" Margin="0,3,0,0"/>
                                                 </StackPanel>
-                                                <Button Grid.Column="1" Content="Check for Updates" Style="{StaticResource BtnStyle}" Click="OnCheckUpdatesClick" VerticalAlignment="Center"/>
+                                                <WrapPanel Grid.Column="1" VerticalAlignment="Center">
+                                                    <Button Content="Copy Diagnostics" Style="{StaticResource BtnStyle}" Click="OnCopyDiagnosticsClick" Margin="0,2,8,2"/>
+                                                    <Button Content="Export Bundle (.zip)" Style="{StaticResource BtnStyle}" Click="OnExportDiagnosticsBundleClick" Margin="0,2,8,2"/>
+                                                    <Button Content="Open Logs" Style="{StaticResource BtnStyle}" Click="OnOpenLogsFolderClick" Margin="0,2,8,2"/>
+                                                    <Button Content="Check Updates" Style="{StaticResource BtnStyle}" Click="OnCheckUpdatesClick" Margin="0,2,0,2"/>
+                                                </WrapPanel>
                                             </Grid>
                                         </Border>
                                     </StackPanel>

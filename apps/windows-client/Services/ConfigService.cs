@@ -23,7 +23,10 @@ public sealed class ConfigService
     public string ConfigFile { get; }
     public string TokenFile { get; }
     public string TaskHistoryFile { get; }
+    public string PolicyAuditFile { get; }
     public string LogDir { get; }
+    public string ClientLogFile { get; }
+    private readonly object _logLock = new();
 
     public ConfigService()
     {
@@ -32,7 +35,9 @@ public sealed class ConfigService
         ConfigFile = Path.Combine(ConfigDir, "agent_gui.json");
         TokenFile = Path.Combine(ConfigDir, "device.token");
         TaskHistoryFile = Path.Combine(ConfigDir, "task_history.json");
+        PolicyAuditFile = Path.Combine(ConfigDir, "policy_audit.json");
         LogDir = Path.Combine(ConfigDir, "logs");
+        ClientLogFile = Path.Combine(LogDir, "ai-bridge-client.log");
         Directory.CreateDirectory(ConfigDir);
         Directory.CreateDirectory(LogDir);
     }
@@ -155,6 +160,65 @@ public sealed class ConfigService
         else
         {
             key.DeleteValue(RegAppName, throwOnMissingValue: false);
+        }
+    }
+
+    public void AppendLogLine(string line)
+    {
+        try
+        {
+            lock (_logLock)
+            {
+                Directory.CreateDirectory(LogDir);
+                if (File.Exists(ClientLogFile) && new FileInfo(ClientLogFile).Length > 2 * 1024 * 1024)
+                {
+                    var rotated = ClientLogFile + ".1";
+                    File.Move(ClientLogFile, rotated, overwrite: true);
+                }
+                File.AppendAllText(ClientLogFile, line + Environment.NewLine);
+            }
+        }
+        catch
+        {
+            // Never break UI logging on disk write failure
+        }
+    }
+
+    public List<string> LoadPolicyAudit()
+    {
+        try
+        {
+            if (File.Exists(PolicyAuditFile))
+            {
+                var json = File.ReadAllText(PolicyAuditFile);
+                return JsonSerializer.Deserialize<List<string>>(json, JsonOpts) ?? new();
+            }
+        }
+        catch
+        {
+            // Ignore corrupt audit log
+        }
+        return new List<string>();
+    }
+
+    public void SavePolicyAudit(IEnumerable<string> entries)
+    {
+        try
+        {
+            var capped = new List<string>();
+            foreach (var e in entries)
+            {
+                capped.Add(e);
+                if (capped.Count >= 200) break;
+            }
+            var json = JsonSerializer.Serialize(capped, JsonOpts);
+            var tmp = PolicyAuditFile + ".tmp";
+            File.WriteAllText(tmp, json);
+            File.Move(tmp, PolicyAuditFile, overwrite: true);
+        }
+        catch
+        {
+            // Best-effort persistence
         }
     }
 }
