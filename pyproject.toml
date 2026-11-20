@@ -33,7 +33,7 @@ dependencies = [
 # 27.0.1 / 0.26.0, but neither package is installed in the repo venv
 # and the Docker image cannot be built in this VM, so the newest
 # majors were NOT adopted untested. Bump only with a Docker build.
-prod = ["gunicorn==23.0.0", "psycopg[binary]==3.3.9", "psycopg-pool==3.2.6", "prometheus-client==0.21.0"]
+prod = ["gunicorn==23.0.0", "psycopg[binary]==3.3.9", "psycopg-pool==3.3.3", "prometheus-client==0.21.0"]
 dev = ["pytest>=8.0", "ruff>=0.4", "Pillow>=10.0"]
 desktop = ["Pillow>=10.0"]
 webrtc = ["aiortc>=1.8", "av>=11.0", "Pillow>=10.0", "soundcard>=0.4.2", "numpy>=1.24"]
