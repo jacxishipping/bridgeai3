@@ -179,6 +179,8 @@ jobs:
           dotnet-version: "9.0.x"
       - name: Build native C# Windows client
         run: dotnet build apps/windows-client/AIBridgeClient.csproj -c Release
+      - name: Build native C# Windows GUI installer
+        run: dotnet build apps/windows-installer/AIBridgeInstaller.csproj -c Release
       - name: Run C# Windows client unit tests
         run: dotnet run --project apps/windows-client.Tests/AIBridgeClient.Tests.csproj -c Release
 
