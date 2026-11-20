@@ -6,7 +6,7 @@
 # other hosts that run `pip install -r requirements.txt` need this
 # editable install.
 -e .
-mcp>=1.6.0,<2.0.0
+mcp>=1.6.0,<3.0.0
 fastapi>=0.110
 uvicorn>=0.29
 pydantic>=2.6
