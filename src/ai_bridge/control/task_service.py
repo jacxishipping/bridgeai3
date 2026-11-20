@@ -284,7 +284,8 @@ def create_task(
             raise HTTPException(
                 status_code=409, detail="Provided approval has expired."
             )
-        if ap_tool not in (None, "", tool_name, "execute_workflow", "workflow"):
+        allowed_ap_tools = (tool_name,) if tier.value >= 4 else (None, "", tool_name, "execute_workflow", "workflow")
+        if ap_tool not in allowed_ap_tools:
             raise HTTPException(
                 status_code=409,
                 detail="Provided approval does not cover this tool.",

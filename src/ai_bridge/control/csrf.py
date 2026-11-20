@@ -147,15 +147,25 @@ async def csrf_middleware(request: Request, call_next: Callable):
     if request.method in ("GET", "HEAD", "OPTIONS", "TRACE"):
         return await call_next(request)
 
-    # Admin-token, device-token, and auth login/logout bootstrap endpoints do not require CSRF.
-    if request.headers.get("x-admin-token") or request.headers.get("x-device-token"):
-        return await call_next(request)
     if request.url.path in ("/api/auth/login", "/api/auth/logout"):
         return await call_next(request)
 
-    # Check explicit X-Session-Token when CSRF validation is active.
+    # Check X-Session-Token FIRST so a spoofed X-Admin-Token / X-Device-Token
+    # header alongside a real session token can never skip CSRF validation.
+    # Bearer-token normalization in app.py mirrors `Authorization: Bearer <tok>`
+    # into both X-Admin-Token and X-Session-Token, so exempt only when the
+    # supplied X-Admin-Token actually matches the configured admin token.
     session_token = request.headers.get("x-session-token")
-    if not session_token:
+    admin_hdr = request.headers.get("x-admin-token")
+    if session_token:
+        app_state = getattr(getattr(request, "app", None), "state", None)
+        configured_admin = getattr(app_state, "admin_token", None) if app_state is not None else None
+        legacy_enabled = bool(getattr(app_state, "legacy_admin_enabled", True)) if app_state is not None else True
+        if admin_hdr and configured_admin and legacy_enabled and hmac.compare_digest(admin_hdr, str(configured_admin)):
+            return await call_next(request)
+    else:
+        if admin_hdr or request.headers.get("x-device-token"):
+            return await call_next(request)
         return await call_next(request)
 
     csrf_token = request.headers.get("x-csrf-token")

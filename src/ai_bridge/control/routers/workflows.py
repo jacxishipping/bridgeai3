@@ -554,7 +554,11 @@ def create_workflows_router(ctx: ControlContext) -> APIRouter:
         x_session_token: str | None = Header(default=None),
     ):
         require_role("viewer", x_admin_token, x_session_token)
-        task_rows = conn.execute("SELECT * FROM tasks WHERE id LIKE ?", (f"bcast-{batch_id}-%",)).fetchall()
+        tenant = resolve_request_tenant(None, x_admin_token, x_session_token)
+        task_rows = conn.execute(
+            "SELECT * FROM tasks WHERE id LIKE ? AND tenant=?",
+            (f"bcast-{batch_id}-%", tenant),
+        ).fetchall()
         if not task_rows:
             raise HTTPException(status_code=404, detail="Broadcast batch not found.")
 

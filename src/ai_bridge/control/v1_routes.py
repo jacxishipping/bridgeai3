@@ -742,6 +742,11 @@ def attach_v1_routes(
         sess = load_webrtc_session_db(conn, app.state, session_id)
         if sess is None:
             raise HTTPException(status_code=404, detail="Session not found.")
+        dev_id = str(sess.get("device_id") or "")
+        if dev_id and dev_id != "local" and require_row_tenant is not None:
+            dev_row = conn.execute("SELECT tenant FROM devices WHERE id=?", (dev_id,)).fetchone()
+            if dev_row is not None:
+                require_row_tenant(dev_row, x_admin_token, x_session_token, authorization)
         return format_session_v1(sess)
 
     @app.post("/api/v1/sessions/{session_id}/mode")
@@ -1026,6 +1031,9 @@ def attach_v1_routes(
                     raise HTTPException(status_code=4401, detail="Invalid or expired stream ticket.")
             elif dev_tok:
                 _dev_row = device_row(dev_tok)
+                _sess = load_webrtc_session_db(conn, app.state, session_id)
+                if _sess is None or str(_sess.get("device_id") or "") != str(_dev_row["id"]):
+                    raise HTTPException(status_code=4401, detail="Device not authorized for this session.")
                 from . import device_mtls as _dmtls
 
                 _dmtls.require_device_mtls(
@@ -1037,6 +1045,13 @@ def attach_v1_routes(
                 )
             else:
                 require_role("viewer", adm_tok, sess_tok, auth_hdr)
+                _sess = load_webrtc_session_db(conn, app.state, session_id)
+                if _sess is not None:
+                    _dev_id = str(_sess.get("device_id") or "")
+                    if _dev_id and _dev_id != "local" and require_row_tenant is not None:
+                        _dev_row = conn.execute("SELECT tenant FROM devices WHERE id=?", (_dev_id,)).fetchone()
+                        if _dev_row is not None:
+                            require_row_tenant(_dev_row, adm_tok, sess_tok, auth_hdr)
         except HTTPException:
             await websocket.close(code=4401)
             return

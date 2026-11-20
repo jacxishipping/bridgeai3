@@ -469,6 +469,12 @@ await RunTest("Full PC Access gating: drives, directories, PowerShell & kill_pro
         var (okWriteOk, _) = await exec.ExecuteAsync("write_pc_file", JsonSerializer.Serialize(new { path = outsideWrite, content = "hi" }), restrictedCfg, CancellationToken.None);
         Assert(okWriteOk && File.ReadAllText(outsideWrite) == "hi", "write_pc_file must succeed when Full PC Access + Tier 4 enabled");
 
+        // Workspace tools must remain strictly confined to workspace even when AllowFullPcAccess=true.
+        var (okWsEscapeRead, _) = await exec.ExecuteAsync("read_workspace_file", JsonSerializer.Serialize(new { path = outsideFile }), restrictedCfg, CancellationToken.None);
+        Assert(!okWsEscapeRead, "read_workspace_file must stay confined to workspace even with AllowFullPcAccess=true");
+        var (okWsEscapeWrite, _) = await exec.ExecuteAsync("create_workspace_file", JsonSerializer.Serialize(new { path = outsideWrite, content = "bypass" }), restrictedCfg, CancellationToken.None);
+        Assert(!okWsEscapeWrite, "create_workspace_file must stay confined to workspace even with AllowFullPcAccess=true");
+
         var (okKillSelf, _) = await exec.ExecuteAsync("kill_process", JsonSerializer.Serialize(new { pid = Environment.ProcessId }), restrictedCfg, CancellationToken.None);
         Assert(!okKillSelf, "kill_process must refuse terminating active client self PID even when AllowFullPcAccess=true");
     }

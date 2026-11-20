@@ -1936,10 +1936,18 @@ def attach_ai_routes(
                     _ap = None
                     if body.approval_id:
                         _ap = conn.execute("SELECT * FROM approvals WHERE id=?", (body.approval_id,)).fetchone()
-                    if _ap is not None and _ap["status"] == "approved" and (_ap["expires_at"] is None or _ap["expires_at"] > time.time()) and _ap["tool"] in (tool, "execute_workflow", "workflow"):
+                    _allowed_ap_tools = (tool,) if tier.value >= 4 else (tool, "execute_workflow", "workflow")
+                    if (
+                        _ap is not None
+                        and _ap["status"] == "approved"
+                        and (_ap["expires_at"] is None or _ap["expires_at"] > time.time())
+                        and _ap["tool"] in _allowed_ap_tools
+                    ):
                         _ap_tenant = _ap["tenant"] if "tenant" in _ap.keys() else None
                         if _ap_tenant and _ap_tenant != body.tenant:
                             _ap = None
+                    else:
+                        _ap = None
                     if body.approval_id and _ap is None:
                         audit(actor, "local", tool, body.args, "denied", tenant=body.tenant)
                         return JSONResponse(
@@ -1951,7 +1959,7 @@ def attach_ai_routes(
                         _prow = conn.execute("SELECT MAX(version) AS version FROM policies").fetchone()
                         _pver = _prow["version"] or 0
                         conn.execute(
-                            "INSERT INTO approvals (id, task_id, tool, reason, tenant, created_at, expires_at, policy_version) VALUES (?,?,?,?,?,?,?,?,?)",
+                            "INSERT INTO approvals (id, task_id, tool, reason, tenant, created_at, expires_at, policy_version) VALUES (?,?,?,?,?,?,?,?)",
                             (_new_ap, None, tool, f"Tier-{tier.value} local execution requires human approval.", body.tenant, time.time(), time.time() + _ttl, _pver),
                         )
                         conn.commit()

@@ -1427,7 +1427,10 @@ def create_app(*, admin_token: str | None = None, db_path: Path | None = None, d
             finally:
                 _sup.reset_plane_conn(tok)
         if target_device_id and target_device_id != "local":
-            dev_row = conn.execute("SELECT * FROM devices WHERE id=? AND revoked=0", (target_device_id,)).fetchone()
+            dev_row = conn.execute(
+                "SELECT * FROM devices WHERE id=? AND revoked=0 AND tenant=?",
+                (target_device_id, tenant),
+            ).fetchone()
             if dev_row:
                 eff_pol = get_effective_device_policy(dev_row)
                 if action in eff_pol.get("denied_tools", []):

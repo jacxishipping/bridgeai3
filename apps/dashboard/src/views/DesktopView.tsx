@@ -151,7 +151,10 @@ export function DesktopView({
               className="field mono"
               style={{ width: 210 }}
               value={deviceId}
-              onChange={(e) => setDeviceId(e.target.value)}
+              onChange={(e) => {
+                setControlArmed(false);
+                setDeviceId(e.target.value);
+              }}
             >
               <option value="local">local (Host Desktop)</option>
               {devices.map((d) => (

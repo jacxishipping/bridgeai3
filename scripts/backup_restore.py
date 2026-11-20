@@ -154,6 +154,32 @@ def drill_sqlite(db_path: Path, work_dir: Path, *, evidence_out: Path | None = N
     return report
 
 
+def _pg_db_identity(dsn: str) -> tuple[str, int, str]:
+    from urllib.parse import urlsplit
+
+    u = urlsplit(dsn)
+    host = (u.hostname or "localhost").lower()
+    port = int(u.port or 5432)
+    dbname = (u.path or "/").lstrip("/")
+    return host, port, dbname
+
+
+def _strip_dsn_password(dsn: str) -> tuple[str, dict[str, str]]:
+    """Return (dsn_without_password, extra_env_with_PGPASSWORD) so passwords never appear in argv."""
+    from urllib.parse import unquote, urlsplit, urlunsplit
+
+    u = urlsplit(dsn)
+    env: dict[str, str] = {}
+    if not u.password:
+        return dsn, env
+    env["PGPASSWORD"] = unquote(u.password)
+    hostport = u.hostname or ""
+    if u.port:
+        hostport = f"{hostport}:{u.port}"
+    netloc = f"{u.username}@{hostport}" if u.username else hostport
+    return urlunsplit((u.scheme, netloc, u.path, u.query, u.fragment)), env
+
+
 def drill_postgres(
     source_dsn: str,
     restore_dsn: str,
@@ -163,6 +189,8 @@ def drill_postgres(
     keep_restored: bool = False,
 ) -> dict[str, Any]:
     """Full isolated PostgreSQL backup + restore + app-boot + audit-continuity drill with RTO/RPO."""
+    if _pg_db_identity(source_dsn) == _pg_db_identity(restore_dsn):
+        raise ValueError("Refusing PostgreSQL drill: restore_dsn must target a different database than source_dsn.")
     with tempfile.TemporaryDirectory(prefix="aibridge-pg-drill-") as td:
         dump_path = Path(td) / ("staging-dump.dump" if fmt == "c" else "staging-dump.sql")
 
@@ -172,8 +200,10 @@ def drill_postgres(
         backup_duration = time.perf_counter() - t_backup_start
 
         t_rto_start = time.perf_counter()
+        created_fresh = False
         try:
-            restore_postgres(dump_path, restore_dsn, fmt=fmt)
+            created_fresh = _createdb(restore_dsn, allow_existing=False)
+            restore_postgres(dump_path, restore_dsn, fmt=fmt, create_db=False)
             conn = dbmod.connect(database_url=restore_dsn)
             try:
                 verification = _verify_restored_connection(conn)
@@ -183,7 +213,7 @@ def drill_postgres(
             rto_seconds = time.perf_counter() - t_rto_start
             rpo_seconds = max(0.0, time.time() - backup_ts)
         finally:
-            if not keep_restored:
+            if created_fresh and not keep_restored:
                 _dropdb(restore_dsn)
 
         ok = bool(verification["migrations_ok"] and verification["audit_chain_valid"] and boot["ok"])
@@ -290,9 +320,12 @@ def find_pg_bin(name: str) -> str | None:
     return None
 
 
-def _run(cmd: list[str]) -> None:
+def _run(cmd: list[str], extra_env: dict[str, str] | None = None) -> None:
     print("+ " + _redact(cmd))
-    result = subprocess.run(cmd, check=False)
+    env = dict(os.environ)
+    if extra_env:
+        env.update(extra_env)
+    result = subprocess.run(cmd, env=env, check=False)
     if result.returncode != 0:
         raise SystemExit(f"command failed (exit {result.returncode}): {_redact(cmd)}")
 
@@ -304,7 +337,8 @@ def backup_postgres(dsn: str, out_path: Path, fmt: str = "c") -> None:
         raise SystemExit("pg_dump not found on PATH — install PostgreSQL client tools")
     if out_path.exists():
         raise ValueError(f"refusing to overwrite existing backup: {out_path}")
-    _run([pg_dump, "--format", fmt, "--file", str(out_path), dsn])
+    safe_dsn, pw_env = _strip_dsn_password(dsn)
+    _run([pg_dump, "--format", fmt, "--file", str(out_path), safe_dsn], extra_env=pw_env)
     print(f"Postgres backup written to {out_path} (format {fmt}). "
           "Verify with a restore drill before relying on it.")
 
@@ -337,12 +371,12 @@ def _pg_conn_args(dsn: str) -> tuple[list[str], dict[str, str], str]:
     return args, env, dbname
 
 
-def _createdb(dsn: str) -> None:
-    """Create the target database, tolerating 'already exists'.
+def _createdb(dsn: str, *, allow_existing: bool = True) -> bool:
+    """Create the target database. Returns True when created fresh.
 
-    createdb has no --if-not-exists flag, so a pre-existing database is
-    detected from its stderr and treated as success; any other failure
-    is fatal.
+    When ``allow_existing=False`` (used by isolated restore drills), an
+    existing database is a hard error so a drill can never overwrite or
+    subsequently drop a pre-existing database.
     """
     createdb = find_pg_bin("createdb")
     if createdb is None:
@@ -353,8 +387,13 @@ def _createdb(dsn: str) -> None:
     env = dict(os.environ)
     env.update(extra_env)
     result = subprocess.run(cmd, capture_output=True, text=True, env=env)
-    if result.returncode != 0 and "already exists" not in (result.stderr or ""):
-        raise SystemExit(f"createdb failed: {result.stderr.strip()}")
+    if result.returncode == 0:
+        return True
+    if "already exists" in (result.stderr or ""):
+        if not allow_existing:
+            raise ValueError(f"refusing to overwrite pre-existing Postgres database: {dbname}")
+        return False
+    raise SystemExit(f"createdb failed: {result.stderr.strip()}")
 
 
 def _dropdb(dsn: str) -> None:
@@ -372,18 +411,20 @@ def _dropdb(dsn: str) -> None:
         raise SystemExit(f"dropdb failed: {result.stderr.strip()}")
 
 
-def restore_postgres(dump_path: Path, dsn: str, fmt: str = "c") -> None:
+def restore_postgres(dump_path: Path, dsn: str, fmt: str = "c", *, create_db: bool = True) -> None:
     """Restore a pg_dump file into the database named by ``dsn``.
 
     Creates the target database if it does not exist (createdb), then
     restores with pg_restore (custom format) or psql (plain SQL), and
     verifies core tables are readable.
     """
+    safe_dsn, pw_env = _strip_dsn_password(dsn)
     if fmt == "c":
         pg_restore = find_pg_bin("pg_restore")
         if pg_restore is None:
             raise SystemExit("pg_restore not found on PATH")
-        _createdb(dsn)
+        if create_db:
+            _createdb(dsn)
         # --no-privileges: the dump carries ALTER DEFAULT PRIVILEGES for
         # the role that owns the live DB; restoring as the drill user
         # (a non-superuser that cannot impersonate that role) fails
@@ -392,14 +433,17 @@ def restore_postgres(dump_path: Path, dsn: str, fmt: str = "c") -> None:
         # stays full-fidelity; only the drill restore skips replaying
         # privilege changes. The data and schema are what the drill
         # verifies.
-        _run([pg_restore, "--dbname", dsn, "--clean", "--if-exists",
-              "--no-privileges", str(dump_path)])
+        _run(
+            [pg_restore, "--dbname", safe_dsn, "--clean", "--if-exists", "--no-privileges", str(dump_path)],
+            extra_env=pw_env,
+        )
     else:
         psql = find_pg_bin("psql")
         if psql is None:
             raise SystemExit("psql not found on PATH")
-        _createdb(dsn)
-        _run([psql, dsn, "-v", "ON_ERROR_STOP=1", "-f", str(dump_path)])
+        if create_db:
+            _createdb(dsn)
+        _run([psql, safe_dsn, "-v", "ON_ERROR_STOP=1", "-f", str(dump_path)], extra_env=pw_env)
     print("Postgres restore finished. Verify row counts with a live "
           "connection before pointing the plane at this database.")
 

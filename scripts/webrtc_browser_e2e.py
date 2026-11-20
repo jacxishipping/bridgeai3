@@ -164,12 +164,43 @@ def _agent_enforcement_checks() -> dict[str, Any]:
         v1_routes.set_device_human_takeover("local", prev_local_takeover, actor="r1-test")
 
 
+def _find_system_chromium() -> str | None:
+    """Locate an existing Chrome/Edge binary so Playwright can run without downloading Chromium."""
+    candidates = [
+        Path(r"C:\Program Files\Google\Chrome\Application\chrome.exe"),
+        Path(r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe"),
+        Path(r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"),
+        Path(r"C:\Program Files\Microsoft\Edge\Application\msedge.exe"),
+        Path("/usr/bin/google-chrome"),
+        Path("/usr/bin/chromium"),
+        Path("/usr/bin/chromium-browser"),
+        Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
+    ]
+    for path in candidates:
+        if path.is_file():
+            return str(path)
+    return None
+
+
 async def _real_browser_peer_e2e(base_url: str, admin_headers: dict[str, str], device_id: str, device_token: str) -> dict[str, Any]:
-    """Drive a real headless Chromium RTCPeerConnection against a real aiortc agent peer."""
+    """Drive a real headless Chromium/Chrome RTCPeerConnection against a real aiortc agent peer.
+
+    Verifies over a live browser peer connection:
+      - SDP offer/answer & ICE `connected`
+      - Live video track receipt & frame arrival
+      - Live DataChannel `input` open + ping/pong round-trip
+      - Live view-only refusal over DataChannel (click -> mouse_control_denied)
+      - Live human takeover refusal over DataChannel (click -> human_takeover_active)
+      - Clean disconnect held-key release & session termination
+    """
     import httpx
     from aiortc import RTCPeerConnection, RTCSessionDescription, VideoStreamTrack
     from av import VideoFrame
     from playwright.async_api import async_playwright
+
+    from ai_bridge import plane_control_flags
+    from ai_bridge import webrtc_stream as ws_mod
+    from ai_bridge.control import v1_routes
 
     class _TestColorTrack(VideoStreamTrack):
         async def recv(self):
@@ -178,6 +209,11 @@ async def _real_browser_peer_e2e(base_url: str, admin_headers: dict[str, str], d
             frame.pts = pts
             frame.time_base = time_base
             return frame
+
+    prev_estop = plane_control_flags.is_emergency_stop()
+    prev_takeover = v1_routes.is_device_human_takeover_active("local")
+    plane_control_flags.set_emergency_stop(False)
+    v1_routes.set_device_human_takeover("local", False, actor="r1-browser-e2e")
 
     async with httpx.AsyncClient(timeout=20.0) as client:
         r_sess = await client.post(
@@ -188,16 +224,34 @@ async def _real_browser_peer_e2e(base_url: str, admin_headers: dict[str, str], d
         r_sess.raise_for_status()
         session_id = r_sess.json()["session_id"]
 
+        session_state: dict[str, Any] = {
+            "mode": "view_only",
+            "human_takeover_active": False,
+            "permissions": {"control_mouse": False, "control_keyboard": False},
+        }
+        enforcer = ws_mod.AgentStreamer(session_id=session_id, signaling=ws_mod.DictSignaling(session_state))
+
         agent_pc = RTCPeerConnection()
-        dc_pong = {"sent": False}
+        dc_events: list[dict[str, Any]] = []
         agent_pc.addTrack(_TestColorTrack())
         dc = agent_pc.createDataChannel("input")
 
         @dc.on("message")
         def _on_msg(msg):
-            if "ping" in str(msg):
-                dc.send(json.dumps({"action": "pong"}))
-                dc_pong["sent"] = True
+            text = msg.decode("utf-8") if isinstance(msg, (bytes, bytearray)) else str(msg)
+            parsed = json.loads(text)
+            if parsed.get("action") == "set_test_mode":
+                session_state["mode"] = parsed.get("mode", "view_only")
+                session_state["human_takeover_active"] = bool(parsed.get("takeover", False))
+                session_state["permissions"] = {
+                    "control_mouse": session_state["mode"] != "view_only",
+                    "control_keyboard": session_state["mode"] != "view_only",
+                }
+                dc.send(json.dumps({"type": "mode_ack", "mode": session_state["mode"], "takeover": session_state["human_takeover_active"]}))
+                return
+            res = enforcer._handle_input_payload(text)
+            dc_events.append({"req": parsed.get("action"), "res": res})
+            dc.send(json.dumps({"type": "input_result", "req_action": parsed.get("action"), **res}))
 
         offer = await agent_pc.createOffer()
         await agent_pc.setLocalDescription(offer)
@@ -215,9 +269,17 @@ async def _real_browser_peer_e2e(base_url: str, admin_headers: dict[str, str], d
         r_off.raise_for_status()
 
         browser_result: dict[str, Any] = {}
+        browser_name = "playwright-chromium"
         try:
             async with async_playwright() as p:
-                browser = await p.chromium.launch(headless=True)
+                sys_chrome = _find_system_chromium()
+                try:
+                    browser = await p.chromium.launch(headless=True)
+                except Exception:
+                    if not sys_chrome:
+                        raise
+                    browser_name = Path(sys_chrome).name
+                    browser = await p.chromium.launch(headless=True, executable_path=sys_chrome)
                 page = await browser.new_page()
                 await page.set_content("<html><body><video id='v' autoplay muted playsinline></video></body></html>")
 
@@ -225,16 +287,30 @@ async def _real_browser_peer_e2e(base_url: str, admin_headers: dict[str, str], d
                     """async ([offerSdp, offerType]) => {
                         window.__pc = new RTCPeerConnection({ iceServers: [] });
                         window.__gotTrack = false;
-                        window.__gotPong = false;
+                        window.__dcOpen = false;
+                        window.__dcReplies = [];
                         window.__pc.ontrack = (ev) => {
                             window.__gotTrack = true;
                             const v = document.getElementById('v');
-                            if (ev.streams && ev.streams[0]) v.srcObject = ev.streams[0];
+                            if (ev.streams && ev.streams[0]) {
+                                v.srcObject = ev.streams[0];
+                                v.play().catch(() => {});
+                            }
                         };
                         window.__pc.ondatachannel = (ev) => {
                             const ch = ev.channel;
-                            ch.onopen = () => ch.send(JSON.stringify({ action: 'ping' }));
-                            ch.onmessage = (m) => { if (String(m.data).includes('pong')) window.__gotPong = true; };
+                            window.__dc = ch;
+                            ch.onopen = () => {
+                                window.__dcOpen = true;
+                                ch.send(JSON.stringify({ action: 'ping', client_ts_ms: Date.now() }));
+                                ch.send(JSON.stringify({ action: 'click', x: 100, y: 100 }));
+                                ch.send(JSON.stringify({ action: 'set_test_mode', mode: 'human_control', takeover: true }));
+                                ch.send(JSON.stringify({ action: 'click', x: 100, y: 100 }));
+                                ch.send(JSON.stringify({ action: 'release_all_keys' }));
+                            };
+                            ch.onmessage = (m) => {
+                                try { window.__dcReplies.push(JSON.parse(String(m.data))); } catch (e) {}
+                            };
                         };
                         await window.__pc.setRemoteDescription({ type: offerType, sdp: offerSdp });
                         const ans = await window.__pc.createAnswer();
@@ -261,14 +337,27 @@ async def _real_browser_peer_e2e(base_url: str, admin_headers: dict[str, str], d
                     RTCSessionDescription(sdp=answer_payload["sdp"], type=answer_payload["type"])
                 )
 
-                for _ in range(60):
+                for _ in range(80):
                     state = await page.evaluate(
-                        "() => ({ conn: window.__pc.connectionState, ice: window.__pc.iceConnectionState, track: window.__gotTrack, pong: window.__gotPong })"
+                        """async () => {
+                            let framesDecoded = 0;
+                            try {
+                                const stats = await window.__pc.getStats();
+                                stats.forEach((s) => { if (s.type === 'inbound-rtp' && s.kind === 'video') framesDecoded = s.framesDecoded || 0; });
+                            } catch (e) {}
+                            return {
+                                conn: window.__pc.connectionState,
+                                ice: window.__pc.iceConnectionState,
+                                track: window.__gotTrack,
+                                dcOpen: window.__dcOpen,
+                                framesDecoded,
+                                replies: window.__dcReplies,
+                            };
+                        }"""
                     )
-                    if state["conn"] == "connected" and state["track"] and state["pong"]:
-                        browser_result = state
-                        break
                     browser_result = state
+                    if state["conn"] == "connected" and state["track"] and len(state.get("replies") or []) >= 5 and state["framesDecoded"] > 0:
+                        break
                     await asyncio.sleep(0.25)
 
                 await page.evaluate("() => window.__pc && window.__pc.close()")
@@ -276,13 +365,38 @@ async def _real_browser_peer_e2e(base_url: str, admin_headers: dict[str, str], d
         finally:
             await agent_pc.close()
             await client.post(f"{base_url}/api/v1/sessions/{session_id}/terminate", json={}, headers=admin_headers)
+            plane_control_flags.set_emergency_stop(prev_estop)
+            v1_routes.set_device_human_takeover("local", prev_takeover, actor="r1-browser-e2e")
+
+        replies = browser_result.get("replies") or []
+        got_pong = any(r.get("action") == "pong" and r.get("ok") is True for r in replies)
+        vo_denied = any(r.get("req_action") == "click" and r.get("error") in ("mouse_control_denied", "session_is_view_only") for r in replies)
+        to_denied = any(r.get("req_action") == "click" and r.get("error") == "human_takeover_active" for r in replies)
+        rel_ok = any(r.get("req_action") == "release_all_keys" and r.get("ok") is True for r in replies)
 
         ok = (
             browser_result.get("conn") == "connected"
             and bool(browser_result.get("track"))
-            and bool(browser_result.get("pong"))
+            and bool(browser_result.get("dcOpen"))
+            and got_pong
+            and vo_denied
+            and to_denied
+            and rel_ok
         )
-        return {"ok": ok, "session_id": session_id, **browser_result}
+        return {
+            "ok": ok,
+            "browser": browser_name,
+            "session_id": session_id,
+            "connection_state": browser_result.get("conn"),
+            "ice_state": browser_result.get("ice"),
+            "track_received": bool(browser_result.get("track")),
+            "frames_decoded": int(browser_result.get("framesDecoded") or 0),
+            "datachannel_open": bool(browser_result.get("dcOpen")),
+            "datachannel_pong": got_pong,
+            "view_only_enforced_over_dc": vo_denied,
+            "takeover_enforced_over_dc": to_denied,
+            "disconnect_release_ok": rel_ok,
+        }
 
 
 def run_webrtc_e2e(out_path: Path, *, require_browser_peer: bool = False) -> dict[str, Any]:

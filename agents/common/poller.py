@@ -851,7 +851,10 @@ class Poller:
         path = f"/api/agent/tasks/next?wait={wait}" if wait > 0 else "/api/agent/tasks/next"
         try:
             nxt = self._req("GET", path, timeout=max(15, wait + 5))
-        except (DeviceRevokedError, DeviceTokenExpiredError):
+        except (DeviceRevokedError, DeviceTokenExpiredError) as exc:
+            if not self.revoked:
+                kind = "revoked" if isinstance(exc, DeviceRevokedError) else "expired"
+                self._mark_terminal_auth(kind, getattr(exc, "body", ""))
             return {"task": None, "revoked": True, "revoked_reason": self.revoked_reason}
         task = nxt.get("task")
         from ai_bridge.plane_control_flags import set_emergency_stop
@@ -1168,8 +1171,13 @@ class Poller:
                         self._wake.clear()
                     else:
                         time.sleep(0.1)
-                except (DeviceRevokedError, DeviceTokenExpiredError):
-                    # Terminal auth (F07-12): stop, do not retry.
+                except (DeviceRevokedError, DeviceTokenExpiredError) as exc:
+                    # Terminal auth (F07-12): ensure revoked flag is set even when
+                    # raised directly from _req() on /api/agent/tasks/next rather
+                    # than from _heartbeat_once().
+                    if not self.revoked:
+                        kind = "revoked" if isinstance(exc, DeviceRevokedError) else "expired"
+                        self._mark_terminal_auth(kind, getattr(exc, "body", ""))
                     break
                 except KeyboardInterrupt:
                     # Ctrl-C outside a task: request a graceful drain.

@@ -153,3 +153,117 @@ def test_postgres_pitr_drill_wal_scripts_generation(tmp_path):
     assert "wal_restore.py" in restore_cmd and "%f" in restore_cmd and "%p" in restore_cmd
     assert (tmp_path / "wal_archive.py").is_file()
     assert (tmp_path / "wal_restore.py").is_file()
+
+
+def test_poller_run_forever_marks_revoked_when_tasks_next_raises_revoked(monkeypatch):
+    from agents.common.poller import DeviceRevokedError, Poller
+
+    p = Poller("http://127.0.0.1:9", "revoked-tok")
+    monkeypatch.setattr(p, "start_side_channel", lambda: None)
+    monkeypatch.setattr(p, "start_heartbeat_loop", lambda: None)
+    p._heartbeat_loop_running = True
+    monkeypatch.setattr(
+        p,
+        "_req",
+        lambda method, path, body=None, timeout=None: (_ for _ in ()).throw(
+            DeviceRevokedError(401, path, "Unknown or revoked device token.")
+        ),
+    )
+    out = p.run_forever()
+    assert out["revoked"] is True
+    assert p.revoked is True
+    assert "revoked" in (out.get("revoked_reason") or "")
+
+
+def test_independent_review_p0_ai_execute_local_approval_gate(tmp_path, monkeypatch):
+    """P0 regression: unapproved approval_id must return 409 (not fall through),
+    and omitted approval_id must cleanly insert a pending approval row."""
+    monkeypatch.setenv("AI_BRIDGE_ALLOW_LOCAL_EXECUTION", "1")
+    app = create_app(admin_token="adm-p0", db_path=tmp_path / "p0.db")
+    try:
+        client = TestClient(app, raise_server_exceptions=False)
+        headers = {"X-Admin-Token": "adm-p0"}
+        # 1. Omitting approval_id for Tier-3 local tool creates a pending approval cleanly
+        r1 = client.post(
+            "/api/ai/execute",
+            json={"tool": "run_shell", "args": {"command": "echo hi"}, "device": "local"},
+            headers=headers,
+        )
+        assert r1.status_code == 200, r1.text
+        body1 = r1.json()
+        assert body1["status"] == "needs_approval"
+        ap_id = body1["approval_id"]
+        assert ap_id
+
+        # 2. Supplying that STILL-PENDING approval_id must return 409 denied (not execute!)
+        r2 = client.post(
+            "/api/ai/execute",
+            json={"tool": "run_shell", "args": {"command": "echo hi"}, "device": "local", "approval_id": ap_id},
+            headers=headers,
+        )
+        assert r2.status_code == 409, r2.text
+    finally:
+        app.state.conn.close()
+
+
+def test_independent_review_p0_tenant_isolation_frames_and_approvals(tmp_path):
+    """P0/P1 regression: fleet desktop frames and approval delete must enforce tenant isolation."""
+    app = create_app(admin_token="adm-ten", db_path=tmp_path / "ten.db")
+    try:
+        client = TestClient(app, raise_server_exceptions=False)
+        adm = {"X-Admin-Token": "adm-ten"}
+        # Create tenant-a and tenant-b admins + enroll one device each
+        client.post("/api/auth/users", json={"username": "adma", "password": "Password123!", "role": "admin", "tenant": "tenant-a"}, headers=adm)
+        client.post("/api/auth/users", json={"username": "admb", "password": "Password123!", "role": "admin", "tenant": "tenant-b"}, headers=adm)
+        tok_a = client.post("/api/auth/login", json={"username": "adma", "password": "Password123!"}).json()["session_token"]
+        tok_b = client.post("/api/auth/login", json={"username": "admb", "password": "Password123!"}).json()["session_token"]
+        csrf_a = client.get("/api/auth/csrf-token", headers={"X-Session-Token": tok_a}).json()["csrf_token"]
+        csrf_b = client.get("/api/auth/csrf-token", headers={"X-Session-Token": tok_b}).json()["csrf_token"]
+
+        dev_b = client.post(
+            "/api/devices/enroll",
+            json={"name": "dev-b", "os": "Windows", "tenant": "tenant-b"},
+            headers={"X-Session-Token": tok_b, "X-CSRF-Token": csrf_b},
+        ).json()["device_id"]
+
+        # Tenant A must NOT see Tenant B's device in /api/fleet/desktop/frames
+        frames_a = client.get("/api/fleet/desktop/frames", headers={"X-Session-Token": tok_a})
+        assert frames_a.status_code == 200
+        assert all(d["device_id"] != dev_b for d in frames_a.json()["devices"])
+
+        # Tenant A must NOT delete Tenant B's approval
+        t3_b = client.post(
+            "/api/tasks",
+            json={"device_id": dev_b, "tool": "run_shell", "args": {"command": "echo b"}},
+            headers={"X-Session-Token": tok_b, "X-CSRF-Token": csrf_b},
+        ).json()
+        del_cross = client.delete(
+            f"/api/approvals/{t3_b['approval_id']}",
+            headers={"X-Session-Token": tok_a, "X-CSRF-Token": csrf_a},
+        )
+        assert del_cross.status_code in (403, 404)
+
+        # Spoofed X-Admin-Token alongside X-Session-Token must NOT bypass CSRF (403)
+        spoofed = client.post(
+            "/api/tasks",
+            json={"device_id": dev_b, "tool": "get_system_info", "args": {}},
+            headers={"X-Session-Token": tok_a, "X-Admin-Token": "fake-spoof"},
+        )
+        assert spoofed.status_code == 403
+    finally:
+        app.state.conn.close()
+
+
+def test_independent_review_p1_drill_postgres_refuses_same_db():
+    import pytest
+
+    from scripts.backup_restore import _strip_dsn_password, drill_postgres
+
+    with pytest.raises(ValueError, match="different database"):
+        drill_postgres(
+            "postgresql://u:secret@127.0.0.1:5432/live_db",
+            "postgresql://u:secret@127.0.0.1:5432/live_db",
+        )
+    safe, env = _strip_dsn_password("postgresql://u:s3cr3t@db.example:5432/app")
+    assert "s3cr3t" not in safe
+    assert env["PGPASSWORD"] == "s3cr3t"

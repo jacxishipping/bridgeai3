@@ -87,8 +87,9 @@ def create_webrtc_router(ctx: ControlContext) -> APIRouter:
         x_session_token: str | None = Header(default=None),
     ):
         require_role("operator", x_admin_token, x_session_token)
-        query = "SELECT id, name, hostname, os, status, last_seen FROM devices WHERE revoked=0"
-        params = []
+        tenant = resolve_request_tenant(None, x_admin_token, x_session_token)
+        query = "SELECT id, name, hostname, os, status, last_seen FROM devices WHERE revoked=0 AND tenant=?"
+        params: list[str] = [tenant]
         if os:
             query += " AND (LOWER(os) LIKE ? OR LOWER(name) LIKE ?)"
             params.extend([f"%{os.lower()}%", f"%{os.lower()}%"])
@@ -550,7 +551,7 @@ def create_webrtc_router(ctx: ControlContext) -> APIRouter:
         require_role("admin", x_admin_token, x_session_token, authorization)
         _require_device_tenant(device_id, x_admin_token, x_session_token, authorization)
         sess = terminal_manager.get_terminal_session(session_id)
-        if sess is None:
+        if sess is None or getattr(sess, "device_id", None) != device_id:
             raise HTTPException(status_code=404, detail="Terminal session not found.")
         return StreamingResponse(sess.stream(since_seq=since_seq), media_type="text/event-stream")
 
@@ -565,7 +566,7 @@ def create_webrtc_router(ctx: ControlContext) -> APIRouter:
         require_role("admin", x_admin_token, x_session_token)
         _require_device_tenant(device_id, x_admin_token, x_session_token)
         sess = terminal_manager.get_terminal_session(session_id)
-        if sess is None:
+        if sess is None or getattr(sess, "device_id", None) != device_id:
             raise HTTPException(status_code=404, detail="Terminal session not found.")
         input_data = body.get("input", "")
         sess.write(input_data)
@@ -582,7 +583,7 @@ def create_webrtc_router(ctx: ControlContext) -> APIRouter:
         require_role("admin", x_admin_token, x_session_token)
         _require_device_tenant(device_id, x_admin_token, x_session_token)
         sess = terminal_manager.get_terminal_session(session_id)
-        if sess is None:
+        if sess is None or getattr(sess, "device_id", None) != device_id:
             raise HTTPException(status_code=404, detail="Terminal session not found.")
         cols = int(body.get("cols", 120))
         rows = int(body.get("rows", 35))
@@ -598,6 +599,9 @@ def create_webrtc_router(ctx: ControlContext) -> APIRouter:
     ):
         actor = require_role("admin", x_admin_token, x_session_token)
         _require_device_tenant(device_id, x_admin_token, x_session_token)
+        sess = terminal_manager.get_terminal_session(session_id)
+        if sess is None or getattr(sess, "device_id", None) != device_id:
+            raise HTTPException(status_code=404, detail="Terminal session not found.")
         ok = terminal_manager.close_terminal_session(session_id)
         audit(actor, device_id, "close_terminal_session", {"session_id": session_id}, "allowed")
         return {"ok": ok}

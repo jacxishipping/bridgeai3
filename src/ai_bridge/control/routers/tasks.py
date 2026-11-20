@@ -501,9 +501,15 @@ def create_tasks_router(ctx: ControlContext) -> APIRouter:
     @router.delete("/api/approvals/{approval_id}")
     def delete_approval(approval_id: str, x_admin_token: str | None = Header(default=None), x_session_token: str | None = Header(default=None)):
         actor = require_role("admin", x_admin_token, x_session_token)
-        row = conn.execute("SELECT task_id, status FROM approvals WHERE id=?", (approval_id,)).fetchone()
+        row = conn.execute("SELECT * FROM approvals WHERE id=?", (approval_id,)).fetchone()
         if row is None:
             raise HTTPException(status_code=404, detail="Approval not found.")
+        if row["task_id"]:
+            _t = conn.execute("SELECT tenant FROM tasks WHERE id=?", (row["task_id"],)).fetchone()
+            if _t is not None:
+                _require_row_tenant(_t, x_admin_token, x_session_token)
+        else:
+            _require_row_tenant(row, x_admin_token, x_session_token)
         if row["task_id"] and row["status"] == "pending":
             conn.execute("UPDATE tasks SET status='cancelled', updated_at=? WHERE id=? AND status='needs_approval'", (dbmod.now(), row["task_id"]))
         cur = conn.execute("DELETE FROM approvals WHERE id=?", (approval_id,))

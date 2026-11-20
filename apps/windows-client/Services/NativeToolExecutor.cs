@@ -464,7 +464,7 @@ public sealed class NativeToolExecutor
     private static object ListWorkspace(AgentGuiConfig config, JsonElement args)
     {
         var rel = args.TryGetProperty("path", out var p) ? p.GetString() ?? "" : "";
-        var target = ResolveAccessiblePath(config, rel);
+        var target = ConfineWorkspacePath(config.Workspace, rel);
         if (!Directory.Exists(target))
         {
             throw new DirectoryNotFoundException($"Directory not found: {rel}");
@@ -487,7 +487,7 @@ public sealed class NativeToolExecutor
     private static object ReadWorkspaceFile(AgentGuiConfig config, JsonElement args)
     {
         var rel = args.TryGetProperty("path", out var p) ? p.GetString() ?? "" : "";
-        var target = ResolveAccessiblePath(config, rel);
+        var target = ConfineWorkspacePath(config.Workspace, rel);
         var fileName = Path.GetFileName(target);
         if (fileName.StartsWith(".env", StringComparison.OrdinalIgnoreCase) ||
             fileName.EndsWith(".pem", StringComparison.OrdinalIgnoreCase) ||
@@ -513,7 +513,7 @@ public sealed class NativeToolExecutor
         }
 
         var pathArg = args.TryGetProperty("path", out var pEl) ? pEl.GetString() ?? "" : "";
-        var root = ResolveAccessiblePath(config, pathArg);
+        var root = ConfineWorkspacePath(config.Workspace, pathArg);
         int maxMatches = Math.Clamp(config.MaxListEntries, 10, 1000);
         var matches = new List<object>();
         foreach (var file in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories).Take(500))
@@ -543,7 +543,7 @@ public sealed class NativeToolExecutor
         }
         var rel = args.TryGetProperty("path", out var p) ? p.GetString() ?? "" : "";
         var content = args.TryGetProperty("content", out var c) ? c.GetString() ?? "" : "";
-        var target = ResolveAccessiblePath(config, rel);
+        var target = ConfineWorkspacePath(config.Workspace, rel);
         EnsureNotSecretFile(target);
         var dir = Path.GetDirectoryName(target);
         if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
