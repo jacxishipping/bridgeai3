@@ -1,4 +1,4 @@
-FROM python:3.12-slim AS base
+FROM python:3.15-slim AS base
 # Postgres client tools for the backup/restore drill (scripts/backup_restore.py
 # needs pg_dump/psql/pg_restore/createdb on PATH). Staging Postgres is PG 18
 # but Debian trixie's postgresql-client is PG 17, and pg_dump refuses a
