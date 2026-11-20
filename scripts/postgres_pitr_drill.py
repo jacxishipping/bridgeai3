@@ -243,10 +243,23 @@ def run_live_postgres_drills(out_path: Path) -> dict[str, Any]:
 
         # Initialize primary cluster with checksums & WAL archiving
         _run_checked([bins["initdb"], "-D", str(pgdata_primary), "-U", "ai_bridge", "-A", "trust", "-E", "UTF8", "--data-checksums"])
+        socket_conf = ""
+        if os.name != "nt":
+            # Debian/Ubuntu PostgreSQL defaults unix_socket_directories to
+            # /var/run/postgresql, which is not writable by unprivileged users
+            # (e.g. GitHub Actions runner). Point it at an isolated temp dir.
+            sock_dir = root / "sock"
+            sock_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+            os.chmod(sock_dir, 0o700)
+            if len(sock_dir.as_posix()) <= 80:
+                socket_conf = f"unix_socket_directories = '{sock_dir.as_posix()}'\n"
+            else:
+                socket_conf = "unix_socket_directories = ''\n"
         with (pgdata_primary / "postgresql.conf").open("a", encoding="utf-8") as conf:
             conf.write(
                 "\n"
                 "listen_addresses = '127.0.0.1'\n"
+                f"{socket_conf}"
                 "wal_level = replica\n"
                 "archive_mode = on\n"
                 f"archive_command = '{archive_cmd}'\n"
@@ -370,6 +383,8 @@ def run_live_postgres_drills(out_path: Path) -> dict[str, Any]:
             # 4d. Restore basebackup into isolated pgdata_pitr and recover to named restore point
             t_pitr_rto_start = time.perf_counter()
             shutil.copytree(basebackup_dir, pgdata_pitr)
+            if os.name != "nt":
+                os.chmod(pgdata_pitr, 0o700)
             (pgdata_pitr / "recovery.signal").write_text("", encoding="utf-8")
             with (pgdata_pitr / "postgresql.auto.conf").open("a", encoding="utf-8") as aconf:
                 aconf.write(
