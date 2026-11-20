@@ -157,3 +157,50 @@ def build_capability_matrix(*, include_host: bool = True) -> dict[str, Any]:
         },
         "residual_gaps": residuals,
     }
+
+
+def device_desktop_capabilities(device_row: dict[str, Any], effective_policy: dict[str, Any]) -> dict[str, Any]:
+    """Release 4: Honest per-device cross-platform desktop capability contract.
+
+    Advertises read-only screen/status across Windows, Linux, and macOS, while
+    advertising interactive control ONLY on tested platforms (Windows) when
+    explicitly enabled by effective policy and not revoked.
+    """
+    family = normalize_platform_family(device_row.get("os"))
+    revoked = bool(device_row.get("revoked"))
+    online = (device_row.get("status") or "").lower() == "online" and not revoked
+    policy_desktop = bool(effective_policy.get("desktop_enabled"))
+    is_windows = family == "Windows"
+
+    screenshot_supported = family in ("Windows", "Linux", "Darwin")
+    webrtc_supported = is_windows
+    interactive_supported = is_windows and policy_desktop and not revoked
+
+    if revoked:
+        mode = "unavailable"
+        reason = "Device is revoked."
+    elif not is_windows:
+        mode = "view_only" if screenshot_supported else "unavailable"
+        reason = f"Interactive desktop automation is not advertised for {family}; view-only/status contract enforced."
+    elif not policy_desktop:
+        mode = "view_only"
+        reason = "Interactive desktop control is disabled by effective policy."
+    else:
+        mode = "interactive"
+        reason = "Windows desktop host with policy opt-in."
+
+    return {
+        "schema": "ai-bridge-device-desktop-capabilities/v1",
+        "device_id": device_row.get("id"),
+        "device_name": device_row.get("name"),
+        "platform_family": family,
+        "online": online,
+        "revoked": revoked,
+        "read_only_status_supported": True,
+        "screenshot_supported": screenshot_supported,
+        "webrtc_stream_supported": webrtc_supported,
+        "interactive_input_supported": interactive_supported,
+        "policy_desktop_enabled": policy_desktop,
+        "advertised_mode": mode,
+        "reason": reason,
+    }

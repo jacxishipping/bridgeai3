@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Check, RefreshCw, ShieldAlert, X } from "lucide-react";
+import { Check, Download, RefreshCw, ShieldAlert, Upload, X } from "lucide-react";
 import type { ApiClient } from "../api";
 import type { ApprovalRecord, AuditRecord, DeviceRecord, PolicyHistoryEntry, PolicyState } from "../types";
 import {
@@ -78,6 +78,12 @@ export function SecurityView({
   const [reviewOpen, setReviewOpen] = useState(false);
   const [reviewSims, setReviewSims] = useState<Array<{ tool: string; result: Record<string, unknown> }>>([]);
   const [reviewLoading, setReviewLoading] = useState(false);
+
+  // Policy-as-Code Signed Import/Export Modal (Release 4)
+  const [importOpen, setImportOpen] = useState(false);
+  const [importJson, setImportJson] = useState("");
+  const [importPreview, setImportPreview] = useState<Record<string, unknown> | null>(null);
+  const [importBusy, setImportBusy] = useState(false);
 
   // Simulator
   const [simTool, setSimTool] = useState("run_shell");
@@ -393,18 +399,44 @@ export function SecurityView({
             />
           </div>
 
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, paddingTop: 6 }}>
-            <span className="mono" style={{ fontSize: 11.5, color: "var(--text-muted)" }}>
-              {policyDiffs.length > 0
-                ? `${policyDiffs.length} pending change${policyDiffs.length === 1 ? "" : "s"}`
-                : "Matches live v" + policyVersion}
-            </span>
+          <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: 8, paddingTop: 6 }}>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+              <Button
+                size="sm"
+                onClick={async () => {
+                  try {
+                    const bundle = await api.exportPolicyBundle();
+                    const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: "application/json" });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement("a");
+                    a.href = url;
+                    a.download = `policy-bundle-v${bundle.source_version}.json`;
+                    a.click();
+                    URL.revokeObjectURL(url);
+                    onToast(`Exported signed policy bundle (v${bundle.source_version})`);
+                  } catch (err) {
+                    onToast(err instanceof Error ? err.message : "Export failed");
+                  }
+                }}
+              >
+                <Download size={12} /> Export Signed
+              </Button>
+              <Button
+                size="sm"
+                onClick={() => {
+                  setImportPreview(null);
+                  setImportOpen(true);
+                }}
+              >
+                <Upload size={12} /> Import Signed
+              </Button>
+            </div>
             <Button
               variant="primary"
               disabled={saving}
               onClick={() => void openPublishReview()}
             >
-              <ShieldAlert size={13} /> Review Diff &amp; Publish
+              <ShieldAlert size={13} /> Review Diff &amp; Publish ({policyDiffs.length})
             </Button>
           </div>
         </SurfaceCard>
@@ -598,6 +630,78 @@ export function SecurityView({
             </Button>
             <Button variant="primary" disabled={saving} onClick={() => void confirmPublishPolicy()}>
               {saving ? "Publishing..." : `Confirm & Publish v${policyVersion + 1}`}
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Policy-as-Code Signed Import Modal (Release 4) */}
+      <Modal
+        open={importOpen}
+        title="Import Signed Policy Bundle (Policy-as-Code)"
+        onClose={() => setImportOpen(false)}
+        maxWidth={560}
+      >
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>
+            Paste a signed <span className="mono">ai-bridge-policy-bundle/v1</span> JSON document. Signatures and SHA-256 digests are verified server-side; run Dry-Run first to inspect diffs and simulations.
+          </div>
+          <textarea
+            rows={7}
+            className="field mono"
+            placeholder='{"schema": "ai-bridge-policy-bundle/v1", "signature": "...", ...}'
+            value={importJson}
+            onChange={(e) => {
+              setImportJson(e.target.value);
+              setImportPreview(null);
+            }}
+          />
+          {importPreview && (
+            <pre className="terminal" style={{ margin: 0, maxHeight: 180, whiteSpace: "pre-wrap", fontSize: 11 }}>
+              {JSON.stringify(importPreview, null, 2)}
+            </pre>
+          )}
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+            <Button variant="ghost" disabled={importBusy} onClick={() => setImportOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              disabled={importBusy || !importJson.trim()}
+              onClick={async () => {
+                setImportBusy(true);
+                try {
+                  const parsed = JSON.parse(importJson) as Record<string, unknown>;
+                  const res = await api.importPolicyBundle(parsed, true);
+                  setImportPreview(res);
+                  onToast("Signature verified (dry-run)");
+                } catch (err) {
+                  onToast(err instanceof Error ? err.message : "Dry-run verification failed");
+                } finally {
+                  setImportBusy(false);
+                }
+              }}
+            >
+              Verify &amp; Dry-Run
+            </Button>
+            <Button
+              variant="primary"
+              disabled={importBusy || !importPreview}
+              onClick={async () => {
+                setImportBusy(true);
+                try {
+                  const parsed = JSON.parse(importJson) as Record<string, unknown>;
+                  const res = await api.importPolicyBundle(parsed, false);
+                  setImportOpen(false);
+                  onToast(`Imported signed policy v${String(res.version ?? "")}`);
+                  await loadPolicyState();
+                } catch (err) {
+                  onToast(err instanceof Error ? err.message : "Import apply failed");
+                } finally {
+                  setImportBusy(false);
+                }
+              }}
+            >
+              Apply Signed Bundle
             </Button>
           </div>
         </div>

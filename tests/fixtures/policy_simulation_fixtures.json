@@ -1,0 +1,99 @@
+{
+  "schema": "ai-bridge-policy-fixtures/v1",
+  "description": "CI Policy-as-Code regression fixtures verifying fail-closed policy simulation invariants.",
+  "cases": [
+    {
+      "name": "default_policy_allows_tier1_read",
+      "policy": {
+        "allow_writes": true,
+        "allow_tier3": false,
+        "desktop_enabled": false,
+        "max_tier_unattended": 2
+      },
+      "call": {
+        "tool": "get_system_info"
+      },
+      "expected": {
+        "allowed": true,
+        "needs_approval": false
+      }
+    },
+    {
+      "name": "default_policy_blocks_unattended_shell",
+      "policy": {
+        "allow_writes": true,
+        "allow_tier3": false,
+        "desktop_enabled": false,
+        "max_tier_unattended": 2
+      },
+      "call": {
+        "tool": "run_shell"
+      },
+      "expected": {
+        "allowed": false
+      }
+    },
+    {
+      "name": "default_policy_blocks_desktop_click_when_disabled",
+      "policy": {
+        "allow_writes": true,
+        "allow_tier3": false,
+        "desktop_enabled": false,
+        "max_tier_unattended": 2
+      },
+      "call": {
+        "tool": "mouse_click"
+      },
+      "expected": {
+        "allowed": false
+      }
+    },
+    {
+      "name": "revoked_device_always_denied_even_for_tier1",
+      "policy": {
+        "allow_writes": true,
+        "allow_tier3": true,
+        "desktop_enabled": true,
+        "max_tier_unattended": 3
+      },
+      "call": {
+        "tool": "get_system_info",
+        "device_revoked": true
+      },
+      "expected": {
+        "allowed": false
+      }
+    },
+    {
+      "name": "denied_tools_list_blocks_otherwise_allowed_tool",
+      "policy": {
+        "allow_writes": true,
+        "allow_tier3": false,
+        "desktop_enabled": false,
+        "max_tier_unattended": 2,
+        "denied_tools": ["get_system_info"]
+      },
+      "call": {
+        "tool": "get_system_info"
+      },
+      "expected": {
+        "allowed": false
+      }
+    },
+    {
+      "name": "tier4_deletion_never_unattended_under_standard_policy",
+      "policy": {
+        "allow_writes": true,
+        "allow_tier3": true,
+        "desktop_enabled": false,
+        "max_tier_unattended": 3
+      },
+      "call": {
+        "tool": "delete_workspace_file"
+      },
+      "expected": {
+        "allowed": false
+      }
+    }
+  ]
+}

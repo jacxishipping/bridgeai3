@@ -116,6 +116,7 @@ beyond the approver.
 | POST | `/api/devices/enroll` | Admin, Session | Enroll a new device |
 | DELETE | `/api/devices/{device_id}` | Admin, Session | delete_device |
 | PUT | `/api/devices/{device_id}` | Admin, Session | update_device |
+| GET | `/api/devices/{device_id}/desktop/capabilities` | Admin, Session | Capability-aware cross-platform desktop contract for one device |
 | GET | `/api/devices/{device_id}/desktop/frame` | Admin, Session | get_desktop_frame |
 | POST | `/api/devices/{device_id}/desktop/input` | Admin, Session | send_desktop_input |
 | GET | `/api/devices/{device_id}/desktop/live.jpg` | Bearer, Admin, Session | get_device_desktop_live_jpeg |
@@ -227,7 +228,9 @@ beyond the approver.
 | --- | --- | --- | --- |
 | GET | `/api/policies` | Admin, Session | get_policy |
 | POST | `/api/policies` | Admin, Session | create_policy |
+| GET | `/api/policies/export` | Admin, Session | Export signed Policy-as-Code bundle (HMAC-SHA256) |
 | GET | `/api/policies/history` | Admin, Session | policy_history |
+| POST | `/api/policies/import` | Admin, Session | Verify and import a signed Policy-as-Code bundle (supports dry_run) |
 | POST | `/api/policies/simulate` | Admin, Session | simulate_policy |
 | DELETE | `/api/policies/{version}` | Admin, Session | delete_policy_version |
 | PUT | `/api/policies/{version}` | Admin, Session | update_policy_version |
@@ -249,6 +252,7 @@ beyond the approver.
 | POST | `/api/triggers/{trigger_id}/toggle` | Admin, Session | toggle_trigger |
 | GET | `/api/workflows` | Admin, Session | list_workflows |
 | POST | `/api/workflows` | Admin, Session | submit_workflow |
+| GET | `/api/workflows/curated` | Admin, Session | List curated Tier-1 read-only diagnostic workflow templates |
 | GET | `/api/workflows/templates` | Admin, Session | get_workflow_templates |
 | POST | `/api/workflows/templates` | Admin, Session | create_workflow_template |
 | DELETE | `/api/workflows/templates/{template_id}` | Admin, Session | delete_workflow_template |
@@ -258,6 +262,7 @@ beyond the approver.
 | POST | `/api/workflows/{workflow_id}/retry` | Admin, Session | retry_workflow |
 | POST | `/api/workflows/{workflow_id}/schedule` | Admin, Session | schedule_workflow |
 | GET | `/api/workflows/{workflow_id}/stream` | Admin, Session | stream_workflow_progress |
+| GET | `/api/workflows/{workflow_id}/timeline` | Admin, Session | Per-step approval-to-audit timeline for a workflow run |
 
 ### Backups
 
@@ -370,6 +375,8 @@ beyond the approver.
 | POST | `/api/emergency-stop` | Admin, Session | emergency_stop |
 | POST | `/api/emergency-stop/clear` | Admin, Session | emergency_clear |
 | GET | `/api/events/stream` | Admin, Session | stream_control_events |
+| GET | `/api/features` | Admin, Session | List Release 4 feature flags and adoption metrics |
+| GET | `/api/fleet/analytics/trends` | Admin, Session | Daily fleet health and task-success trends (JSON or CSV) |
 | POST | `/api/fleet/broadcast` | Admin, Session | broadcast_fleet_command |
 | GET | `/api/fleet/broadcast/{batch_id}` | Admin, Session | get_broadcast_status |
 | GET | `/api/fleet/desktop-capabilities` | Admin, Session | fleet_desktop_capabilities |
@@ -386,7 +393,12 @@ beyond the approver.
 | GET | `/api/fleet/telemetry` | Admin, Session | get_fleet_telemetry |
 | POST | `/api/fleet/update` | Admin, Session | update_fleet |
 | GET | `/api/fleet/version` | Admin, Session | get_fleet_version |
+| GET | `/api/incidents` | Admin, Session | List actionable in-app incidents (failed tasks, offline devices, expired approvals) |
+| POST | `/api/incidents/{incident_id}/ack` | Admin, Session | Acknowledge, assign, resolve, or reopen an incident |
 | GET | `/api/logs` | Admin, Session | service_logs |
+| GET | `/api/memory/snippets` | Admin, Session | List governed read-only workspace knowledge snippets |
+| POST | `/api/memory/snippets` | Admin, Session | Create a governed read-only workspace snippet with provenance |
+| DELETE | `/api/memory/snippets/{snippet_id}` | Admin, Session | Delete a governed workspace snippet |
 | GET | `/api/metrics/summary` | Admin, Session | metrics_summary_api |
 | GET | `/api/settings/ai` | Admin, Session | get_ai_settings |
 | POST | `/api/settings/ai` | Admin, Session | update_ai_settings |
@@ -398,7 +410,7 @@ beyond the approver.
 | POST | `/api/supervisor/recover` | Admin, Session | supervisor_recover_api |
 | GET | `/api/traces/{trace_id}` | Admin, Session | get_trace_timeline |
 
-*238 (method, path) pairs listed — generated from the live app; see the note at the top of this file.*
+*250 (method, path) pairs listed — generated from the live app; see the note at the top of this file.*
 <!-- END GENERATED ROUTES -->
 
 ## Mounted surfaces (combined app)

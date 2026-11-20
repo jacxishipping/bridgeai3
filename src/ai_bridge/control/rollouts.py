@@ -61,6 +61,7 @@ def _dispatch_ring(
     notify: Callable,
     audit_fn: Callable,
     device_ids_override: list[str] | None = None,
+    verify_only: bool = False,
 ) -> list[dict[str, Any]]:
     if device_ids_override is not None:
         if not device_ids_override:
@@ -77,7 +78,10 @@ def _dispatch_ring(
         ).fetchall()
 
     results: list[dict[str, Any]] = []
-    next_state = "rolling_back" if tool == "rollback_fleet_agent" else "updating"
+    next_state = "rolling_back" if tool == "rollback_fleet_agent" else ("verifying" if verify_only else "updating")
+    task_args: dict[str, Any] = {"rollout_id": rollout_id, "ring": ring}
+    if verify_only:
+        task_args["verify_only"] = True
     for dev in devs:
         try:
             created = task_service_mod.create_task(
@@ -87,7 +91,7 @@ def _dispatch_ring(
                 tenant=tenant,
                 device_id=dev["id"],
                 tool=tool,
-                args={"rollout_id": rollout_id, "ring": ring},
+                args=task_args,
                 human_initiated=True,
                 device_row=dev,
                 get_effective_device_policy=get_effective_device_policy,
@@ -96,7 +100,7 @@ def _dispatch_ring(
                 audit_fn=audit_fn,
             )
             conn.execute("UPDATE devices SET update_state=? WHERE id=?", (next_state, dev["id"]))
-            results.append({"device_id": dev["id"], "task_id": created["task_id"], "status": created["status"]})
+            results.append({"device_id": dev["id"], "task_id": created["task_id"], "status": created["status"], "verify_only": verify_only})
         except HTTPException as exc:
             results.append({"device_id": dev["id"], "task_id": None, "status": "skipped", "reason": str(exc.detail)})
     conn.commit()
@@ -146,6 +150,8 @@ def create_rollout(
     manifest_url: str = "",
     rings: list[str] | None = None,
     max_failure_rate: float = 0.25,
+    verify_only: bool = False,
+    require_approval: bool = False,
     get_effective_device_policy: Callable,
     get_current_policy: Callable,
     notify: Callable,
@@ -168,8 +174,14 @@ def create_rollout(
         get_current_policy=get_current_policy,
         notify=notify,
         audit_fn=audit_fn,
+        verify_only=bool(verify_only and first_ring == "canary"),
     )
-    dispatched = {first_ring: dispatched_first}
+    dispatched: dict[str, Any] = {first_ring: dispatched_first}
+    if verify_only or require_approval:
+        dispatched["_meta"] = {
+            "verify_only_canary": bool(verify_only),
+            "require_approval": bool(require_approval),
+        }
     conn.execute(
         "INSERT INTO update_rollouts "
         "(id, name, tenant, target_version, target_commit, manifest_url, current_ring, rings_json, status, max_failure_rate, dispatched_json, created_by, created_at, updated_at) "
@@ -193,7 +205,10 @@ def create_rollout(
     )
     conn.commit()
     row = conn.execute("SELECT * FROM update_rollouts WHERE id=?", (rid,)).fetchone()
-    return _format_rollout(row)
+    formatted = _format_rollout(row)
+    formatted["verify_only_canary"] = bool(verify_only)
+    formatted["require_approval"] = bool(require_approval)
+    return formatted
 
 
 def advance_rollout(
@@ -202,6 +217,7 @@ def advance_rollout(
     rollout_id: str,
     tenant: str,
     actor: str,
+    confirm_promote: bool = False,
     get_effective_device_policy: Callable,
     get_current_policy: Callable,
     notify: Callable,
@@ -217,8 +233,20 @@ def advance_rollout(
     cur_ring = data["current_ring"]
     rings = data["rings"]
     dispatched = data["dispatched"]
-    ring_health = evaluate_ring_health(conn, dispatched.get(cur_ring) or [])
+    meta = dispatched.get("_meta") if isinstance(dispatched.get("_meta"), dict) else {}
+    ring_entries = dispatched.get(cur_ring) if isinstance(dispatched.get(cur_ring), list) else []
+    ring_health = evaluate_ring_health(conn, ring_entries)
     now_ts = dbmod.now()
+
+    # Release 4: Managed update channel approval gate for canary promotion.
+    if cur_ring == "canary" and meta.get("require_approval") and not confirm_promote:
+        return {
+            **data,
+            "approval_required": True,
+            "health_gate_failed": False,
+            "ring_health": ring_health,
+            "detail": "Canary promotion requires explicit confirm_promote=true approval.",
+        }
 
     # Health gate: auto-pause if failure rate exceeds configured threshold.
     if ring_health["total"] > 0 and ring_health["failure_rate"] > float(data["max_failure_rate"]):

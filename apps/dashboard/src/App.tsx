@@ -498,6 +498,7 @@ export default function App() {
             </div>
           ) : section === "overview" ? (
             <OverviewView
+              api={api}
               devices={devices}
               tasks={tasks}
               audit={audit}
@@ -509,6 +510,7 @@ export default function App() {
                 setInspectedDevice(dev);
                 setSection("devices");
               }}
+              onToast={showToast}
             />
           ) : section === "devices" ? (
             <FleetView

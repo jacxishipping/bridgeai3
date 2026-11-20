@@ -1,9 +1,12 @@
-import { useMemo } from "react";
-import { Activity, Cpu, HardDrive, Monitor, Terminal } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { Activity, Bell, Check, Cpu, Download, HardDrive, Monitor, Terminal } from "lucide-react";
+import type { ApiClient } from "../api";
 import type {
   AuditRecord,
   DeviceRecord,
   FleetTelemetrySummary,
+  FleetTrendsReport,
+  IncidentRecord,
   NavSection,
   TaskRecord,
 } from "../types";
@@ -17,6 +20,7 @@ import {
 } from "../components/ui";
 
 export function OverviewView({
+  api,
   devices,
   tasks,
   audit,
@@ -25,7 +29,9 @@ export function OverviewView({
   emergencyStop,
   onNavigate,
   onInspectDevice,
+  onToast,
 }: {
+  api: ApiClient;
   devices: DeviceRecord[];
   tasks: TaskRecord[];
   audit: AuditRecord[];
@@ -34,7 +40,53 @@ export function OverviewView({
   emergencyStop: boolean;
   onNavigate: (sec: NavSection) => void;
   onInspectDevice: (device: DeviceRecord) => void;
+  onToast: (msg: string) => void;
 }) {
+  const [trends, setTrends] = useState<FleetTrendsReport | null>(null);
+  const [incidents, setIncidents] = useState<IncidentRecord[]>([]);
+  const [incBusyId, setIncBusyId] = useState<string | null>(null);
+
+  const loadAnalyticsAndIncidents = useCallback(async () => {
+    const [tr, inc] = await Promise.all([
+      api.getFleetTrends(14).catch(() => null),
+      api.listIncidents(false).catch(() => null),
+    ]);
+    if (tr) setTrends(tr);
+    if (inc) setIncidents(inc.items || []);
+  }, [api]);
+
+  useEffect(() => {
+    void loadAnalyticsAndIncidents();
+  }, [loadAnalyticsAndIncidents, tasks.length, devices.length]);
+
+  async function handleExportCsv() {
+    try {
+      const csv = await api.downloadFleetTrendsCsv(14);
+      const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "fleet-trends.csv";
+      a.click();
+      URL.revokeObjectURL(url);
+      onToast("Downloaded 14-day fleet trends CSV");
+    } catch (err) {
+      onToast(err instanceof Error ? err.message : "CSV export failed");
+    }
+  }
+
+  async function handleIncidentAction(inc: IncidentRecord, action: "ack" | "resolve") {
+    setIncBusyId(inc.id);
+    try {
+      await api.updateIncident(inc.id, { action });
+      onToast(`${action === "ack" ? "Acknowledged" : "Resolved"} ${inc.title}`);
+      await loadAnalyticsAndIncidents();
+    } catch (err) {
+      onToast(err instanceof Error ? err.message : "Failed to update incident");
+    } finally {
+      setIncBusyId(null);
+    }
+  }
   const onlineDevices = devices.filter((d) => d.status === "online" && !d.revoked).length;
   const pendingOrRunning = tasks.filter(
     (t) => t.status === "queued" || t.status === "running" || t.status === "needs_approval",
@@ -407,6 +459,91 @@ export function OverviewView({
             )}
           </div>
         </div>
+      </div>
+
+      {/* Release 4: Incident Inbox + Daily Fleet Trends & CSV Export */}
+      <div className="split-2">
+        <SurfaceCard style={{ padding: 16, display: "flex", flexDirection: "column", gap: 12 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 13.5, fontWeight: 600 }}>
+              <Bell size={14} style={{ color: incidents.length > 0 ? "var(--amber)" : "var(--text-muted)" }} />
+              Incident Inbox ({incidents.length})
+            </span>
+            <span className="mono" style={{ fontSize: 11, color: "var(--text-muted)" }}>
+              Failed tasks · Offline nodes · Expired approvals
+            </span>
+          </div>
+          {incidents.length === 0 ? (
+            <div style={{ fontSize: 12, color: "var(--text-muted)" }}>
+              No open incidents across your fleet.
+            </div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8, maxHeight: 240, overflowY: "auto" }}>
+              {incidents.slice(0, 6).map((inc) => (
+                <div
+                  key={inc.id}
+                  style={{
+                    padding: 10,
+                    borderRadius: 8,
+                    background: "var(--bg-elevated)",
+                    border: "1px solid var(--border-hair)",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    gap: 8,
+                  }}
+                >
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontSize: 12, fontWeight: 600 }}>{inc.title}</div>
+                    <div style={{ fontSize: 11, color: "var(--text-secondary)" }}>{inc.detail}</div>
+                  </div>
+                  <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+                    {inc.status === "open" && (
+                      <Button
+                        size="sm"
+                        disabled={incBusyId === inc.id}
+                        onClick={() => void handleIncidentAction(inc, "ack")}
+                      >
+                        Ack
+                      </Button>
+                    )}
+                    <Button
+                      size="sm"
+                      variant="primary"
+                      disabled={incBusyId === inc.id}
+                      onClick={() => void handleIncidentAction(inc, "resolve")}
+                    >
+                      <Check size={11} /> Resolve
+                    </Button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </SurfaceCard>
+
+        <SurfaceCard style={{ padding: 16, display: "flex", flexDirection: "column", gap: 12 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+            <span style={{ fontSize: 13.5, fontWeight: 600 }}>
+              14-Day Task Success &amp; Health Trend
+            </span>
+            <Button size="sm" onClick={() => void handleExportCsv()}>
+              <Download size={12} /> Export CSV
+            </Button>
+          </div>
+          <Sparkline
+            values={(trends?.trends ?? [])
+              .map((p) => (p.success_rate !== null ? p.success_rate * 100 : Number.NaN))
+              .filter((v) => Number.isFinite(v))}
+            stroke="#6366F1"
+            emptyLabel="Requires ≥2 days with finished tasks to plot success trend"
+          />
+          <div className="mono" style={{ display: "flex", flexWrap: "wrap", gap: 14, fontSize: 11.5, color: "var(--text-muted)" }}>
+            <span>Tasks (14d): {trends?.summary.window_total_tasks ?? 0}</span>
+            <span>Completed: {trends?.summary.window_completed_tasks ?? 0}</span>
+            <span>Failed: {trends?.summary.window_failed_tasks ?? 0}</span>
+          </div>
+        </SurfaceCard>
       </div>
     </div>
   );

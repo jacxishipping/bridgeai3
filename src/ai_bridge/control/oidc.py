@@ -421,3 +421,62 @@ def redeem_oidc_exchange_code(code: str) -> str | None:
         if token is None or now - at > _EXCHANGE_TTL_SEC:
             return None
         return token
+
+
+# Release 4: OIDC group-to-role mapping with deny-by-default and audit support
+_ROLE_RANK = {"viewer": 1, "operator": 2, "admin": 3}
+
+
+def resolve_oidc_role_from_groups(claims: dict) -> tuple[str | None, dict]:
+    """Map OIDC group claims to an AI Bridge RBAC role (deny-by-default).
+
+    Active only when ``AI_BRIDGE_FEATURE_OIDC_GROUP_MAPPING=1``.
+    Reads ``AI_BRIDGE_OIDC_GROUP_CLAIM`` (default ``groups``) and
+    ``AI_BRIDGE_OIDC_ROLE_MAP`` (JSON object mapping group name -> role).
+    Returns ``(role, metadata)`` where ``role`` is ``None`` if no group matches
+    (callers must deny login and write an audit event).
+    """
+    claim_name = (os.environ.get("AI_BRIDGE_OIDC_GROUP_CLAIM") or "groups").strip() or "groups"
+    raw_map = (os.environ.get("AI_BRIDGE_OIDC_ROLE_MAP") or "").strip()
+    try:
+        role_map = json.loads(raw_map) if raw_map else {}
+    except Exception:
+        role_map = {}
+    if not isinstance(role_map, dict):
+        role_map = {}
+
+    raw_groups = claims.get(claim_name)
+    if isinstance(raw_groups, str):
+        user_groups = [g.strip() for g in raw_groups.split(",") if g.strip()]
+    elif isinstance(raw_groups, (list, tuple, set)):
+        user_groups = [str(g).strip() for g in raw_groups if str(g).strip()]
+    else:
+        user_groups = []
+
+    matched: list[tuple[str, str]] = []
+    for grp in user_groups:
+        mapped = str(role_map.get(grp) or "").strip().lower()
+        if mapped in _ROLE_RANK:
+            matched.append((grp, mapped))
+
+    if not matched:
+        return None, {
+            "claim": claim_name,
+            "groups_seen": user_groups[:20],
+            "matched_groups": [],
+            "reason": "no_mapped_oidc_group",
+        }
+
+    least_priv = os.environ.get("AI_BRIDGE_OIDC_LEAST_PRIVILEGE", "").strip().lower() in ("1", "true", "yes")
+    chosen = (
+        min(matched, key=lambda item: _ROLE_RANK[item[1]])
+        if least_priv
+        else max(matched, key=lambda item: _ROLE_RANK[item[1]])
+    )
+    return chosen[1], {
+        "claim": claim_name,
+        "groups_seen": user_groups[:20],
+        "matched_groups": [g for g, _ in matched],
+        "resolved_role": chosen[1],
+        "least_privilege": least_priv,
+    }

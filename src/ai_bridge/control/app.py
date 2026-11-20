@@ -2277,6 +2277,7 @@ def create_app(
     from .routers import auth as _auth_router
     from .routers import devices as _devices_router
     from .routers import health as _health_router
+    from .routers import release4 as _release4_router
     from .routers import tasks as _tasks_router
     from .routers import webrtc as _webrtc_router
     from .routers import workflows as _workflows_router
@@ -2331,6 +2332,7 @@ def create_app(
     app.include_router(_tasks_router.create_tasks_router(_router_ctx))
     app.include_router(_audit_router.create_audit_router(_router_ctx))
     app.include_router(_admin_router.create_admin_router(_router_ctx))
+    app.include_router(_release4_router.create_release4_router(_router_ctx))
     app.include_router(_workflows_router.create_workflows_router(_router_ctx))
     app.include_router(_webrtc_router.create_webrtc_router(_router_ctx))
     app.include_router(_auth_router.create_auth_router(_router_ctx))

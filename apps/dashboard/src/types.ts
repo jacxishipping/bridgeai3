@@ -460,3 +460,95 @@ export interface AlertDelivery {
   detail?: string;
   created_at: number;
 }
+
+// Release 4 governed capabilities types
+export interface FleetTrendPoint {
+  date: string;
+  total_tasks: number;
+  completed_tasks: number;
+  failed_tasks: number;
+  success_rate: number | null;
+  avg_duration_sec: number | null;
+  avg_cpu_percent: number | null;
+  avg_memory_percent: number | null;
+}
+
+export interface FleetTrendsReport {
+  schema: string;
+  tenant: string;
+  group?: string | null;
+  days: number;
+  summary: {
+    total_devices: number;
+    online_devices: number;
+    online_ratio: number | null;
+    window_total_tasks: number;
+    window_completed_tasks: number;
+    window_failed_tasks: number;
+  };
+  trends: FleetTrendPoint[];
+}
+
+export interface IncidentRecord {
+  id: string;
+  kind: "failed_task" | "offline_device" | "expired_approval";
+  severity: "high" | "medium" | "low";
+  title: string;
+  detail: string;
+  device_id?: string | null;
+  task_id?: string | null;
+  trace_id?: string | null;
+  occurred_at: number;
+  status: "open" | "acknowledged" | "resolved";
+  assignee?: string | null;
+  acknowledged_by?: string | null;
+  resolved_by?: string | null;
+  note?: string;
+}
+
+export interface IncidentInboxResponse {
+  tenant: string;
+  count: number;
+  counts: Record<string, number>;
+  items: IncidentRecord[];
+}
+
+export interface PolicyBundle {
+  schema: string;
+  source_version: number;
+  exported_by: string;
+  exported_at: number;
+  policy: PolicyState;
+  sha256: string;
+  signature_alg: string;
+  signature: string;
+}
+
+export interface DeviceDesktopCapabilities {
+  schema: string;
+  device_id: string;
+  device_name?: string;
+  platform_family: "Windows" | "Linux" | "Darwin" | "Unknown";
+  online: boolean;
+  revoked: boolean;
+  read_only_status_supported: boolean;
+  screenshot_supported: boolean;
+  webrtc_stream_supported: boolean;
+  interactive_input_supported: boolean;
+  policy_desktop_enabled: boolean;
+  advertised_mode: "interactive" | "view_only" | "unavailable";
+  reason: string;
+}
+
+export interface MemorySnippetRecord {
+  id: string;
+  tenant: string;
+  workspace: string;
+  title: string;
+  content: string;
+  source: string;
+  created_by: string;
+  created_at: number;
+  read_only: boolean;
+  opt_in_prompt: boolean;
+}

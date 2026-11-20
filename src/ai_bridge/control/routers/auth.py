@@ -162,15 +162,33 @@ def create_auth_router(ctx: ControlContext) -> APIRouter:
                 raise HTTPException(status_code=400, detail="No usable identity in ID token.")
             username = f"oidc:{sub}"[:200]
 
+        from .. import feature_flags as ffmod
+
+        mapped_role: str | None = None
+        group_meta: dict | None = None
+        if ffmod.is_enabled("oidc_group_mapping"):
+            mapped_role, group_meta = oidcmod.resolve_oidc_role_from_groups(claims)
+            ffmod.record_adoption("oidc_group_mapping", "login_check")
+            if mapped_role is None:
+                audit(username, "", "oidc_login_denied", group_meta, "denied")
+                raise HTTPException(
+                    status_code=403,
+                    detail="OIDC login denied: no authorized group mapping matched.",
+                )
+
         with conn.transaction():
             user = conn.execute("SELECT * FROM users WHERE username=?", (username,)).fetchone()
             if user is not None and user["disabled"]:
                 raise HTTPException(status_code=403, detail="User account is disabled.")
+            effective_role = mapped_role or (user["role"] if user is not None else "viewer")
             if user is None:
                 conn.execute(
                     "INSERT INTO users (id, username, password_hash, salt, role, created_at) VALUES (?,?,?,?,?,?)",
-                    (uuid.uuid4().hex[:12], username, "oidc-only-" + secrets.token_hex(16), authmod.new_salt(), "viewer", dbmod.now()),
+                    (uuid.uuid4().hex[:12], username, "oidc-only-" + secrets.token_hex(16), authmod.new_salt(), effective_role, dbmod.now()),
                 )
+                user = conn.execute("SELECT * FROM users WHERE username=?", (username,)).fetchone()
+            elif mapped_role and user["role"] != mapped_role:
+                conn.execute("UPDATE users SET role=? WHERE username=?", (mapped_role, username))
                 user = conn.execute("SELECT * FROM users WHERE username=?", (username,)).fetchone()
             session_token = secrets.token_urlsafe(32)
             expires = dbmod.now() + 8 * 3600
@@ -178,7 +196,13 @@ def create_auth_router(ctx: ControlContext) -> APIRouter:
                 "INSERT INTO sessions (token_hash, username, role, tenant, expires_at, created_at) VALUES (?,?,?,?,?,?)",
                 (dbmod.hash_token(session_token), user["username"], user["role"], _row_tenant(user), expires, dbmod.now()),
             )
-            audit(user["username"], "", "oidc_login", {}, "allowed")
+            audit(
+                user["username"],
+                "",
+                "oidc_role_mapped" if group_meta else "oidc_login",
+                group_meta or {},
+                "allowed",
+            )
 
         dashboard = cfg["dashboard_url"].rstrip("/") + "/"
         # F-05-15: the session token NEVER travels in the URL. Mint a

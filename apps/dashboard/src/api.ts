@@ -9,13 +9,18 @@ import type {
   BroadcastBatchStatus,
   ConnectionsSummary,
   DeadLetterRecord,
+  DeviceDesktopCapabilities,
   DeviceOverview,
   DeviceRecord,
   EnrollResult,
   FleetHealthSummary,
   FleetTelemetrySummary,
+  FleetTrendsReport,
   HealthResponse,
+  IncidentInboxResponse,
+  MemorySnippetRecord,
   MonitorDescriptor,
+  PolicyBundle,
   PolicyHistoryEntry,
   PolicyState,
   ReadinessResponse,
@@ -822,5 +827,73 @@ export class ApiClient {
 
   async rollbackRollout(rolloutId: string): Promise<RolloutRecord> {
     return this.request<RolloutRecord>(`/api/fleet/rollouts/${encodeURIComponent(rolloutId)}/rollback`, { method: "POST" });
+  }
+
+  // Release 4: Fleet analytics, incident inbox, policy-as-code, desktop capabilities, governed memory
+  async getFleetTrends(days = 14, group?: string): Promise<FleetTrendsReport> {
+    const qs = new URLSearchParams({ days: String(days) });
+    if (group) qs.set("group", group);
+    return this.request<FleetTrendsReport>(`/api/fleet/analytics/trends?${qs.toString()}`);
+  }
+
+  async downloadFleetTrendsCsv(days = 14, group?: string): Promise<string> {
+    const qs = new URLSearchParams({ days: String(days), format: "csv" });
+    if (group) qs.set("group", group);
+    const res = await fetch(this.resolveUrl(`/api/fleet/analytics/trends?${qs.toString()}`), {
+      headers: { ...this.authHeaders() },
+    });
+    if (!res.ok) throw new Error(`CSV export failed (HTTP ${res.status})`);
+    return res.text();
+  }
+
+  async listIncidents(includeResolved = false): Promise<IncidentInboxResponse> {
+    return this.request<IncidentInboxResponse>(`/api/incidents?include_resolved=${includeResolved ? "true" : "false"}`);
+  }
+
+  async updateIncident(
+    incidentId: string,
+    payload: { action: "ack" | "assign" | "resolve" | "reopen"; assignee?: string; note?: string },
+  ): Promise<Record<string, unknown>> {
+    return this.request(`/api/incidents/${encodeURIComponent(incidentId)}/ack`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async exportPolicyBundle(): Promise<PolicyBundle> {
+    return this.request<PolicyBundle>("/api/policies/export");
+  }
+
+  async importPolicyBundle(bundle: Record<string, unknown>, dryRun = true): Promise<Record<string, unknown>> {
+    return this.request("/api/policies/import", {
+      method: "POST",
+      body: JSON.stringify({ bundle, dry_run: dryRun }),
+    });
+  }
+
+  async getDeviceDesktopCapabilities(deviceId: string): Promise<DeviceDesktopCapabilities> {
+    return this.request<DeviceDesktopCapabilities>(`/api/devices/${encodeURIComponent(deviceId)}/desktop/capabilities`);
+  }
+
+  async listMemorySnippets(workspace?: string): Promise<{ items: MemorySnippetRecord[]; count: number }> {
+    const q = workspace ? `?workspace=${encodeURIComponent(workspace)}` : "";
+    return this.request(`/api/memory/snippets${q}`);
+  }
+
+  async createMemorySnippet(payload: {
+    workspace: string;
+    title: string;
+    content: string;
+    source: string;
+    opt_in_prompt?: boolean;
+  }): Promise<MemorySnippetRecord> {
+    return this.request<MemorySnippetRecord>("/api/memory/snippets", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async deleteMemorySnippet(snippetId: string): Promise<{ snippet_id: string; deleted: boolean }> {
+    return this.request(`/api/memory/snippets/${encodeURIComponent(snippetId)}`, { method: "DELETE" });
   }
 }

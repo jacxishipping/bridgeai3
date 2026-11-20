@@ -916,17 +916,32 @@ def create_devices_router(ctx: ControlContext) -> APIRouter:
             manifest_url=str(body.get("manifest_url") or ""),
             rings=body.get("rings") if isinstance(body.get("rings"), list) else None,
             max_failure_rate=float(body.get("max_failure_rate", 0.25)),
+            verify_only=bool(body.get("verify_only", False)),
+            require_approval=bool(body.get("require_approval", False)),
             get_effective_device_policy=get_effective_device_policy,
             get_current_policy=get_current_policy,
             notify=notify_tasks,
             audit_fn=audit,
         )
-        audit(actor, "", "create_rollout", {"rollout_id": rollout["id"], "target_version": rollout["target_version"]}, "allowed", tenant=eff_tenant)
+        audit(
+            actor,
+            "",
+            "create_rollout",
+            {
+                "rollout_id": rollout["id"],
+                "target_version": rollout["target_version"],
+                "verify_only": bool(body.get("verify_only", False)),
+                "require_approval": bool(body.get("require_approval", False)),
+            },
+            "allowed",
+            tenant=eff_tenant,
+        )
         return rollout
 
     @router.post("/api/fleet/rollouts/{rollout_id}/advance")
     def advance_fleet_rollout(
         rollout_id: str,
+        body: dict = Body(default={}),
         x_admin_token: str | None = Header(default=None),
         x_session_token: str | None = Header(default=None),
     ):
@@ -939,6 +954,7 @@ def create_devices_router(ctx: ControlContext) -> APIRouter:
             rollout_id=rollout_id,
             tenant=eff_tenant,
             actor=actor,
+            confirm_promote=bool(body.get("confirm_promote", False)) if isinstance(body, dict) else False,
             get_effective_device_policy=get_effective_device_policy,
             get_current_policy=get_current_policy,
             notify=notify_tasks,

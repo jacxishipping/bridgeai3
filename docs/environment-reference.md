@@ -3,7 +3,7 @@
 > Generated from `src/ai_bridge/` and `agents/` by `scripts/generate_env_reference.py`.
 > Run `python scripts/generate_env_reference.py` after adding or removing configuration variables.
 
-Total documented variables: **141**
+Total documented variables: **145**
 
 ## Control plane & runtime
 
@@ -48,6 +48,7 @@ Total documented variables: **141**
 | `AI_BRIDGE_MAX_TRANSFER_BYTES` | — | `src/ai_bridge/tools/transfers.py` |
 | `AI_BRIDGE_NATIVE_DLL_SHA256` | `''` | `src/ai_bridge/screen_capture.py` |
 | `AI_BRIDGE_NATIVE_ENCODE` | `'auto'` | `src/ai_bridge/native_encode.py` |
+| `AI_BRIDGE_POLICY_SIGNING_KEY` | — | `src/ai_bridge/control/policy_bundle.py` |
 | `AI_BRIDGE_PROFILE` | `''` | `src/ai_bridge/control/production_readiness.py`, `src/ai_bridge/server.py` |
 | `AI_BRIDGE_SLOW_QUERY_MS` | `'250'` | `src/ai_bridge/control/db.py` |
 | `AI_BRIDGE_SOM_SYNTHETIC_FALLBACK` | `'0'` | `src/ai_bridge/tools/desktop_api.py` |
@@ -76,7 +77,7 @@ Total documented variables: **141**
 
 | Variable | Observed default(s) | Referenced in |
 |---|---|---|
-| `AI_BRIDGE_ADMIN_TOKEN` | `''` | `src/ai_bridge/client.py`, `src/ai_bridge/config.py`, `src/ai_bridge/control/app.py` (+2 more) |
+| `AI_BRIDGE_ADMIN_TOKEN` | `''` | `src/ai_bridge/client.py`, `src/ai_bridge/config.py`, `src/ai_bridge/control/app.py` (+3 more) |
 | `AI_BRIDGE_ALLOW_AUTO_UPDATE` | `''` | `src/ai_bridge/updates.py` |
 | `AI_BRIDGE_ALLOW_BOOTSTRAP` | — | `src/ai_bridge/control/routers/auth.py` |
 | `AI_BRIDGE_ALLOW_BROWSER_NO_SANDBOX` | `''`, `'0'` | `src/ai_bridge/browser_isolation_os.py`, `src/ai_bridge/browser_tools.py` |
@@ -89,8 +90,11 @@ Total documented variables: **141**
 | `AI_BRIDGE_OIDC_CLIENT_ID` | `''` | `src/ai_bridge/control/oidc.py` |
 | `AI_BRIDGE_OIDC_CLIENT_SECRET` | `''` | `src/ai_bridge/control/oidc.py` |
 | `AI_BRIDGE_OIDC_DASHBOARD_URL` | `'/'` | `src/ai_bridge/control/oidc.py`, `src/ai_bridge/control/routers/auth.py` |
+| `AI_BRIDGE_OIDC_GROUP_CLAIM` | — | `src/ai_bridge/control/oidc.py` |
 | `AI_BRIDGE_OIDC_ISSUER` | `''` | `src/ai_bridge/control/oidc.py` |
+| `AI_BRIDGE_OIDC_LEAST_PRIVILEGE` | `''` | `src/ai_bridge/control/oidc.py` |
 | `AI_BRIDGE_OIDC_REDIRECT_URI` | `''` | `src/ai_bridge/control/oidc.py` |
+| `AI_BRIDGE_OIDC_ROLE_MAP` | — | `src/ai_bridge/control/oidc.py` |
 | `AI_BRIDGE_SECRETS_BACKEND` | — | `src/ai_bridge/control/secrets_backend.py` |
 | `AI_BRIDGE_TOKEN` | — | `src/ai_bridge/client.py` |
 | `AI_BRIDGE_TOKEN_FILE` | `''` | `agents/linux/agent_main.py`, `agents/windows/agent_main.py`, `src/ai_bridge/client.py` |

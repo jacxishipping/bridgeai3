@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Eye, Keyboard, Monitor, MousePointerClick, Pause, Play, RefreshCw, ShieldAlert } from "lucide-react";
 import type { ApiClient } from "../api";
-import type { DeviceRecord, MonitorDescriptor, PolicyState } from "../types";
+import type { DeviceDesktopCapabilities, DeviceRecord, MonitorDescriptor, PolicyState } from "../types";
 import { Button, Chip, StateBanner, StatusBadge, SurfaceCard } from "../components/ui";
 
 export function DesktopView({
@@ -22,6 +22,7 @@ export function DesktopView({
   const [frameError, setFrameError] = useState<string>("");
   const [retryCount, setRetryCount] = useState(0);
   const [globalPolicy, setGlobalPolicy] = useState<PolicyState | null>(null);
+  const [deviceCaps, setDeviceCaps] = useState<DeviceDesktopCapabilities | null>(null);
   const [typeText, setTypeText] = useState("");
   const [hotkey, setHotkey] = useState("ctrl+c");
   const lastObjectUrl = useRef<string | null>(null);
@@ -33,6 +34,25 @@ export function DesktopView({
       .catch(() => setGlobalPolicy(null));
   }, [api]);
 
+  useEffect(() => {
+    if (!deviceId || deviceId === "local") {
+      setDeviceCaps(null);
+      return;
+    }
+    let cancelled = false;
+    api
+      .getDeviceDesktopCapabilities(deviceId)
+      .then((c) => {
+        if (!cancelled) setDeviceCaps(c);
+      })
+      .catch(() => {
+        if (!cancelled) setDeviceCaps(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [api, deviceId]);
+
   const selectedDevice = useMemo(
     () => devices.find((d) => d.id === deviceId) ?? null,
     [devices, deviceId],
@@ -43,6 +63,9 @@ export function DesktopView({
   );
 
   const effectiveDesktopEnabled = useMemo(() => {
+    if (deviceCaps) {
+      return Boolean(deviceCaps.interactive_input_supported);
+    }
     if (selectedDevice?.has_custom_policy && selectedDevice.policy && "desktop_enabled" in selectedDevice.policy) {
       return Boolean(selectedDevice.policy.desktop_enabled);
     }
@@ -50,16 +73,19 @@ export function DesktopView({
       return Boolean(globalPolicy.desktop_enabled);
     }
     return true;
-  }, [selectedDevice, globalPolicy]);
+  }, [deviceCaps, selectedDevice, globalPolicy]);
 
   const controlBlockedReason = useMemo(() => {
     if (selectedDevice?.revoked) return "Device is revoked; desktop control is permanently disabled.";
     if (isOffline) return "Selected device is offline. Reconnect the agent before arming interactive control.";
+    if (deviceCaps && !deviceCaps.interactive_input_supported) {
+      return deviceCaps.reason || "Interactive control is not supported on this platform/policy.";
+    }
     if (!effectiveDesktopEnabled) {
       return "Interactive desktop automation is disabled by active policy (View-Only enforced).";
     }
     return null;
-  }, [selectedDevice, isOffline, effectiveDesktopEnabled]);
+  }, [selectedDevice, isOffline, deviceCaps, effectiveDesktopEnabled]);
 
   useEffect(() => {
     if (controlBlockedReason && controlArmed) {
