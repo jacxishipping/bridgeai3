@@ -1,294 +1,253 @@
 # AI Bridge — Universal AI-to-Computer Control Platform (v0.3.0)
 
 [![CI](https://github.com/jacxishipping/ai-bridge/actions/workflows/ci.yml/badge.svg)](https://github.com/jacxishipping/ai-bridge/actions/workflows/ci.yml)
-[![Python 3.12–3.14](https://img.shields.io/badge/python-3.12%20%7C%203.13%20%7C%203.14-blue.svg)](https://www.python.org/)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
+[![.NET 9 WPF](https://img.shields.io/badge/.NET-9.0%20WPF-512BD4.svg)](apps/windows-client/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Security: P0/P1 remediation in progress](https://img.shields.io/badge/Security-Remediation%20in%20progress-yellow.svg)](docs/security.md)
 
-**AI Bridge** connects authorized AI assistants and coding agents (Claude, Codex, Gemini CLI, other Model Context Protocol clients, and ChatGPT via OAuth 2.1 Streamable HTTP) to Linux, Windows, and macOS computers their owners authorize them to control — through a single, policy-enforced interface.
+**AI Bridge** connects authorized AI assistants and coding agents (Claude, Codex, Gemini CLI, other Model Context Protocol clients, and ChatGPT via OAuth 2.1 Streamable HTTP) to Linux, Windows, and macOS computers their owners authorize them to control — through a single, policy-enforced, end-to-end audited control plane.
 
 > [!IMPORTANT]
-> **This is not a remote root shell.** There is no unrestricted shell endpoint, no arbitrary PowerShell executor, and no tool that can escalate its own permissions. All actions are subject to server-side policy enforcement, risk tier gating, path confinement, and audit logging. Audit records are hash-chained; note that an admin retention operation can prune them (see `docs/security.md`) — they are not unconditionally append-only.
+> **This is not a remote root shell.** There is no unrestricted shell endpoint, no arbitrary PowerShell executor, and no tool that can escalate its own permissions. All actions pass through server-side policy enforcement, 4-tier risk gating, path confinement, secret redaction, and hash-chained audit logging (see [docs/security.md](docs/security.md)).
 
 ---
 
-## Architecture & Security Highlights
+## Architecture
 
 ```mermaid
 flowchart LR
-    subgraph Clients["AI Clients & Interfaces"]
-        Claude["Claude / Cursor\n(Stdio MCP)"]
-        ChatGPT["ChatGPT / Custom\n(Streamable HTTP)"]
-        Dashboard["Web Dashboard (JX-UI)\n(Browser / Vite)"]
+    subgraph Clients["AI Clients & Operator Interfaces"]
+        Claude["Claude / Cursor / Gemini\n(Stdio MCP)"]
+        ChatGPT["ChatGPT / Remote MCP\n(Streamable HTTP + OAuth 2.1)"]
+        Dashboard["React Web Dashboard\n(LTR/RTL · Dark/Light)"]
     end
 
-    subgraph ControlPlane["Control Plane & Gateway (:8000)"]
-        Gateway["OAuth 2.1 Gateway\n(PKCE S256 + Device Binding)"]
-        API["FastAPI Control API\n(RBAC + Rate Limiting)"]
-        DB[("SQLite Database\n(Locked WAL + Indexes)")]
-        PolicyEngine["Server-Side Policy Engine\n(Tiers 1-4 Guardrails)"]
+    subgraph ControlPlane["Control Plane (:8000)"]
+        Gateway["OAuth 2.1 & OIDC Auth\n(PKCE S256 · RBAC · CSRF)"]
+        API["FastAPI Modular API\n(Multi-Worker · Rate Limits)"]
+        PolicyEngine["Fail-Closed Policy Engine\n(Tiers 1–4 · Diff · Simulator)"]
+        DB[("SQLite WAL / PostgreSQL 16+\n(Migrations 001–017)")]
+        Redis[("Redis\n(Pub/Sub · Shared Limits)")]
     end
 
     subgraph Fleet["Enrolled Endpoints (Outbound Only)"]
-        LinuxAgent["Linux Agent\n(systemd / unprivileged)"]
-        WinAgent["Windows Agent\n(Service + Desktop Helper)"]
-        MacAgent["macOS Agent\n(launchd daemon)"]
+        WinClient["Windows C# WPF Client\n(DPAPI · Live Desktop · Setup GUI)"]
+        LinuxAgent["Linux Agent\n(systemd · Offline Spool)"]
+        MacAgent["macOS Agent\n(launchd · Preview)"]
     end
 
     Claude -->|Stdio| PolicyEngine
-    ChatGPT -->|Bearer Token + Device ID| Gateway
+    ChatGPT -->|Device-Bound Bearer| Gateway
     Gateway --> API
-    Dashboard -->|X-Session / X-Admin| API
-    API <--> DB
+    Dashboard -->|Session / Admin + Correlation ID| API
     API <--> PolicyEngine
-    LinuxAgent -->|HTTPS Long-Poll| API
-    WinAgent -->|HTTPS Long-Poll| API
-    MacAgent -->|HTTPS Long-Poll| API
+    API <--> DB
+    API <--> Redis
+    WinClient -->|HTTPS / WSS Outbound| API
+    LinuxAgent -->|HTTPS / WSS Outbound| API
+    MacAgent -->|HTTPS / WSS Outbound| API
 ```
-
-### Defense-in-Depth Model
-
-1. **Host Tool Protection by Default (`AI_BRIDGE_DISABLE_HOST_TOOLS=1`)**:
-   - Host filesystem and shell execution tools on the MCP server are disabled by default. Operations are explicitly routed to enrolled agents via authenticated device bindings.
-2. **Device-Bound OAuth 2.1 Gateway**:
-   - ChatGPT and remote HTTP clients authenticate through a standards-compliant OAuth 2.1 gateway requiring **PKCE S256**.
-   - Tokens are cryptographically bound to specific enrolled `device_id`s, preventing cross-device credential escape.
-3. **Four-Tier Policy Guardrails**:
-   - **Tier 1 (Read-only)**: Fleet telemetry, system resource inspection, workspace search.
-   - **Tier 2 (Low-risk write)**: Workspace file authoring, test execution within defined bounds.
-   - **Tier 3 (Sensitive)**: Service management, package installation, backups, desktop vision/actions (requires explicit policy opt-in or human approval).
-   - **Tier 4 (High-risk)**: Destructive file deletion, arbitrary shell commands, deployment promotion (strictly requires an authorized human approval record).
-4. **Subprocess Environment Isolation**:
-   - Invocations of `run_shell` scrub sensitive environment variables (`AI_BRIDGE_ADMIN_TOKEN`, `AI_BRIDGE_DEVICE_TOKEN`, `AI_BRIDGE_OIDC_CLIENT_SECRET`) from child processes, enforce execution timeouts (default 300s), and block symlink escapes.
-5. **Recursive Redaction & Audit Integrity**:
-   - Secrets matching API keys, bearer tokens, SSH private keys (`id_rsa`, `id_ecdsa`), `.env` files, `.npmrc`, and credentials are recursively scrubbed from all JSON logs and stream payloads before persistence.
-6. **Robust Bootstrap & Authentication**:
-   - First-time user creation requires an administrative token (`AI_BRIDGE_ADMIN_TOKEN`), preventing unauthorized takeover. Local bootstrap without credentials requires explicit opt-in (`AI_BRIDGE_ALLOW_BOOTSTRAP=1`).
 
 ---
 
-## Features
+## Key Capabilities
 
-- **Model Context Protocol (MCP)**: Full support for both local stdio and Streamable HTTP transports with bearer authorization.
-- **Outbound-Only Poller Agents**: Cross-platform agents (Linux `systemd`, Windows scheduled tasks/desktop helper, macOS `launchd`) that never open inbound listening ports.
-- **Human-in-the-Loop Approvals**: Real-time webhook notifications (Telegram, Slack, generic webhooks) with SSRF validation, allowing operators to review, approve, or deny sensitive tasks.
-- **Web Dashboard (JX-UI design system)**: Modern React 18 + TypeScript + Vite management interface supporting dark/light mode, live task inspection, full vision screenshot lightbox, policy history management, and instant emergency stop. The dashboard defaults to the login screen; the seeded demo is opt-in only and clearly labelled as simulated data (see `apps/dashboard/README.md`).
-- **Cryptographically Signed Updates**: Offline Ed25519 signature verification for release manifests (`--check-update`).
+### Security & Governance
+- **Host Tool Protection by Default (`AI_BRIDGE_DISABLE_HOST_TOOLS=1`)**: Host filesystem and shell tools on the MCP server are disabled by default; operations route explicitly to enrolled devices.
+- **Four-Tier Fail-Closed Policy Engine**:
+  - **Tier 1 (Read-only)**: System telemetry, process/network diagnostics, workspace search.
+  - **Tier 2 (Low-risk write)**: Confined workspace file authoring and allowlisted tests.
+  - **Tier 3 (Sensitive)**: Service control, package installation, shell execution, interactive desktop actions (requires explicit policy opt-in or human approval).
+  - **Tier 4 (High-risk)**: Destructive deletion and administrative actions (requires authorized human approval).
+- **Policy-as-Code & Pre-Publish Safety**: Signed policy bundle import/export (`HMAC-SHA256`, `ai-bridge-policy-bundle/v1`), CI simulation fixtures ([scripts/verify_policy_fixtures.py](scripts/verify_policy_fixtures.py)), pre-publish diff, inheriting-device blast radius, and dry-run simulation.
+- **Identity, Auth & Isolation**: RBAC (`viewer`, `operator`, `admin`), server-derived tenant isolation, double-submit CSRF on session mutations, device mTLS fingerprint pinning, Win32 DPAPI token sealing (`aib-dpapi-v1:`), and opt-in OIDC group-to-role mapping with deny-by-default and audit logging.
+- **Recursive Secret Redaction & Audit Chain**: Credentials, API keys, SSH keys, and bearer tokens are scrubbed before persistence; audit entries are hash-chained and verifiable via `GET /api/audit/verify`.
+
+### Fleet Reliability, Scale & Observability
+- **Multi-Worker & PostgreSQL Ready**: Fail-fast Redis enforcement for multi-host or production multi-worker deployments, auto-reconnecting Redis pub/sub for agent/WebRTC fan-out, `psycopg_pool` connection pooling, slow-query logging, and automated schema parity across SQLite and PostgreSQL (`001`–`017`).
+- **Task Lifecycle & Dead-Letter Queue (DLQ)**: Per-tool idempotency classification, exponential-backoff retries, progress heartbeats, explicit execution leases, DLQ inspection/replay/purge, and configurable data retention sweeps.
+- **End-to-End Traceability**: `X-Correlation-ID` propagation across dashboard, MCP, control plane, offline agent spool, task events, approvals, and audit records (`GET /api/traces/{trace_id}`), plus secured `/metrics` (`AI_BRIDGE_METRICS_TOKEN`).
+- **Staged Agent Rollouts**: Progressive update rings (`canary` → `early` → `general`) with verify-only canary mode, approval gates, health-gate auto-pause, pause/resume, and fleet rollback (`rollback_fleet_agent`).
+- **Supply-Chain & Release Engineering**: CycloneDX 1.5 SBOM generation ([scripts/generate_sbom.py](scripts/generate_sbom.py)), release evidence bundling ([scripts/assemble_release_evidence.py](scripts/assemble_release_evidence.py)), signed release manifests, and automated vulnerability scanning.
+
+### Web Dashboard & Native Windows Client
+- **React/Vite Management Dashboard** ([apps/dashboard/](apps/dashboard/)):
+  - Truthful live telemetry (no fabricated placeholder metrics) with explicit `empty`, `offline`, `denied`, and `degraded` banners.
+  - Server-side paginated fleet & task tables (`X-Total-Count`), saved filters, device groups, bulk-action blast-radius confirmations, and Global vs. Override vs. Effective policy inheritance tables.
+  - Incident Inbox (failed tasks, offline nodes, expired approvals with ack/assign/resolve history) and 14-day fleet trend analytics with formula-safe CSV export.
+  - Policy-gated Live Desktop Studio with view-only safety (control UI strictly removed in view-only mode), display resolution clarity, consent banner, Escape-key disarm, and cross-platform capability negotiation.
+  - Full LTR (`en`) and RTL (`ar`) localisation, ARIA dialog semantics, keyboard `:focus-visible` outlines, and Dark/Light themes.
+- **Native C# WPF Windows Client & GUI Installer** ([apps/windows-client/](apps/windows-client/), [apps/windows-installer/](apps/windows-installer/)):
+  - Self-contained `.NET 9` WPF agent with tray controls, Win32 DPAPI credential vault, live desktop streaming, and local fail-closed guardrails.
+  - Standalone **WPF GUI Setup & Uninstaller (`AIBridgeSetup.exe`)** featuring a 5-step visual wizard, live Control Plane `/health` test, DPAPI token sealing during setup, Start Menu/Desktop shortcuts, Windows Installed Apps registration (no UAC needed), and silent CLI mode (`/S` / `--silent`, `--uninstall`) for MDM/Intune deployment.
+
+### Release 4 Governed Capabilities (Feature-Flagged)
+All Release 4 capabilities are gated via `AI_BRIDGE_FEATURE_<NAME>=1|0` and tracked in `GET /api/features`:
+- **Fleet Analytics & Capacity Planning**: Daily health/task-success trends + CSV export (`GET /api/fleet/analytics/trends`).
+- **Incident Inbox**: Deduplicated actionable inbox for failed tasks, offline devices, and expired approvals (`GET /api/incidents`, `POST /api/incidents/{id}/ack`).
+- **Policy-as-Code**: Signed policy bundle export/import with dry-run diff & simulations (`GET /api/policies/export`, `POST /api/policies/import`).
+- **OIDC Group-to-Role Mapping** *(explicit opt-in: `AI_BRIDGE_FEATURE_OIDC_GROUP_MAPPING=1`)*: Deny-by-default group enforcement with audit trail and role sync on login.
+- **Managed Update Channels**: Verify-only canary ring with explicit promotion approval gate, pause, and rollback.
+- **Curated Workflow Builder**: Strictly Tier-1 read-only diagnostic templates (`GET /api/workflows/curated`) with per-step approval-to-audit timeline (`GET /api/workflows/{id}/timeline`).
+- **Governed Agent Memory**: Tenant- & workspace-scoped read-only snippets with provenance, prompt-injection filtering, and opt-in prompt inclusion (`GET/POST/DELETE /api/memory/snippets`).
+- **Cross-Platform Desktop Capability Contract**: Honest per-device capability negotiation (`GET /api/devices/{id}/desktop/capabilities`) advertising interactive input only on policy-enabled Windows hosts.
 
 ---
 
 ## Quick Start
 
-### ⚡ 1-Command Universal Magic Install (Fresh Bare Servers & Cloud Droplets)
+### 1. Local Control Plane & Web Dashboard
 
-On a completely fresh server (Ubuntu, Debian, CentOS, RHEL, AlmaLinux, Rocky, Fedora, Arch, Alpine, openSUSE):
+Requires **Python 3.11+** and **Node.js 20+**.
+
+```bash
+git clone https://github.com/jacxishipping/ai-bridge.git
+cd ai-bridge
+python -m venv .venv
+
+# Linux / macOS:
+source .venv/bin/activate
+# Windows PowerShell:
+# .\.venv\Scripts\Activate.ps1
+
+pip install -e ".[dev]"
+
+# Generate an admin token and start the control plane (:8000)
+export AI_BRIDGE_ADMIN_TOKEN="$(python -c "import secrets; print(secrets.token_urlsafe(32))")"
+python -m ai_bridge.control
+```
+
+In a second terminal, start the React dashboard (`:5173`):
+
+```bash
+npm --prefix apps/dashboard ci
+npm --prefix apps/dashboard run dev
+```
+
+Open `http://localhost:5173` and sign in with your `AI_BRIDGE_ADMIN_TOKEN` (or local user credentials).
+
+### 2. Local MCP Server (Stdio)
+
+```bash
+mkdir -p "$HOME/ai-bridge-workspace"
+export AI_BRIDGE_WORKSPACE="$HOME/ai-bridge-workspace"
+python -m ai_bridge.server
+```
+
+Client setup templates for Claude Desktop, Cursor, Codex, Gemini CLI, and ChatGPT are in [integrations/](integrations/).
+
+### 3. Native Windows C# Client & GUI Installer
+
+Requires **.NET 9 SDK** on Windows:
+
+```powershell
+# Build the C# WPF Windows Client
+dotnet build apps/windows-client/AIBridgeClient.csproj -c Release
+
+# Build the standalone single-file GUI Installer (dist\windows\AIBridgeSetup.exe + .sha256)
+pwsh scripts/build_windows_installer.ps1
+```
+
+Unattended / MDM deployment with `AIBridgeSetup.exe`:
+
+```powershell
+.\dist\windows\AIBridgeSetup.exe --silent --control-url "https://control.example.com" --token "<DEVICE_TOKEN>"
+# Uninstall silently:
+.\dist\windows\AIBridgeSetup.exe --uninstall --silent
+```
+
+### 4. Platform Polling Agents (Linux, Windows, macOS)
+
+Enroll a node from **Fleet & Device 360** (or `POST /api/devices/enroll`) to mint a one-time device token:
+
+```bash
+# Linux (systemd unit in deployment/systemd/ai-bridge-agent.service)
+python agents/linux/agent_main.py --control-url http://127.0.0.1:8000 --device-token <TOKEN>
+
+# Windows (Python agent; PowerShell installer in deployment/windows/install-agent.ps1)
+python agents\windows\agent_main.py --control-url http://127.0.0.1:8000 --device-token <TOKEN>
+
+# macOS (Preview — launchd E2E verified in CI; see docs/support-matrix.md)
+python agents/macos/agent_main.py --control-url http://127.0.0.1:8000 --device-token <TOKEN>
+```
+
+**1-Command Bare-Server Linux Install:**
 
 ```bash
 curl -sSL https://raw.githubusercontent.com/jacxishipping/ai-bridge/main/magic-install.sh | sudo bash
 ```
 
-> **Automated Magic Capabilities:**
-> - Detects Linux distribution & hardware architecture (x86_64, aarch64/ARM64).
-> - Checks and installs all missing system packages, build toolchains (`gcc`, `make`), and Python 3.12+.
-> - Auto-provisions a swapfile if the cloud instance has low RAM (<1GB) so package compilation never crashes from OOM.
-> - Clones or updates AI Bridge in `/opt/ai-bridge` and provisions an isolated virtual environment (`.venv`).
-> - Installs Xvfb & headless GUI automation packages for visual verification and screen capture.
-> - Enrolls the agent with your Control Plane (`https://your-control-plane.example` — replace with your own control-plane URL; there is no default).
-> - Configures, hardens, and starts the systemd service (`ai-bridge-agent.service`) to auto-restart on boot.
-
-**Unattended / Automated Cloud-Init Deployment:**
-```bash
-curl -sSL https://raw.githubusercontent.com/jacxishipping/ai-bridge/main/magic-install.sh | sudo bash -s -- -y --control-url "https://your-control-plane.example" --admin-token "YOUR_ADMIN_TOKEN"
-```
-
-**For Fresh Windows Servers or Desktops (PowerShell as Administrator):**
-```powershell
-irm https://raw.githubusercontent.com/jacxishipping/ai-bridge/main/magic-install.ps1 | iex
-```
-
-> The Windows bootstrap provisions Python 3.12 when no supported interpreter is
-> present, and refuses anything outside 3.12–3.14: newer builds such as 3.15 are
-> not tested with the Windows agent.
+**AWS Production Stack (EC2 + RDS + Redis + ALB):** See [deployment/aws/README.md](deployment/aws/README.md).
 
 ---
 
-### ☁️ AWS Production Deployment
+## Documentation
 
-Deploy the full production stack (EC2 + RDS + Redis + ALB) on AWS via CloudFormation:
-
-```bash
-cd deployment/aws
-chmod +x deploy.sh
-./deploy.sh
-```
-
-See [deployment/aws/README.md](deployment/aws/README.md) for prerequisites and detailed instructions.
-
-To update the application code on an existing EC2 instance:
-
-```bash
-# SSH-based
-set AI_BRIDGE_SSH_KEY=C:\path\to\aws-key.pem
-set AI_BRIDGE_SSH_HOST=ubuntu@ec2-instance
-python deploy_to_aws.py
-
-# AWS SSM (no public IP needed)
-set AI_BRIDGE_SSM_INSTANCE_ID=i-1234567890abcdef0
-python deploy_to_aws.py
-```
-
----
-
-### 1. Local MCP Server (Stdio)
-
-Run AI Bridge locally for Claude Desktop, Cursor, or Gemini CLI:
-
-```bash
-# Clone and prepare virtual environment
-git clone https://github.com/jacxishipping/ai-bridge.git
-cd ai-bridge
-python -m venv .venv
-
-# On Linux / macOS:
-source .venv/bin/activate
-# On Windows (PowerShell):
-# .\.venv\Scripts\Activate.ps1
-
-pip install -e ".[dev]"
-
-# Set workspace confinement directory
-mkdir -p "$HOME/ai-bridge-workspace"
-export AI_BRIDGE_WORKSPACE="$HOME/ai-bridge-workspace"
-
-# Launch MCP server in stdio mode
-python -m ai_bridge.server
-```
-
-Configure your MCP client by pointing to the python virtual environment executable and `ai_bridge.server` module. Configuration templates for Claude, Codex, Gemini, and generic MCP clients are located in [`integrations/`](integrations/).
-
----
-
-### 2. Control Plane & Web Dashboard
-
-To run the remote orchestration server and web management interface:
-
-```bash
-# 1. Generate an administrative token and launch the control plane
-export AI_BRIDGE_ADMIN_TOKEN="$(python -c "import secrets; print(secrets.token_urlsafe(32))")"
-echo "Admin Token: $AI_BRIDGE_ADMIN_TOKEN"
-
-# Start the control plane API (:8000)
-python -m ai_bridge.control
-
-# 2. In a separate terminal, launch the dashboard (:5173)
-cd apps/dashboard
-npm install
-npm run dev
-```
-
-Open `http://localhost:5173` in your browser and sign in using your `AI_BRIDGE_ADMIN_TOKEN` or configured local credentials.
-
----
-
-### 3. Enrolling and Running Agents
-
-From the **Enrolled Devices** view in the dashboard (or via `POST /api/devices/enroll`), generate a one-time enrollment token.
-
-#### Linux Agent
-```bash
-# Run one poll cycle or run persistent loop:
-python agents/linux/agent_main.py \
-    --control-url http://127.0.0.1:8000 \
-    --device-token <ENROLLMENT_TOKEN>
-```
-For persistent system installations, see [`deployment/systemd/ai-bridge-agent.service`](deployment/systemd/ai-bridge-agent.service).
-
-#### Windows Agent
-```powershell
-python agents\windows\agent_main.py `
-    --control-url http://127.0.0.1:8000 `
-    --device-token <ENROLLMENT_TOKEN>
-```
-For unattended setup as a scheduled task and desktop screenshot helper, see [`deployment/windows/install-agent.ps1`](deployment/windows/install-agent.ps1) and [`agents/windows/desktop_helper.py`](agents/windows/desktop_helper.py).
-
-#### macOS Agent
-
-> **Status: code exists, never run on macOS.** `agents/macos/agent_main.py`
-> is written from the Linux agent and import-tested on CI; launchd
-> behaviour end to end has never been verified on a Mac (see
-> `docs/implementation-status.md`). Do not treat macOS as a supported
-> platform until that verification exists.
-
-```bash
-python agents/macos/agent_main.py \
-    --control-url http://127.0.0.1:8000 \
-    --device-token <ENROLLMENT_TOKEN>
-```
-
----
-
-## Configuration Reference
-
-Key environment variables supported across the platform:
-
-| Variable | Default | Purpose |
-| :--- | :--- | :--- |
-| `AI_BRIDGE_WORKSPACE` | `.` | Directory to which all workspace filesystem operations are confined. Path expansions (`$HOME`, `%USERPROFILE%`) are resolved. |
-| `AI_BRIDGE_DATA_DIR` | `~/.ai-bridge` | Base directory for runtime state, databases, and device tokens. |
-| `AI_BRIDGE_DISABLE_HOST_TOOLS` | `1` | Disables host-level filesystem and shell tools on the MCP server, enforcing remote agent routing. |
-| `AI_BRIDGE_ADMIN_TOKEN` | *(None)* | Secret token for administrative API endpoints and dashboard access. |
-| `AI_BRIDGE_ALLOW_BOOTSTRAP` | *(Unset)* | When set to `1`, allows creating the first user without an admin token (for initial zero-configuration setups). |
-| `AI_BRIDGE_CONTROL_URL` | `http://127.0.0.1:8000` | Target control plane URL for agent pollers. |
-| `AI_BRIDGE_DEVICE_TOKEN` | *(None)* | Authentication bearer token used by polling agents to claim tasks. |
-| `AI_BRIDGE_OAUTH_DB` | `/etc/ai-bridge-oauth/oauth.db` | SQLite database path for the OAuth 2.1 gateway. |
+| Document | Purpose |
+|---|---|
+| [docs/support-matrix.md](docs/support-matrix.md) | Canonical platform, database, agent, and CI support matrix |
+| [docs/api-reference.md](docs/api-reference.md) | Auto-generated HTTP/WebSocket API reference (`scripts/generate_api_reference.py`) |
+| [docs/environment-reference.md](docs/environment-reference.md) | Auto-generated environment variable reference (`scripts/generate_env_reference.py`) |
+| [docs/runbooks.md](docs/runbooks.md) | Operator runbooks for alerts, DLQ replay, rollbacks, and incident recovery |
+| [docs/fleet-limits.md](docs/fleet-limits.md) | Multi-worker scaling envelopes, Redis/PostgreSQL requirements, and quotas |
+| [docs/production-readiness.md](docs/production-readiness.md) | Production hardening checklist, TLS/mTLS, OIDC, and backup/PITR requirements |
+| [docs/security.md](docs/security.md) | Threat model, 4-tier guardrails, secret redaction, and audit integrity |
+| [docs/ROADMAP.md](docs/ROADMAP.md) | Release 1–4 delivery record and governance policy |
 
 ---
 
 ## Verification & Testing
 
-AI Bridge includes a comprehensive test suite across unit, integration, and security regression domains:
-
 ```bash
-# Run strict linter checks
+# Lint (ruff, 200-char line limit)
 ruff check .
 
-# Execute full test suite (481 test functions counted by `grep -c 'def test_' tests/`; CI publishes the run log — see `.github/workflows/ci.yml`)
-pytest -v
+# Full Python unit, integration, security & E2E suite (980+ tests)
+pytest -q
 
-# Build frontend dashboard production bundle
+# Schema parity (SQLite SCHEMA vs migrations 001–017)
+python scripts/check_schema_parity.py
+
+# Verify generated API & environment docs and CI policy simulation fixtures
+python scripts/generate_api_reference.py --check
+python scripts/generate_env_reference.py --check
+python scripts/verify_policy_fixtures.py
+
+# Dashboard typecheck and production build
+npm --prefix apps/dashboard run typecheck
 npm --prefix apps/dashboard run build
+
+# Native C# Windows client, installer & C# unit tests (Windows + .NET 9 SDK)
+dotnet build apps/windows-client/AIBridgeClient.csproj -c Release
+dotnet build apps/windows-installer/AIBridgeInstaller.csproj -c Release
+dotnet run --project apps/windows-client.Tests/AIBridgeClient.Tests.csproj -c Release
 ```
 
 ---
 
 ## Repository Layout
 
-```
+```text
 ai-bridge/
-├── src/ai_bridge/          # Core Python package
-│   ├── control/            # FastAPI control plane, DB layer, OIDC, and dispatch
-│   ├── diagnostics.py      # System telemetry, process inspection, service status
-│   ├── execution.py        # Background task runner, test validators
-│   ├── policy.py           # 4-tier risk decision engine
-│   ├── security.py         # Path confinement, token redaction, structure sanitizers
-│   ├── server.py           # Model Context Protocol (MCP) stdio & HTTP server
-│   └── tools.py            # Tool implementations, policy enforcement, shell guardrails
-├── agents/                 # Platform poller agents
-│   ├── common/             # Resilient HTTP poller with atomic token rotation
-│   ├── linux/              # Linux agent entrypoint and CLI
-│   ├── macos/              # macOS agent entrypoint and CLI
-│   └── windows/            # Windows agent and desktop automation helper
+├── src/ai_bridge/            # Core Python package
+│   ├── control/              # FastAPI control plane, routers/, DB, OIDC, rollouts, analytics, incidents, policy bundles
+│   ├── tools/                # Policy-gated tool implementations (workspace, diagnostics, desktop, fleet)
+│   ├── policy.py             # 4-tier risk policy engine & simulator
+│   ├── security.py           # Path confinement, recursive redaction, SSRF & secret guards
+│   └── server.py             # MCP stdio & Streamable HTTP server
+├── agents/                   # Outbound polling agents (common/, linux/, windows/, macos/)
 ├── apps/
-│   ├── control-api/        # Production Uvicorn entrypoint for control plane
-│   └── dashboard/          # JX-UI React + TypeScript web dashboard
-├── deployment/             # Deployment configurations
-│   ├── oauth/              # OAuth 2.1 gateway with PKCE S256
-│   ├── systemd/            # Linux systemd service units
-│   ├── linux/              # Bash installation and run scripts
-│   └── windows/            # PowerShell installation scripts
-├── integrations/           # Client configuration profiles (Claude, ChatGPT, Codex, Gemini)
-├── docs/                   # Architectural guides, threat model, API reference
-└── tests/                  # Test suites (unit, integration, security hardening, e2e)
+│   ├── dashboard/            # React 18 + TypeScript + Vite management UI (LTR/RTL)
+│   ├── windows-client/       # Native C# .NET 9 WPF Windows Client
+│   ├── windows-client.Tests/ # C# unit tests for Windows Client
+│   └── windows-installer/    # Native C# .NET 9 WPF GUI Setup & Uninstaller (AIBridgeSetup.exe)
+├── windows-agent/            # Native C++ Windows WebRTC dataplane (Preview)
+├── migrations/               # Numbered SQLite/PostgreSQL up & down migrations (001–017)
+├── deployment/               # AWS CloudFormation, systemd, Docker/nginx, OAuth gateway, monitoring alerts
+├── scripts/                  # Doc generators, schema parity, SBOM, release evidence, Windows setup builder
+├── integrations/             # MCP client configs (Claude, ChatGPT, Codex, Gemini)
+├── docs/                     # Canonical support matrix, API/env references, runbooks, roadmap
+└── tests/                    # Unit, integration, security, E2E suites & policy simulation fixtures
 ```
 
 ---
