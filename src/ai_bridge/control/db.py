@@ -625,6 +625,8 @@ class LockedConnection:
     @contextlib.contextmanager
     def transaction(self):
         with self._lock:
+            if not self._conn.in_transaction:
+                self._conn.execute("BEGIN IMMEDIATE")
             try:
                 yield self
                 self._conn.commit()
@@ -753,6 +755,8 @@ class PostgresConnection:
                     self._tx_local.conn = None
             return
         with self._lock:
+            if not self._conn.in_transaction:
+                self._conn.execute("BEGIN IMMEDIATE")
             try:
                 yield self
                 self._conn.commit()
@@ -1048,6 +1052,8 @@ def audit(conn: Any, *, tenant: str, actor: str, device_id: str,
     entry_hash = ""
     row_id: Any = None
     with conn.transaction():
+        if getattr(conn, "dialect", "sqlite") == "postgres":
+            conn.execute("SELECT pg_advisory_xact_lock(719283745)")
         try:
             tip = conn.execute(
                 "SELECT entry_hash FROM audit WHERE entry_hash IS NOT NULL AND entry_hash != '' "

@@ -10,11 +10,18 @@ Verifies:
 4. OAuth gateway provides compliant /.well-known/openid-configuration
    and lowercase "bearer" token_type in /oauth/token.
 """
+import os
 import sys
+import tempfile
 from pathlib import Path
 
 from fastapi.testclient import TestClient as APITestClient
 from starlette.testclient import TestClient as StarletteTestClient
+
+os.environ.setdefault(
+    "AI_BRIDGE_OAUTH_DB",
+    str(Path(tempfile.mkdtemp(prefix="aibridge-oauth-discovery-")) / "oauth.db"),
+)
 
 # Add deployment/oauth to path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "deployment" / "oauth"))

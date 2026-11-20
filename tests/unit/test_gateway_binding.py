@@ -13,7 +13,7 @@ import time
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-DB = Path(tempfile.gettempdir()) / "ai-bridge-test-oauth.db"
+DB = Path(tempfile.mkdtemp(prefix="aibridge-oauth-binding-")) / "ai-bridge-test-oauth.db"
 os.environ["AI_BRIDGE_OAUTH_DB"] = str(DB)
 os.environ["AI_BRIDGE_ADMIN_TOKEN"] = "test-admin"
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "deployment" / "oauth"))

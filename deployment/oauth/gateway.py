@@ -43,7 +43,10 @@ def connect():
 
 def init_db():
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    os.chmod(DB_PATH.parent, 0o700)
+    try:
+        os.chmod(DB_PATH.parent, 0o700)
+    except OSError:
+        pass
     conn = connect()
     conn.executescript(
         """
