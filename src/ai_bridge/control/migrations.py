@@ -391,7 +391,8 @@ def _apply_file(
                 _adapt_and_execute_statement(conn, item["sql"], dialect)
             if record_version is not None:
                 conn.execute(
-                    "INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)",
+                    "INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?) "
+                    "ON CONFLICT (version) DO NOTHING",
                     (record_version, record_name or record_version, time.time()),
                 )
             if delete_version is not None:

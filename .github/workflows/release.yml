@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Release version label (e.g. 0.3.1)"
+        description: "Release version label (e.g. 0.3.0)"
         required: false
         default: ""
 
@@ -36,11 +36,14 @@ jobs:
         run: |
           pip install -e ".[dev]" build pip-audit
 
-      - name: Verify schema parity & unit tests
+      - name: Verify lint, schema parity, docs, policy fixtures & unit tests
         run: |
           mkdir -p .run
           ruff check .
           python scripts/check_schema_parity.py
+          python scripts/generate_api_reference.py --check
+          python scripts/generate_env_reference.py --check
+          python scripts/verify_policy_fixtures.py
           pytest -q --junitxml=.run/release-pytest.xml
 
       - name: Dependency vulnerability scans (Python + npm)
@@ -48,6 +51,8 @@ jobs:
           pip-audit --format json --output .run/pip-audit.json || true
           npm --prefix apps/dashboard ci
           npm --prefix apps/dashboard audit --audit-level=high --json > .run/npm-audit.json || true
+          npm --prefix apps/dashboard run typecheck
+          npm --prefix apps/dashboard run build
 
       - name: Build Python sdist and wheel
         run: |
@@ -88,3 +93,49 @@ jobs:
             .run/release-manifest.json.sig
             .run/release-evidence/
           retention-days: 90
+
+  build-windows-installer:
+    name: Build Windows C# WPF GUI Setup (AIBridgeSetup.exe)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "9.0.x"
+      - name: Run C# Windows client unit tests
+        run: dotnet run --project apps/windows-client.Tests/AIBridgeClient.Tests.csproj -c Release
+      - name: Build single-file AIBridgeSetup.exe installer
+        shell: pwsh
+        run: pwsh scripts/build_windows_installer.ps1 -OutDir .run/windows-release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer-${{ github.ref_name }}
+          path: |
+            .run/windows-release/AIBridgeSetup.exe
+            .run/windows-release/AIBridgeSetup.exe.sha256
+          retention-days: 90
+
+  publish-github-release:
+    name: Publish GitHub Release
+    needs: [build-sign-and-bundle, build-windows-installer]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+      - name: Create GitHub Release with signed artifacts, SBOM & Windows installer
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p upload
+          find release-assets -type f \( \
+            -name "*.whl" -o -name "*.tar.gz" -o -name "release-manifest.json*" \
+            -o -name "sbom.cdx.json" -o -name "SHA256SUMS.txt" -o -name "release-evidence.json" \
+            -o -name "AIBridgeSetup.exe" -o -name "AIBridgeSetup.exe.sha256" \
+          \) -exec cp {} upload/ \;
+          gh release create "${GITHUB_REF_NAME}" upload/* \
+            --title "AI Bridge ${GITHUB_REF_NAME}" \
+            --generate-notes

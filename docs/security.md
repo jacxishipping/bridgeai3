@@ -80,3 +80,18 @@ Native encode: `AI_BRIDGE_NATIVE_ENCODE` (`off` | `auto` | `prefer` | `required`
   - Tier 4: High-risk system mutations (always require explicit human approval).
 - **Hash-Chained Audit Trail (not unconditionally append-only)**: Every session creation, mode transition, human takeover, policy change, and MCP tool execution is recorded in `/api/v1/audit` (and control-plane `/api/audit`) with redacted payloads. New audit rows persist `prev_hash` / `entry_hash` for a durable integrity chain. Sensitive dispatch tools (≥ tier 3, supervisor, desktop/shell mutators, connectors) also emit dispatch-time audit via `dispatch_audit.py`. Ordinary API writes cannot modify audit rows — but an admin retention operation can prune them, and the optional WORM/SIEM sink (`AI_BRIDGE_WORM_SIEM_URL`) is off by default, so do not describe the trail as unconditionally append-only.
 - **Production readiness**: `GET /health/ready` fails closed in production when TURN/ICE, admin token, anon-MCP, http public URL, or unsafe browser sandbox issues are critical. Full checklist is operator-only at `GET /health/production-checklist`.
+
+## Release 4 Security Boundaries & Threat Model Updates
+
+- **Policy-as-Code Signed Bundles (`GET /api/policies/export`, `POST /api/policies/import`)**:
+  - Bundles use canonical JSON (`ai-bridge-policy-bundle/v1`) protected by a SHA-256 digest and `HMAC-SHA256` signature (`AI_BRIDGE_POLICY_SIGNING_KEY`, falling back to `AI_BRIDGE_ADMIN_TOKEN`). Tampered or unsigned bundles fail closed with `403`.
+  - Escalation fields (`unrestricted`, `unrestricted_granted_by`) are explicitly rejected on import (`403`) so a compromised or misconfigured policy bundle can never grant unrestricted execution.
+- **Enterprise OIDC Group-to-Role Mapping (`AI_BRIDGE_FEATURE_OIDC_GROUP_MAPPING=1`)**:
+  - Explicit opt-in and **deny-by-default**: if an authenticated OIDC user's configured group claim matches no entry in `AI_BRIDGE_OIDC_ROLE_MAP`, login is denied with `403` and logged as `oidc_login_denied` in the audit ledger.
+  - On each successful login, the stored user role is synced from the current IdP groups (supporting timely deprovisioning when removed from privileged groups) and audited as `oidc_role_mapped`.
+- **Governed Workspace Memory Snippets (`/api/memory/snippets`)**:
+  - Strictly tenant- and workspace-isolated, read-only once created, requiring explicit provenance (`source`, `created_by`), filtered against known prompt-injection control-override patterns, and excluded from LLM prompts unless `opt_in_prompt=true` (rendered inside `<governed_workspace_snippets untrusted_data="true">` delimiters).
+- **Cross-Platform Desktop Capability Honesty (`GET /api/devices/{id}/desktop/capabilities`)**:
+  - Interactive input is advertised only on policy-enabled, non-revoked Windows hosts; Linux and macOS endpoints are strictly advertised as `view_only`.
+- **Native Windows C# WPF GUI Installer (`apps/windows-installer/`)**:
+  - Installs per-user under `%LocalAppData%\Programs\AIBridgeClient` (no UAC elevation required), defends archive extraction against zip-slip path traversal, seals optional enrollment tokens with Win32 `CryptProtectData` (`aib-dpapi-v1:`), and verifies SHA-256 of the deployed `AIBridgeClient.exe` binary.

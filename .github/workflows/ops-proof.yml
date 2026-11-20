@@ -1,0 +1,158 @@
+name: Release 2 Ops Proof (Multi-Worker Soak & Quarterly Postgres Restore)
+
+on:
+  workflow_dispatch:
+    inputs:
+      soak_iterations:
+        description: "Number of concurrent soak iterations across workers"
+        required: false
+        default: "60"
+  schedule:
+    # Run on the 1st of every quarter (Jan, Apr, Jul, Oct) at 04:00 UTC for quarterly restore proof
+    - cron: "0 4 1 1,4,7,10 *"
+
+permissions:
+  contents: read
+
+jobs:
+  multi-worker-redis-soak:
+    name: Multi-Worker + Redis + PostgreSQL 18 Load Soak
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: ai_bridge
+          POSTGRES_PASSWORD: ai_bridge_pw
+          POSTGRES_DB: ai_bridge_soak
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - name: Install control plane with production DB + Redis extras
+        run: |
+          pip install -e ".[dev]" "psycopg[binary]" "psycopg-pool" redis uvicorn
+      - name: Launch 2 control-plane workers sharing PostgreSQL 18 + Redis 7 and run soak
+        env:
+          AI_BRIDGE_PROFILE: production
+          AI_BRIDGE_MULTI_HOST: "1"
+          AI_BRIDGE_WORKERS: "2"
+          AI_BRIDGE_ADMIN_TOKEN: "ops-proof-admin-token-0123456789abcdef"
+          AI_BRIDGE_CSRF_SECRET: "ops-proof-csrf-secret-0123456789abcdef"
+          AI_BRIDGE_PUBLIC_BASE_URL: "https://staging.example.invalid"
+          DATABASE_URL: "postgresql://ai_bridge:ai_bridge_pw@127.0.0.1:5432/ai_bridge_soak"
+          REDIS_URL: "redis://127.0.0.1:6379/0"
+          SOAK_ITERS: ${{ inputs.soak_iterations || '60' }}
+        run: |
+          mkdir -p .run
+          # Run schema migrations once before spawning parallel workers
+          python -c "from ai_bridge.control import db; c = db.connect(); c.close()"
+
+          python -c "
+          import uvicorn
+          from ai_bridge.control.app import create_app
+          app = create_app()
+          uvicorn.run(app, host='127.0.0.1', port=8001, log_level='warning')
+          " > .run/worker-1.log 2>&1 &
+          W1_PID=$!
+
+          python -c "
+          import uvicorn
+          from ai_bridge.control.app import create_app
+          app = create_app()
+          uvicorn.run(app, host='127.0.0.1', port=8002, log_level='warning')
+          " > .run/worker-2.log 2>&1 &
+          W2_PID=$!
+
+          trap 'kill $W1_PID $W2_PID 2>/dev/null || true' EXIT
+
+          for port in 8001 8002; do
+            for i in $(seq 1 30); do
+              if curl -fsS "http://127.0.0.1:${port}/health" >/dev/null 2>&1; then
+                break
+              fi
+              sleep 0.5
+            done
+          done
+
+          python scripts/multi_worker_soak.py \
+            --worker-urls "http://127.0.0.1:8001,http://127.0.0.1:8002" \
+            --admin-token "$AI_BRIDGE_ADMIN_TOKEN" \
+            --concurrency 12 \
+            --iterations "$SOAK_ITERS" \
+            --out .run/multi_worker_soak_evidence.json
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: release2-multi-worker-soak-evidence
+          path: |
+            .run/multi_worker_soak_evidence.json
+            .run/worker-1.log
+            .run/worker-2.log
+          retention-days: 90
+
+  quarterly-postgres-restore-proof:
+    name: Quarterly PostgreSQL Restore & PITR Proof
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: ai_bridge
+          POSTGRES_PASSWORD: ai_bridge_pw
+          POSTGRES_DB: ai_bridge
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install -e ".[dev]" "psycopg[binary]" "psycopg-pool"
+      - name: Install PostgreSQL server & client tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql postgresql-client
+          sudo systemctl stop postgresql || true
+      - name: Run schema parity, PostgreSQL boot, logical restore drill, and WAL PITR proof
+        env:
+          AIBRIDGE_PG_BASE_DSN: postgresql://ai_bridge:ai_bridge_pw@localhost:5432/postgres
+          AIBRIDGE_PG_BOOT_DSN: postgresql://ai_bridge:ai_bridge_pw@localhost:5432/ai_bridge_boot
+          AIBRIDGE_PG_DRILL_DSN: postgresql://ai_bridge:ai_bridge_pw@localhost:5432/ai_bridge_restore_drill
+        run: |
+          mkdir -p .run
+          python3 scripts/check_schema_parity.py --postgres "$AIBRIDGE_PG_BASE_DSN"
+          python3 scripts/test_postgres_boot.py --base-dsn "$AIBRIDGE_PG_BASE_DSN" --keep
+          python3 scripts/backup_restore.py drill \
+            --pg-dsn "$AIBRIDGE_PG_BOOT_DSN" \
+            --restore-dsn "$AIBRIDGE_PG_DRILL_DSN" \
+            --evidence-out .run/quarterly_pg_restore_evidence.json
+          python3 scripts/postgres_pitr_drill.py \
+            --out .run/quarterly_pg_pitr_evidence.json
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: quarterly-postgres-restore-proof
+          path: |
+            .run/quarterly_pg_restore_evidence.json
+            .run/quarterly_pg_pitr_evidence.json
+          retention-days: 365
