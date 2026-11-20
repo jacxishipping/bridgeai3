@@ -8,9 +8,11 @@ import type {
   BackupItem,
   BroadcastBatchStatus,
   ConnectionsSummary,
+  DeadLetterRecord,
   DeviceOverview,
   DeviceRecord,
   EnrollResult,
+  FleetHealthSummary,
   FleetTelemetrySummary,
   HealthResponse,
   MonitorDescriptor,
@@ -18,10 +20,12 @@ import type {
   PolicyState,
   ReadinessResponse,
   RoleAgentRecord,
+  RolloutRecord,
   ScheduleRecord,
   TaskRecord,
   TelemetryPoint,
   TerminalSessionSummary,
+  TraceTimeline,
   TriggerRecord,
   UserRecord,
   WorkflowRecord,
@@ -325,8 +329,8 @@ export class ApiClient {
     return this.request<FleetTelemetrySummary>("/api/fleet/telemetry");
   }
 
-  async getFleetHealth(): Promise<Record<string, unknown>> {
-    return this.request<Record<string, unknown>>("/api/fleet/health");
+  async getFleetHealth(): Promise<FleetHealthSummary> {
+    return this.request<FleetHealthSummary>("/api/fleet/health");
   }
 
   async getDesktopCapabilities(): Promise<Record<string, unknown>> {
@@ -343,7 +347,12 @@ export class ApiClient {
     return this.request<TaskRecord>(`/api/tasks/${encodeURIComponent(taskId)}`);
   }
 
-  async submitTask(payload: { device_id: string; tool: string; args: Record<string, unknown> }): Promise<Record<string, unknown>> {
+  async submitTask(payload: {
+    device_id: string;
+    tool: string;
+    args: Record<string, unknown>;
+    max_attempts?: number;
+  }): Promise<Record<string, unknown>> {
     return this.request("/api/tasks", { method: "POST", body: JSON.stringify(payload) });
   }
 
@@ -698,7 +707,7 @@ export class ApiClient {
   }
 
   // Release 2: Dead-letter queue, end-to-end traces, update rings & staged rollouts
-  async listDeadLetterTasks(includeReplayed = false): Promise<{ items: Record<string, unknown>[]; count: number }> {
+  async listDeadLetterTasks(includeReplayed = false): Promise<{ items: DeadLetterRecord[]; count: number }> {
     return this.request(`/api/tasks/dead-letter?include_replayed=${includeReplayed ? "true" : "false"}`);
   }
 
@@ -710,8 +719,8 @@ export class ApiClient {
     return this.request(`/api/tasks/dead-letter/${encodeURIComponent(dlqId)}`, { method: "DELETE" });
   }
 
-  async getTrace(traceId: string): Promise<Record<string, unknown>> {
-    return this.request(`/api/traces/${encodeURIComponent(traceId)}`);
+  async getTrace(traceId: string): Promise<TraceTimeline> {
+    return this.request<TraceTimeline>(`/api/traces/${encodeURIComponent(traceId)}`);
   }
 
   async updateDeviceAgent(deviceId: string): Promise<Record<string, unknown>> {
@@ -725,7 +734,7 @@ export class ApiClient {
     });
   }
 
-  async listRollouts(): Promise<{ rollouts: Record<string, unknown>[]; count: number }> {
+  async listRollouts(): Promise<{ rollouts: RolloutRecord[]; count: number }> {
     return this.request("/api/fleet/rollouts");
   }
 
@@ -736,26 +745,26 @@ export class ApiClient {
     manifest_url?: string;
     rings?: string[];
     max_failure_rate?: number;
-  }): Promise<Record<string, unknown>> {
-    return this.request("/api/fleet/rollouts", {
+  }): Promise<RolloutRecord> {
+    return this.request<RolloutRecord>("/api/fleet/rollouts", {
       method: "POST",
       body: JSON.stringify(payload),
     });
   }
 
-  async advanceRollout(rolloutId: string): Promise<Record<string, unknown>> {
-    return this.request(`/api/fleet/rollouts/${encodeURIComponent(rolloutId)}/advance`, { method: "POST" });
+  async advanceRollout(rolloutId: string): Promise<RolloutRecord> {
+    return this.request<RolloutRecord>(`/api/fleet/rollouts/${encodeURIComponent(rolloutId)}/advance`, { method: "POST" });
   }
 
-  async pauseRollout(rolloutId: string): Promise<Record<string, unknown>> {
-    return this.request(`/api/fleet/rollouts/${encodeURIComponent(rolloutId)}/pause`, { method: "POST" });
+  async pauseRollout(rolloutId: string): Promise<RolloutRecord> {
+    return this.request<RolloutRecord>(`/api/fleet/rollouts/${encodeURIComponent(rolloutId)}/pause`, { method: "POST" });
   }
 
-  async resumeRollout(rolloutId: string): Promise<Record<string, unknown>> {
-    return this.request(`/api/fleet/rollouts/${encodeURIComponent(rolloutId)}/resume`, { method: "POST" });
+  async resumeRollout(rolloutId: string): Promise<RolloutRecord> {
+    return this.request<RolloutRecord>(`/api/fleet/rollouts/${encodeURIComponent(rolloutId)}/resume`, { method: "POST" });
   }
 
-  async rollbackRollout(rolloutId: string): Promise<Record<string, unknown>> {
-    return this.request(`/api/fleet/rollouts/${encodeURIComponent(rolloutId)}/rollback`, { method: "POST" });
+  async rollbackRollout(rolloutId: string): Promise<RolloutRecord> {
+    return this.request<RolloutRecord>(`/api/fleet/rollouts/${encodeURIComponent(rolloutId)}/rollback`, { method: "POST" });
   }
 }

@@ -98,6 +98,7 @@ export default function App() {
   const [audit, setAudit] = useState<AuditRecord[]>([]);
   const [telemetry, setTelemetry] = useState<FleetTelemetrySummary | null>(null);
   const [inspectedDevice, setInspectedDevice] = useState<DeviceRecord | null>(null);
+  const [inspectedTraceId, setInspectedTraceId] = useState<string>("");
 
   const showToast = useCallback((msg: string) => {
     setToast(msg);
@@ -494,6 +495,10 @@ export default function App() {
               devices={devices}
               onRefresh={() => refreshAll(false)}
               onToast={showToast}
+              onInspectTrace={(traceId) => {
+                setInspectedTraceId(traceId);
+                setSection("audit");
+              }}
             />
           ) : section === "workflows" ? (
             <WorkflowsView api={api} devices={devices} onToast={showToast} />
@@ -508,7 +513,12 @@ export default function App() {
               onToast={showToast}
             />
           ) : section === "audit" ? (
-            <AuditLogsView api={api} audit={audit} onToast={showToast} />
+            <AuditLogsView
+              api={api}
+              audit={audit}
+              initialTraceId={inspectedTraceId}
+              onToast={showToast}
+            />
           ) : section === "connections" ? (
             <ConnectionsView api={api} onToast={showToast} />
           ) : (

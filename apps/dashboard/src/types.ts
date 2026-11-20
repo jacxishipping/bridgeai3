@@ -130,6 +130,129 @@ export interface TaskRecord {
   created_at?: number;
   updated_at?: number;
   approval_id?: string | null;
+  attempt?: number;
+  max_attempts?: number;
+  next_attempt_at?: number | null;
+  failure_reason?: string;
+  failure_class?: string;
+  progress_pct?: number | null;
+  status_message?: string;
+  dead_lettered?: number;
+  trace_id?: string;
+}
+
+export interface DeadLetterRecord {
+  id: string;
+  task_id: string;
+  device_id: string;
+  tenant: string;
+  tool: string;
+  args_json?: string;
+  attempts: number;
+  failure_reason?: string;
+  failure_class?: string;
+  last_error?: string;
+  trace_id?: string;
+  created_at: number;
+  replayed_task_id?: string | null;
+  replayed_at?: number | null;
+}
+
+export interface TaskEventRecord {
+  id: string;
+  task_id: string;
+  event: string;
+  detail_json?: string;
+  detail?: Record<string, unknown>;
+  created_at: number;
+  trace_id?: string;
+}
+
+export interface TraceTimeline {
+  trace_id: string;
+  tenant: string;
+  tasks: TaskRecord[];
+  task_events: TaskEventRecord[];
+  approvals: ApprovalRecord[];
+  audit: AuditRecord[];
+}
+
+export interface RolloutDispatchEntry {
+  device_id: string;
+  task_id: string | null;
+  status: string;
+  reason?: string;
+}
+
+export interface RolloutRecord {
+  id: string;
+  name: string;
+  tenant: string;
+  target_version: string;
+  target_commit: string;
+  manifest_url?: string;
+  current_ring: string;
+  rings: string[];
+  status: string;
+  max_failure_rate: number;
+  dispatched: Record<string, RolloutDispatchEntry[]>;
+  created_by?: string;
+  created_at: number;
+  updated_at: number;
+  health_gate_failed?: boolean;
+  ring_health?: {
+    total: number;
+    completed: number;
+    failed: number;
+    pending: number;
+    failure_rate: number;
+  };
+}
+
+export interface FleetHealthDevice {
+  id: string;
+  name: string;
+  os?: string;
+  health: string;
+  last_seen?: number;
+  heartbeat_age_sec?: number | null;
+  agent_version?: string;
+  agent_commit?: string;
+  target_version?: string;
+  version_drift?: boolean;
+  reported_policy_hash?: string;
+  expected_policy_hash?: string;
+  policy_drift?: boolean;
+  update_ring?: "canary" | "early" | "general" | string;
+  update_state?: string;
+  poll_state?: {
+    ws_connected?: boolean;
+    poll_mode?: string;
+    backoff_attempts?: number;
+    reconnect_count?: number;
+    active_task_id?: string | null;
+    last_error?: string;
+  };
+  spool_stats?: {
+    pending_count?: number;
+    oldest_pending_age_sec?: number;
+    total_bytes?: number;
+    dead_letter_count?: number;
+  };
+}
+
+export interface FleetHealthSummary {
+  tenant: string;
+  ts: number;
+  target_version?: string;
+  total_devices: number;
+  online_devices: number;
+  stale_device_count: number;
+  spool_pending_total?: number;
+  spool_max_age_sec?: number;
+  version_drift_count?: number;
+  policy_drift_count?: number;
+  devices: FleetHealthDevice[];
 }
 
 export interface ApprovalRecord {
@@ -177,6 +300,7 @@ export interface AuditRecord {
   decision: string;
   entry_hash?: string;
   prev_hash?: string;
+  trace_id?: string;
 }
 
 export interface AuditVerifyResult {
