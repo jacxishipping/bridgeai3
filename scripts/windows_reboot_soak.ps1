@@ -36,8 +36,26 @@ if ($EvidenceDir -and -not (Test-Path $EvidenceDir)) {
     New-Item -ItemType Directory -Force -Path $EvidenceDir | Out-Null
 }
 
+function ConvertTo-PlainHashtable($obj) {
+    if ($null -eq $obj) { return $null }
+    if ($obj -is [System.Collections.IDictionary]) {
+        $ht = @{}
+        foreach ($k in $obj.Keys) { $ht[$k] = ConvertTo-PlainHashtable $obj[$k] }
+        return $ht
+    }
+    if ($obj -is [System.Management.Automation.PSCustomObject]) {
+        $ht = @{}
+        foreach ($p in $obj.PSObject.Properties) { $ht[$p.Name] = ConvertTo-PlainHashtable $p.Value }
+        return $ht
+    }
+    if ($obj -is [System.Collections.IEnumerable] -and -not ($obj -is [string])) {
+        return @($obj | ForEach-Object { ConvertTo-PlainHashtable $_ })
+    }
+    return $obj
+}
+
 $Report = if (Test-Path $EvidencePath) {
-    Get-Content $EvidencePath -Raw | ConvertFrom-Json -AsHashtable
+    ConvertTo-PlainHashtable (Get-Content $EvidencePath -Raw | ConvertFrom-Json)
 } else {
     @{
         gate = "release-1-windows-clean-image-reboot-soak"
@@ -45,6 +63,9 @@ $Report = if (Test-Path $EvidencePath) {
         os = [System.Environment]::OSVersion.VersionString
         phases = @{}
     }
+}
+if (-not $Report.ContainsKey("phases") -or $null -eq $Report.phases) {
+    $Report.phases = @{}
 }
 
 if ($Phase -eq "PreReboot") {
@@ -81,7 +102,11 @@ elseif ($Phase -eq "PostReboot") {
         throw "PostReboot requires -ControlUrl, -AdminToken, and -DeviceId."
     }
     $bootAfter = (Get-CimInstance Win32_OperatingSystem).LastBootUpTime.ToUniversalTime().ToString("o")
-    $headers = @{ "X-Admin-Token" = $AdminToken; "Content-Type" = "application/json" }
+    $headers = @{
+        "X-Admin-Token" = $AdminToken
+        "Content-Type" = "application/json"
+        "User-Agent" = "AI-Bridge-RebootSoak/0.3"
+    }
     $base = $ControlUrl.TrimEnd("/")
 
     # Wait up to 90s for post-boot heartbeat
