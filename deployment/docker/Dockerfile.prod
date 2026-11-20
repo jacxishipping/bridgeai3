@@ -3,7 +3,7 @@
 # ==============================================================================
 
 # --- Stage 1: Build Frontend Dashboard ---
-FROM node:22-alpine AS frontend-builder
+FROM node:26-alpine AS frontend-builder
 WORKDIR /build
 COPY apps/dashboard/package*.json ./
 # P-07 (Wave 7): `npm ci` (exact lockfile install), not `npm install`.
