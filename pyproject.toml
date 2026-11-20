@@ -9,7 +9,7 @@ description = "Security-first, cross-platform AI-to-computer control platform ov
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-  "mcp>=1.6.0,<2.0.0",
+  "mcp>=1.6.0,<3.0.0",
   "fastapi>=0.110",
   "uvicorn>=0.29",
   "pydantic>=2.6",
