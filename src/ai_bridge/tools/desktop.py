@@ -972,12 +972,105 @@ def set_of_marks_screenshot(
     }
 
 
+def _win32_get_clipboard() -> tuple[bool, str]:
+    """Read CF_UNICODETEXT directly via Win32 user32/kernel32 (sub-millisecond, no PowerShell cold start)."""
+    import ctypes
+
+    cf_unicodetext = 13
+    user32 = ctypes.windll.user32
+    kernel32 = ctypes.windll.kernel32
+    user32.OpenClipboard.argtypes = [ctypes.c_void_p]
+    user32.OpenClipboard.restype = ctypes.c_bool
+    user32.GetClipboardData.argtypes = [ctypes.c_uint]
+    user32.GetClipboardData.restype = ctypes.c_void_p
+    user32.CloseClipboard.argtypes = []
+    user32.CloseClipboard.restype = ctypes.c_bool
+    kernel32.GlobalLock.argtypes = [ctypes.c_void_p]
+    kernel32.GlobalLock.restype = ctypes.c_void_p
+    kernel32.GlobalUnlock.argtypes = [ctypes.c_void_p]
+    kernel32.GlobalUnlock.restype = ctypes.c_bool
+
+    if not user32.OpenClipboard(None):
+        return False, ""
+    try:
+        handle = user32.GetClipboardData(cf_unicodetext)
+        if not handle:
+            return True, ""
+        ptr = kernel32.GlobalLock(handle)
+        if not ptr:
+            return False, ""
+        try:
+            text = ctypes.wstring_at(ptr)
+            return True, text.rstrip("\r\n")
+        finally:
+            kernel32.GlobalUnlock(handle)
+    finally:
+        user32.CloseClipboard()
+
+
+def _win32_set_clipboard(content: str) -> bool:
+    """Write CF_UNICODETEXT directly via Win32 user32/kernel32 (sub-millisecond, no PowerShell cold start)."""
+    import ctypes
+
+    cf_unicodetext = 13
+    gmem_moveable = 0x0002
+    user32 = ctypes.windll.user32
+    kernel32 = ctypes.windll.kernel32
+    user32.OpenClipboard.argtypes = [ctypes.c_void_p]
+    user32.OpenClipboard.restype = ctypes.c_bool
+    user32.EmptyClipboard.argtypes = []
+    user32.EmptyClipboard.restype = ctypes.c_bool
+    user32.SetClipboardData.argtypes = [ctypes.c_uint, ctypes.c_void_p]
+    user32.SetClipboardData.restype = ctypes.c_void_p
+    user32.CloseClipboard.argtypes = []
+    user32.CloseClipboard.restype = ctypes.c_bool
+    kernel32.GlobalAlloc.argtypes = [ctypes.c_uint, ctypes.c_size_t]
+    kernel32.GlobalAlloc.restype = ctypes.c_void_p
+    kernel32.GlobalLock.argtypes = [ctypes.c_void_p]
+    kernel32.GlobalLock.restype = ctypes.c_void_p
+    kernel32.GlobalUnlock.argtypes = [ctypes.c_void_p]
+    kernel32.GlobalUnlock.restype = ctypes.c_bool
+    kernel32.GlobalFree.argtypes = [ctypes.c_void_p]
+    kernel32.GlobalFree.restype = ctypes.c_void_p
+
+    encoded = content.encode("utf-16-le") + b"\x00\x00"
+    if not user32.OpenClipboard(None):
+        return False
+    hmem = None
+    try:
+        user32.EmptyClipboard()
+        hmem = kernel32.GlobalAlloc(gmem_moveable, len(encoded))
+        if not hmem:
+            return False
+        ptr = kernel32.GlobalLock(hmem)
+        if not ptr:
+            kernel32.GlobalFree(hmem)
+            return False
+        try:
+            ctypes.memmove(ptr, encoded, len(encoded))
+        finally:
+            kernel32.GlobalUnlock(hmem)
+        if not user32.SetClipboardData(cf_unicodetext, hmem):
+            kernel32.GlobalFree(hmem)
+            return False
+        hmem = None  # Ownership transferred to Windows clipboard
+        return True
+    finally:
+        user32.CloseClipboard()
+
+
 def get_clipboard(*, policy: Policy | None = None) -> dict:
     """Read the current system clipboard text on Windows, Linux, or macOS."""
     eff_policy = policy or default_policy()
     _check("get_clipboard", policy=eff_policy)
     current_os = platform.system()
     if current_os == "Windows":
+        try:
+            ok, text = _win32_get_clipboard()
+            if ok:
+                return {"ok": True, "text": text, "length": len(text), "system": current_os}
+        except Exception:
+            pass
         proc = subprocess.run(
             ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", "Get-Clipboard -Raw"],
             shell=False,
@@ -985,7 +1078,7 @@ def get_clipboard(*, policy: Policy | None = None) -> dict:
             text=True,
             encoding="utf-8",
             errors="replace",
-            timeout=8,
+            timeout=20,
         )
         text = (proc.stdout or "").rstrip("\r\n")
         return {"ok": proc.returncode == 0, "text": text, "length": len(text), "system": current_os}
@@ -1019,17 +1112,22 @@ def set_clipboard(
     ok = False
 
     if current_os == "Windows":
-        proc = subprocess.run(
-            ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", "$input | Set-Clipboard"],
-            input=content,
-            shell=False,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=8,
-        )
-        ok = proc.returncode == 0
+        try:
+            ok = _win32_set_clipboard(content)
+        except Exception:
+            ok = False
+        if not ok:
+            proc = subprocess.run(
+                ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", "$input | Set-Clipboard"],
+                input=content,
+                shell=False,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=20,
+            )
+            ok = proc.returncode == 0
     else:
         for argv in (
             ["wl-copy"],

@@ -1940,7 +1940,7 @@ def create_app(
             except Exception:
                 time.sleep(5)
 
-    threading.Thread(target=_scheduler_loop, daemon=True).start()
+    threading.Thread(target=_scheduler_loop, name="ai-bridge-scheduler", daemon=True).start()
 
     # --- Phase 4: Visual Streaming, Dual Control & Fleet Auto-Updater ---
     app.state.latest_frames = {}

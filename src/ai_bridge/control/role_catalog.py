@@ -203,7 +203,7 @@ def seed_role_catalog(conn: Any, *, tenant: str = "default") -> int:
             ]
             conn.execute(
                 "INSERT INTO workflow_templates (id, name, description, steps_json, tenant, created_by, created_at) "
-                "VALUES (?,?,?,?,?,?,?)",
+                "VALUES (?,?,?,?,?,?,?) ON CONFLICT (id) DO NOTHING",
                 (
                     tpl_id,
                     f"Role: {spec['name']}",
@@ -223,7 +223,7 @@ def seed_role_catalog(conn: Any, *, tenant: str = "default") -> int:
                 "INSERT INTO custom_agents "
                 "(id, name, instruction, tenant, provider, model, device_ids_json, interval_seconds, enabled, "
                 "status, next_run_at, allowed_tools_json, created_at, updated_at) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT (id) DO NOTHING",
                 (
                     agent_id,
                     spec["name"],
@@ -268,7 +268,7 @@ def seed_role_catalog(conn: Any, *, tenant: str = "default") -> int:
         ]
         conn.execute(
             "INSERT INTO workflow_templates (id, name, description, steps_json, tenant, created_by, created_at) "
-            "VALUES (?,?,?,?,?,?,?)",
+            "VALUES (?,?,?,?,?,?,?) ON CONFLICT (id) DO NOTHING",
             (
                 handoff_id,
                 "Handoff: Supervisor → Planner → Developer",

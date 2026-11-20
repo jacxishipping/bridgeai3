@@ -51,9 +51,12 @@ jobs:
           AI_BRIDGE_PROFILE: production
           AI_BRIDGE_MULTI_HOST: "1"
           AI_BRIDGE_WORKERS: "2"
+          AI_BRIDGE_ENABLE_LEGACY_ADMIN_TOKEN: "1"
           AI_BRIDGE_ADMIN_TOKEN: "ops-proof-admin-token-0123456789abcdef"
           AI_BRIDGE_CSRF_SECRET: "ops-proof-csrf-secret-0123456789abcdef"
           AI_BRIDGE_PUBLIC_BASE_URL: "https://staging.example.invalid"
+          AI_BRIDGE_TURN_URL: "turn:turn.example.invalid:3478"
+          AI_BRIDGE_TURN_SECRET: "ops-proof-turn-secret-0123456789abcdef"
           DATABASE_URL: "postgresql://ai_bridge:ai_bridge_pw@127.0.0.1:5432/ai_bridge_soak"
           REDIS_URL: "redis://127.0.0.1:6379/0"
           SOAK_ITERS: ${{ inputs.soak_iterations || '60' }}
@@ -62,31 +65,31 @@ jobs:
           # Run schema migrations once before spawning parallel workers
           python -c "from ai_bridge.control import db; c = db.connect(); c.close()"
 
-          python -c "
-          import uvicorn
-          from ai_bridge.control.app import create_app
-          app = create_app()
-          uvicorn.run(app, host='127.0.0.1', port=8001, log_level='warning')
-          " > .run/worker-1.log 2>&1 &
+          python -c "import uvicorn; from ai_bridge.control.app import create_app; uvicorn.run(create_app(), host='127.0.0.1', port=8001, log_level='info')" > .run/worker-1.log 2>&1 &
           W1_PID=$!
 
-          python -c "
-          import uvicorn
-          from ai_bridge.control.app import create_app
-          app = create_app()
-          uvicorn.run(app, host='127.0.0.1', port=8002, log_level='warning')
-          " > .run/worker-2.log 2>&1 &
+          python -c "import uvicorn; from ai_bridge.control.app import create_app; uvicorn.run(create_app(), host='127.0.0.1', port=8002, log_level='info')" > .run/worker-2.log 2>&1 &
           W2_PID=$!
 
           trap 'kill $W1_PID $W2_PID 2>/dev/null || true' EXIT
 
           for port in 8001 8002; do
-            for i in $(seq 1 30); do
+            ready=0
+            for i in $(seq 1 40); do
               if curl -fsS "http://127.0.0.1:${port}/health" >/dev/null 2>&1; then
+                ready=1
                 break
               fi
               sleep 0.5
             done
+            if [ "$ready" -ne 1 ]; then
+              echo "Worker on port ${port} failed to become healthy! Logs:"
+              echo "=== worker-1.log ==="
+              cat .run/worker-1.log || true
+              echo "=== worker-2.log ==="
+              cat .run/worker-2.log || true
+              exit 1
+            fi
           done
 
           python scripts/multi_worker_soak.py \
