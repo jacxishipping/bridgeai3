@@ -755,8 +755,6 @@ class PostgresConnection:
                     self._tx_local.conn = None
             return
         with self._lock:
-            if not self._conn.in_transaction:
-                self._conn.execute("BEGIN IMMEDIATE")
             try:
                 yield self
                 self._conn.commit()
