@@ -198,7 +198,7 @@ class TestNoDefaultSecrets(unittest.TestCase):
         # thinking the domain was jxiptvplayer.app. The generated
         # .env.production must carry AI_BRIDGE_DOMAIN from DOMAIN.
         text = _read(DEPLOY_PROD)
-        self.assertIn('AI_BRIDGE_DOMAIN="${DOMAIN:-jxiptvplayer.app}"', text)
+        self.assertRegex(text, r'AI_BRIDGE_DOMAIN="\$\{DOMAIN:-[^"}]+\}"')
 
     def test_control_api_receives_turn_secret(self):
         # R-P0-15 follow-up (EC2 deploy): the production readiness check

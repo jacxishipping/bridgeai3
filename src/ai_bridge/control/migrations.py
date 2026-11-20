@@ -422,29 +422,43 @@ def run_migrations(conn: Any, dialect: str = "sqlite", migrations_dir: Path | No
             "directory from the release before starting the control plane."
         )
 
-    ensure_migrations_table(conn, dialect)
-    applied = get_applied_versions(conn)
-
-    sql_files = sorted([f for f in mdir.glob("*.sql") if re.match(r"^\d+_", f.name)])
-    newly_applied: list[str] = []
-
-    for fpath in sql_files:
-        version = fpath.stem.split("_")[0]
-        if version in applied:
-            continue
-
-        raw_sql = fpath.read_text(encoding="utf-8")
-        logger.info("Applying database migration [%s] %s ...", version, fpath.name)
-
+    pg_locked = False
+    if dialect == "postgres":
         try:
-            _apply_file(conn, raw_sql, dialect, record_version=version, record_name=fpath.name)
-            newly_applied.append(version)
-            logger.info("Successfully applied migration [%s].", version)
-        except Exception as exc:
-            logger.error("Failed to apply migration [%s] %s: %s", version, fpath.name, exc)
-            raise
+            conn.execute("SELECT pg_advisory_lock(719283744)")
+            pg_locked = True
+        except Exception:
+            pg_locked = False
+    try:
+        ensure_migrations_table(conn, dialect)
+        applied = get_applied_versions(conn)
 
-    return newly_applied
+        sql_files = sorted([f for f in mdir.glob("*.sql") if re.match(r"^\d+_", f.name)])
+        newly_applied: list[str] = []
+
+        for fpath in sql_files:
+            version = fpath.stem.split("_")[0]
+            if version in applied:
+                continue
+
+            raw_sql = fpath.read_text(encoding="utf-8")
+            logger.info("Applying database migration [%s] %s ...", version, fpath.name)
+
+            try:
+                _apply_file(conn, raw_sql, dialect, record_version=version, record_name=fpath.name)
+                newly_applied.append(version)
+                logger.info("Successfully applied migration [%s].", version)
+            except Exception as exc:
+                logger.error("Failed to apply migration [%s] %s: %s", version, fpath.name, exc)
+                raise
+
+        return newly_applied
+    finally:
+        if pg_locked:
+            try:
+                conn.execute("SELECT pg_advisory_unlock(719283744)")
+            except Exception:
+                pass
 
 
 def run_down_migration(
