@@ -142,3 +142,14 @@ def test_smoke_check_matches_v3_dashboard_index_html():
     assert b"AI Bridge" in index_html
     smoke_src = (REPO_ROOT / "deployment" / "smoke_check.py").read_text(encoding="utf-8")
     assert "brand-mark.svg" not in smoke_src
+
+
+def test_postgres_pitr_drill_wal_scripts_generation(tmp_path):
+    from scripts.postgres_pitr_drill import _write_wal_scripts
+
+    archive_dir = tmp_path / "wal"
+    archive_cmd, restore_cmd = _write_wal_scripts(tmp_path, archive_dir)
+    assert "wal_archive.py" in archive_cmd and "%p" in archive_cmd and "%f" in archive_cmd
+    assert "wal_restore.py" in restore_cmd and "%f" in restore_cmd and "%p" in restore_cmd
+    assert (tmp_path / "wal_archive.py").is_file()
+    assert (tmp_path / "wal_restore.py").is_file()

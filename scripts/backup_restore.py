@@ -259,6 +259,37 @@ def _redact(cmd: list[str]) -> str:
     return re.sub(r"://[^:/\s]+:[^@\s]+@", "://***:***@", text)
 
 
+def find_pg_bin(name: str) -> str | None:
+    """Locate a PostgreSQL CLI binary on PATH or standard OS install directories."""
+    found = shutil.which(name)
+    if found:
+        return found
+    env_dir = os.environ.get("PG_BIN_DIR", "").strip()
+    search_dirs: list[Path] = []
+    if env_dir:
+        search_dirs.append(Path(env_dir))
+    if platform.system() == "Windows":
+        pg_root = Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "PostgreSQL"
+        if pg_root.is_dir():
+            for ver_dir in sorted(pg_root.iterdir(), reverse=True):
+                bin_dir = ver_dir / "bin"
+                if bin_dir.is_dir():
+                    search_dirs.append(bin_dir)
+    else:
+        for base in (Path("/usr/lib/postgresql"), Path("/opt/homebrew/opt"), Path("/usr/local/opt")):
+            if base.is_dir():
+                for child in sorted(base.iterdir(), reverse=True):
+                    bin_dir = child / "bin"
+                    if bin_dir.is_dir():
+                        search_dirs.append(bin_dir)
+    suffix = ".exe" if platform.system() == "Windows" else ""
+    for directory in search_dirs:
+        candidate = directory / f"{name}{suffix}"
+        if candidate.is_file():
+            return str(candidate)
+    return None
+
+
 def _run(cmd: list[str]) -> None:
     print("+ " + _redact(cmd))
     result = subprocess.run(cmd, check=False)
@@ -268,11 +299,12 @@ def _run(cmd: list[str]) -> None:
 
 def backup_postgres(dsn: str, out_path: Path, fmt: str = "c") -> None:
     """pg_dump to a file. Custom format ('c') is the default."""
-    if shutil.which("pg_dump") is None:
+    pg_dump = find_pg_bin("pg_dump")
+    if pg_dump is None:
         raise SystemExit("pg_dump not found on PATH — install PostgreSQL client tools")
     if out_path.exists():
         raise ValueError(f"refusing to overwrite existing backup: {out_path}")
-    _run(["pg_dump", "--format", fmt, "--file", str(out_path), dsn])
+    _run([pg_dump, "--format", fmt, "--file", str(out_path), dsn])
     print(f"Postgres backup written to {out_path} (format {fmt}). "
           "Verify with a restore drill before relying on it.")
 
@@ -312,10 +344,11 @@ def _createdb(dsn: str) -> None:
     detected from its stderr and treated as success; any other failure
     is fatal.
     """
-    if shutil.which("createdb") is None:
+    createdb = find_pg_bin("createdb")
+    if createdb is None:
         raise SystemExit("createdb not found on PATH")
     conn_args, extra_env, dbname = _pg_conn_args(dsn)
-    cmd = ["createdb"] + conn_args + [dbname]
+    cmd = [createdb] + conn_args + [dbname]
     print("+ " + _redact(cmd))
     env = dict(os.environ)
     env.update(extra_env)
@@ -326,10 +359,11 @@ def _createdb(dsn: str) -> None:
 
 def _dropdb(dsn: str) -> None:
     """Drop the database named by ``dsn``, tolerating 'does not exist'."""
-    if shutil.which("dropdb") is None:
+    dropdb = find_pg_bin("dropdb")
+    if dropdb is None:
         raise SystemExit("dropdb not found on PATH")
     conn_args, extra_env, dbname = _pg_conn_args(dsn)
-    cmd = ["dropdb"] + conn_args + [dbname]
+    cmd = [dropdb, "--force"] + conn_args + [dbname]
     print("+ " + _redact(cmd))
     env = dict(os.environ)
     env.update(extra_env)
@@ -346,7 +380,8 @@ def restore_postgres(dump_path: Path, dsn: str, fmt: str = "c") -> None:
     verifies core tables are readable.
     """
     if fmt == "c":
-        if shutil.which("pg_restore") is None:
+        pg_restore = find_pg_bin("pg_restore")
+        if pg_restore is None:
             raise SystemExit("pg_restore not found on PATH")
         _createdb(dsn)
         # --no-privileges: the dump carries ALTER DEFAULT PRIVILEGES for
@@ -357,13 +392,14 @@ def restore_postgres(dump_path: Path, dsn: str, fmt: str = "c") -> None:
         # stays full-fidelity; only the drill restore skips replaying
         # privilege changes. The data and schema are what the drill
         # verifies.
-        _run(["pg_restore", "--dbname", dsn, "--clean", "--if-exists",
+        _run([pg_restore, "--dbname", dsn, "--clean", "--if-exists",
               "--no-privileges", str(dump_path)])
     else:
-        if shutil.which("psql") is None:
+        psql = find_pg_bin("psql")
+        if psql is None:
             raise SystemExit("psql not found on PATH")
         _createdb(dsn)
-        _run(["psql", dsn, "-v", "ON_ERROR_STOP=1", "-f", str(dump_path)])
+        _run([psql, dsn, "-v", "ON_ERROR_STOP=1", "-f", str(dump_path)])
     print("Postgres restore finished. Verify row counts with a live "
           "connection before pointing the plane at this database.")
 

@@ -110,47 +110,58 @@ async def _ws_ticket_checks(base_url: str, session_id: str, ticket: str) -> dict
 
 def _agent_enforcement_checks() -> dict[str, Any]:
     """Verify view-only, human takeover, and disconnect held-input release on AgentStreamer."""
+    from ai_bridge import plane_control_flags
     from ai_bridge import webrtc_stream as ws_mod
+    from ai_bridge.control import v1_routes
 
-    session_state: dict[str, Any] = {
-        "mode": "view_only",
-        "human_takeover_active": False,
-        "permissions": {"control_mouse": False, "control_keyboard": False},
-    }
-    streamer = ws_mod.AgentStreamer(
-        session_id="sess-r1",
-        signaling=ws_mod.DictSignaling(session_state),
-    )
+    prev_estop = plane_control_flags.is_emergency_stop()
+    prev_local_takeover = v1_routes.is_device_human_takeover_active("local")
+    plane_control_flags.set_emergency_stop(False)
+    v1_routes.set_device_human_takeover("local", False, actor="r1-test")
+    sid = f"sess-r1-{secrets.token_hex(4)}"
+    try:
+        session_state: dict[str, Any] = {
+            "mode": "view_only",
+            "human_takeover_active": False,
+            "permissions": {"control_mouse": False, "control_keyboard": False},
+        }
+        streamer = ws_mod.AgentStreamer(
+            session_id=sid,
+            signaling=ws_mod.DictSignaling(session_state),
+        )
 
-    # 1. View-only rejects mouse & keyboard input
-    res_vo_mouse = streamer._handle_input_payload(json.dumps({"action": "click", "x": 100, "y": 100}))
-    res_vo_key = streamer._handle_input_payload(json.dumps({"action": "type", "text": "a"}))
-    view_only_blocked = (
-        res_vo_mouse.get("ok") is False
-        and res_vo_mouse.get("error") in ("mouse_control_denied", "session_is_view_only")
-        and res_vo_key.get("ok") is False
-        and res_vo_key.get("error") in ("keyboard_control_denied", "session_is_view_only")
-    )
+        # 1. View-only rejects mouse & keyboard input
+        res_vo_mouse = streamer._handle_input_payload(json.dumps({"action": "click", "x": 100, "y": 100}))
+        res_vo_key = streamer._handle_input_payload(json.dumps({"action": "type", "text": "a"}))
+        view_only_blocked = (
+            res_vo_mouse.get("ok") is False
+            and res_vo_mouse.get("error") in ("mouse_control_denied", "session_is_view_only")
+            and res_vo_key.get("ok") is False
+            and res_vo_key.get("error") in ("keyboard_control_denied", "session_is_view_only")
+        )
 
-    # 2. Takeover blocks input even when mode is full_control
-    session_state["mode"] = "human_control"
-    session_state["permissions"] = {"control_mouse": True, "control_keyboard": True}
-    session_state["human_takeover_active"] = True
-    res_to = streamer._handle_input_payload(json.dumps({"action": "click", "x": 100, "y": 100}))
-    takeover_blocked = res_to.get("ok") is False and res_to.get("error") == "human_takeover_active"
+        # 2. Takeover blocks input even when mode is full_control
+        session_state["mode"] = "human_control"
+        session_state["permissions"] = {"control_mouse": True, "control_keyboard": True}
+        session_state["human_takeover_active"] = True
+        res_to = streamer._handle_input_payload(json.dumps({"action": "click", "x": 100, "y": 100}))
+        takeover_blocked = res_to.get("ok") is False and res_to.get("error") == "human_takeover_active"
 
-    # 3. Release takeover -> ping works, and disconnect releases held inputs cleanly
-    session_state["human_takeover_active"] = False
-    res_ping = streamer._handle_input_payload(json.dumps({"action": "ping", "client_ts_ms": 1}))
-    res_rel = streamer._handle_input_payload(json.dumps({"action": "release_all_keys"}))
-    released_ok = bool(res_ping.get("ok")) and bool(res_rel.get("ok"))
+        # 3. Release takeover -> ping works, and disconnect releases held inputs cleanly
+        session_state["human_takeover_active"] = False
+        res_ping = streamer._handle_input_payload(json.dumps({"action": "ping", "client_ts_ms": 1}))
+        res_rel = streamer._handle_input_payload(json.dumps({"action": "release_all_keys"}))
+        released_ok = bool(res_ping.get("ok")) and bool(res_rel.get("ok"))
 
-    return {
-        "ok": view_only_blocked and takeover_blocked and released_ok,
-        "view_only_blocked": view_only_blocked,
-        "takeover_blocked": takeover_blocked,
-        "ping_and_release_ok": released_ok,
-    }
+        return {
+            "ok": view_only_blocked and takeover_blocked and released_ok,
+            "view_only_blocked": view_only_blocked,
+            "takeover_blocked": takeover_blocked,
+            "ping_and_release_ok": released_ok,
+        }
+    finally:
+        plane_control_flags.set_emergency_stop(prev_estop)
+        v1_routes.set_device_human_takeover("local", prev_local_takeover, actor="r1-test")
 
 
 async def _real_browser_peer_e2e(base_url: str, admin_headers: dict[str, str], device_id: str, device_token: str) -> dict[str, Any]:

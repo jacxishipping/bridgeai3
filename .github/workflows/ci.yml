@@ -52,11 +52,12 @@ jobs:
       - uses: actions/setup-python@v5
         with: { python-version: "3.12" }
       - run: pip install -e ".[dev]" "psycopg[binary]"
-      - name: Install PostgreSQL client tools for restore drill
+      - name: Install PostgreSQL server & client tools for restore + PITR drill
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq postgresql-client
-      - name: Postgres schema parity, boot test, and Release 1 restore drill
+          sudo apt-get install -y -qq postgresql postgresql-client
+          sudo systemctl stop postgresql || true
+      - name: Postgres schema parity, boot test, logical restore drill, and PITR drill
         env:
           AIBRIDGE_PG_BASE_DSN: postgresql://ai_bridge:ai_bridge_pw@localhost:5432/postgres
           AIBRIDGE_PG_BOOT_DSN: postgresql://ai_bridge:ai_bridge_pw@localhost:5432/ai_bridge_boot
@@ -66,11 +67,14 @@ jobs:
           python3 scripts/check_schema_parity.py --postgres "$AIBRIDGE_PG_BASE_DSN"
           python3 scripts/test_postgres_boot.py --base-dsn "$AIBRIDGE_PG_BASE_DSN" --keep
           python3 scripts/backup_restore.py drill --pg-dsn "$AIBRIDGE_PG_BOOT_DSN" --restore-dsn "$AIBRIDGE_PG_DRILL_DSN" --evidence-out .run/postgres_restore_drill_evidence.json
+          python3 scripts/postgres_pitr_drill.py --out .run/postgres_pitr_drill_evidence.json
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: postgres-restore-drill-evidence
-          path: .run/postgres_restore_drill_evidence.json
+          path: |
+            .run/postgres_restore_drill_evidence.json
+            .run/postgres_pitr_drill_evidence.json
           retention-days: 30
 
   deployment-config:
