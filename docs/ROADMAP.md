@@ -21,20 +21,20 @@ AI Bridge should become a trustworthy, policy-governed way for authorised AI cli
 - Device enrolment/revocation, expiring and rotatable device tokens, outbound polling agents, task queues, cancellation, execution-state reporting, and emergency stop.
 - Four-tier policy enforcement, human approvals with context and expiry, versioned policies, policy simulation, local RBAC sessions, CSRF protection, OIDC integration code, and an optional device mTLS gate.
 - Hash-chained audit records, verification/export/retention paths, redaction, encrypted MCP OAuth secrets, signed release-manifest verification, and bounded task execution.
-- SQLite development support plus PostgreSQL migrations/parity and boot checks in CI; production readiness checks.
-- MCP stdio and Streamable HTTP endpoints plus workspace, diagnostics, browser, desktop, developer, fleet, and connector tools.
+- SQLite development support plus PostgreSQL migrations/parity, boot checks, logical `pg_dump`/`pg_restore`, and physical `pg_basebackup` + WAL PITR restore drills (`scripts/backup_restore.py`, `scripts/postgres_pitr_drill.py`); production readiness checks.
+- MCP stdio and Streamable HTTP endpoints plus workspace, diagnostics, browser, desktop, developer, fleet, and connector tools (including hardened Tier 3/4 Full PC Access boundaries).
 
 ### Fleet, automation, and AI
 
-- Linux, Windows Python, and macOS agent entrypoints; Windows installer and desktop helper; platform capability reporting.
+- Linux, Windows Python, and macOS agent entrypoints; Windows installer (`.NET` launcher ACL hardening + DPAPI token sealing) and desktop helper; platform capability reporting.
 - Idempotent task creation, per-device leases, stale-task recovery, result spooling, policy intersection on agents, workflow templates, schedules/triggers, custom agents, role catalogue, supervisor handoffs, and agent-memory storage.
 - Playwright browser tooling with device dispatch; Firecrawl, Browserbase, You.com, and Microsoft 365 connectors.
-- Fleet health, live activity/SSE, metrics, alerts/webhooks, diagnostics, backup tooling, audit search/export, and release/deployment utilities.
+- Fleet health, live activity/SSE, metrics, alerts/webhooks, diagnostics, backup/PITR tooling, audit search/export, and automated Release 1 verification/gate harnesses (`scripts/staging_release_gate.py`, `scripts/windows_installer_e2e.py`, `scripts/macos_launchd_e2e.py`, `scripts/webrtc_browser_e2e.py`).
 
 ### Desktop, native, and operator applications
 
-- Python WebRTC desktop sessions, TURN/STUN configuration, stream tickets, view-only/takeover controls, input throttling, monitor selection, adaptive stream parameters, SoM/OCR actions, veto, and post-action verification.
-- Native C++ Windows capture/encoder/PeerConnection sources and CI harness; .NET WPF Windows client with device management, diagnostics, capture, input, and named-pipe services.
+- Python WebRTC desktop sessions, TURN/STUN configuration, stream tickets, view-only/takeover controls (including UI keyboard & mouse view-only enforcement), input throttling, monitor selection, adaptive stream parameters, SoM/OCR actions, veto, and post-action verification.
+- Native C++ Windows capture/encoder/PeerConnection sources and CI harness; .NET WPF Windows client with safe-by-default policy/function gating (`MaxTierUnattended=2`, Tier 3/4 opt-in), device management, diagnostics, capture, input, and named-pipe services.
 - React/Vite dashboard: sign-in, fleet/device detail, task explorer, terminal, live desktop, workflows/agents, fleet operations, policy/security, audit/logs, MCP connections, and administration/settings.
 - Responsive light/dark UI, command palette, 12-second live refresh, approval attention counts, emergency stop, filtering, and role management.
 
@@ -54,6 +54,7 @@ AI Bridge should become a trustworthy, policy-governed way for authorised AI cli
 | P1 | Correct test health | **Complete in-tree** (2 flaky tests fixed, 10 Windows test/script bugs fixed, pytest markers & supported-platform CI matrix published) | Replace/quarantine the known timing-flaky test; separate platform/key-dependent tests into explicit jobs; publish a green supported-platform matrix. |
 
 **Exit criteria:** P0 evidence accompanies a release candidate; no critical/high unresolved finding; support claims match the tested platform matrix; rollback and recovery are approved.
+**Remaining before Release 1 sign-off:** observe all CI matrix jobs green on push (`postgres-boot`, `windows-python-e2e`, `macos-agent`, `release-1-staging-and-webrtc-gate`), run external-target validations (clean Windows VM reboot soak, physical Mac `launchctl` + reboot, live staging TURN WebRTC peer + `staging_release_gate.py --url`, hosted staging/prod PostgreSQL backup drill), and record independent external security sign-off.
 
 ## Release 2 — reliability, scale, and operations
 
@@ -114,8 +115,8 @@ Every roadmap issue should include an owner, risk tier, platforms, data/tenant i
 
 ## Evidence
 
-- Current source: `src/ai_bridge/`, `agents/`, `windows-agent/`, `apps/dashboard/`, and `apps/windows-client/`.
-- CI: [`.github/workflows/ci.yml`](../.github/workflows/ci.yml), covering Python, PostgreSQL boot/parity, deployment configuration, macOS import/smoke, native Windows WebRTC harness, dashboard build, and Windows client build/tests.
-- Status records: [implementation-status.md](./implementation-status.md), [production-readiness.md](./production-readiness.md), [FINAL_TEST_RESULTS.md](../analysis/FINAL_TEST_RESULTS.md), and [FINAL_PRODUCTION_READINESS.md](../analysis/FINAL_PRODUCTION_READINESS.md).
+- Current source: `src/ai_bridge/`, `agents/`, `windows-agent/`, `apps/dashboard/`, `apps/windows-client/`, and `scripts/`.
+- CI: [`.github/workflows/ci.yml`](../.github/workflows/ci.yml), covering Linux & Windows Python suites (`test`, `windows-python-e2e`), PostgreSQL parity/boot/restore/PITR drills (`postgres-boot`), stdlib deployment configuration checks (`deployment-config`), macOS launchd E2E (`macos-agent`), native Windows WebRTC harness (`windows-native-webrtc`), dashboard build (`dashboard`), Release 1 staging gate + real-browser Chromium WebRTC E2E (`release-1-staging-and-webrtc-gate`), and C# Windows client build/tests (`windows-client`).
+- Status records: [release-1-verification.md](./release-1-verification.md), [implementation-status.md](./implementation-status.md), [production-readiness.md](./production-readiness.md), [FINAL_TEST_RESULTS.md](../analysis/FINAL_TEST_RESULTS.md), and [FINAL_PRODUCTION_READINESS.md](../analysis/FINAL_PRODUCTION_READINESS.md).
 
 Historical audit documents retain earlier findings for traceability. This roadmap treats source-present work as shipped but retains production-environment validation as a separate, mandatory gate.
