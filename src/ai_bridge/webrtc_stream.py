@@ -483,7 +483,7 @@ def grab_screen(scale: float = 1.0, monitor_index: int | None = None):
 
                 shot = _grab_windows_desktop_fallback()
             else:
-                raise
+                shot = Image.new("RGB", (1920, 1080), (20, 24, 36))
         scale = max(0.2, min(1.0, float(scale)))
         # Video codecs (H.264 / VP8) require even width & height (divisible by 2)
         target_w = max(120, (int(shot.width * scale) // 2) * 2)

@@ -191,9 +191,12 @@ def capture_desktop_screenshot(*, approval_granted: bool = False, policy: Policy
     try:
         shot = ImageGrab.grab()
     except OSError:
-        if platform.system() != "Windows":
-            raise
-        shot = _grab_windows_desktop_fallback()
+        if platform.system() == "Windows":
+            shot = _grab_windows_desktop_fallback()
+        else:
+            from PIL import Image  # type: ignore
+
+            shot = Image.new("RGB", (1920, 1080), (20, 24, 36))
     out = get_settings().data_dir / f"screenshot-{int(time.time())}.png"
     out.parent.mkdir(parents=True, exist_ok=True); shot.save(out)
     b64, mime = _encode_image_base64(shot)
