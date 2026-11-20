@@ -41,16 +41,17 @@ AI Bridge should become a trustworthy, policy-governed way for authorised AI cli
 ## Release 1 — production proof and trust closure
 
 **Goal:** make the existing platform defensible for a small, controlled production fleet.
+**Current verification record:** [release-1-verification.md](./release-1-verification.md).
 
-| Priority | Work | Done when |
-|---|---|---|
-| P0 | Windows installer/service end-to-end test | A clean Windows image installs, enrols, survives reboot, completes safe and approved tasks, streams/view-controls where enabled, rotates/revokes its token, and uninstalls cleanly. |
-| P0 | Real-browser WebRTC E2E | A staging test proves ICE/TURN connection, view-only enforcement, authorised takeover, input release on disconnect, and session expiry using a browser and enrolled endpoint. |
-| P0 | macOS launchd E2E | A Mac installs launchd, enrols, survives reboot, polls, executes a safe task, and reports honest desktop capability status. |
-| P0 | Production database restore drill | Restore PostgreSQL backup/PITR into isolation, boot from migrations, validate users/devices/tasks/approvals/audit continuity, and record RTO/RPO. |
-| P0 | Staging release gate | Archive evidence for migrations, readiness, dashboard smoke, enrolment, safe task, approval, rollback, and security configuration review. |
-| P1 | Independent security/architecture review | An independent reviewer signs off on policy/approval, tenant, auth, native-agent, and update boundaries, or findings are remediated. |
-| P1 | Correct test health | Replace/quarantine the known timing-flaky test; separate platform/key-dependent tests into explicit jobs; publish a green supported-platform matrix. |
+| Priority | Work | Status | Done when |
+|---|---|---|---|
+| P0 | Windows installer/service end-to-end test | **Automated & locally verified (`7/7` on Windows); CI wired (`windows-python-e2e`)** — full OS-reboot clean-VM soak still required | A clean Windows image installs, enrols, survives reboot, completes safe and approved tasks, streams/view-controls where enabled, rotates/revokes its token, and uninstalls cleanly. |
+| P0 | Real-browser WebRTC E2E | **Harness & CI wired (`release-1-staging-and-webrtc-gate` with Chromium + `aiortc`); signaling/enforcement verified locally** — live staging TURN + browser peer run pending | A staging test proves ICE/TURN connection, view-only enforcement, authorised takeover, input release on disconnect, and session expiry using a browser and enrolled endpoint. |
+| P0 | macOS launchd E2E | **Harness & CI wired (`macos-agent` on `macos-latest`)** — not yet executed on a physical Mac | A Mac installs launchd, enrols, survives reboot, polls, executes a safe task, and reports honest desktop capability status. |
+| P0 | Production database restore drill | **Upgraded `backup_restore.py drill` + `backup_drill.sh` (RTO/RPO, dynamic migrations, audit chain, app boot); SQLite verified locally, PG wired in CI `postgres-boot`** — live staging/prod PG PITR drill pending | Restore PostgreSQL backup/PITR into isolation, boot from migrations, validate users/devices/tasks/approvals/audit continuity, and record RTO/RPO. |
+| P0 | Staging release gate | **`staging_release_gate.py` (`10/10` self-hosted pass) + fixed `smoke_check.py`; CI wired** — archive live staging RC evidence pending | Archive evidence for migrations, readiness, dashboard smoke, enrolment, safe task, approval, rollback, and security configuration review. |
+| P1 | Independent security/architecture review | **Internal post-Wave-7 audit complete (6 boundary fixes landed + tested)** — external independent sign-off pending | An independent reviewer signs off on policy/approval, tenant, auth, native-agent, and update boundaries, or findings are remediated. |
+| P1 | Correct test health | **Complete in-tree** (2 flaky tests fixed, 10 Windows test/script bugs fixed, pytest markers & supported-platform CI matrix published) | Replace/quarantine the known timing-flaky test; separate platform/key-dependent tests into explicit jobs; publish a green supported-platform matrix. |
 
 **Exit criteria:** P0 evidence accompanies a release candidate; no critical/high unresolved finding; support claims match the tested platform matrix; rollback and recovery are approved.
 

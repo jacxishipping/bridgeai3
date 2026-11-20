@@ -51,8 +51,8 @@ def _make_repo(tmp_path: Path) -> Path:
     _git(repo, "init", "-b", "main")
     (repo / "pyproject.toml").write_text('[project]\nname = "ai-bridge"\nversion = "0.3.0-test"\n')
     (repo / "src").mkdir()
-    (repo / "src" / "app.py").write_text("print('hi')\n")
-    (repo / "notes.txt").write_text("notes\n")
+    (repo / "src" / "app.py").write_bytes(b"print('hi')\n")
+    (repo / "notes.txt").write_bytes(b"notes\n")
     _git(repo, "add", ".")
     _git(repo, "commit", "-m", "first")
     return repo

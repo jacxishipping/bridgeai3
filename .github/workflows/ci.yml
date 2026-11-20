@@ -52,12 +52,26 @@ jobs:
       - uses: actions/setup-python@v5
         with: { python-version: "3.12" }
       - run: pip install -e ".[dev]" "psycopg[binary]"
-      - name: Postgres schema parity + boot test
+      - name: Install PostgreSQL client tools for restore drill
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-client
+      - name: Postgres schema parity, boot test, and Release 1 restore drill
         env:
           AIBRIDGE_PG_BASE_DSN: postgresql://ai_bridge:ai_bridge_pw@localhost:5432/postgres
+          AIBRIDGE_PG_BOOT_DSN: postgresql://ai_bridge:ai_bridge_pw@localhost:5432/ai_bridge_boot
+          AIBRIDGE_PG_DRILL_DSN: postgresql://ai_bridge:ai_bridge_pw@localhost:5432/ai_bridge_restore_drill
         run: |
+          mkdir -p .run
           python3 scripts/check_schema_parity.py --postgres "$AIBRIDGE_PG_BASE_DSN"
-          python3 scripts/test_postgres_boot.py --base-dsn "$AIBRIDGE_PG_BASE_DSN"
+          python3 scripts/test_postgres_boot.py --base-dsn "$AIBRIDGE_PG_BASE_DSN" --keep
+          python3 scripts/backup_restore.py drill --pg-dsn "$AIBRIDGE_PG_BOOT_DSN" --restore-dsn "$AIBRIDGE_PG_DRILL_DSN" --evidence-out .run/postgres_restore_drill_evidence.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: postgres-restore-drill-evidence
+          path: .run/postgres_restore_drill_evidence.json
+          retention-days: 30
 
   deployment-config:
     # R-P1-53 / R-P0-14 / R-P0-15: deployment-config regression tests run
@@ -92,7 +106,17 @@ jobs:
           python -c "from agents.macos import agent_main; print('macos agent_main', agent_main.__file__)"
           python -c "from ai_bridge import tools; print(tools.get_desktop_status())"
       - name: Unit smoke (non-browser)
-        run: pytest -q tests/unit/test_residuals_security_platform.py --tb=line
+        run: pytest -q tests/unit/test_residuals_security_platform.py tests/unit/test_release1_gates.py --tb=line
+      - name: Release 1 macOS launchd & agent E2E
+        run: |
+          mkdir -p .run
+          python scripts/macos_launchd_e2e.py --out .run/macos_launchd_e2e_evidence.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: macos-launchd-e2e-evidence
+          path: .run/macos_launchd_e2e_evidence.json
+          retention-days: 30
 
   windows-native-webrtc:
     runs-on: windows-latest
@@ -153,3 +177,63 @@ jobs:
         run: dotnet build apps/windows-client/AIBridgeClient.csproj -c Release
       - name: Run C# Windows client unit tests
         run: dotnet run --project apps/windows-client.Tests/AIBridgeClient.Tests.csproj -c Release
+
+  windows-python-e2e:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install -e ".[dev]"
+      - run: ruff check .
+      - name: Run Python test suite on Windows
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path .run | Out-Null
+          pytest -q --junitxml=.run/pytest-windows-junit.xml
+      - name: Release 1 Windows installer & agent E2E
+        run: python scripts/windows_installer_e2e.py --out .run/windows_installer_e2e_evidence.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-e2e-evidence
+          path: |
+            .run/windows_installer_e2e_evidence.json
+            .run/pytest-windows-junit.xml
+          retention-days: 30
+
+  release-1-staging-and-webrtc-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: apps/dashboard/package-lock.json
+      - name: Build dashboard bundle
+        working-directory: apps/dashboard
+        run: |
+          npm ci
+          npm run typecheck
+          npm run build
+      - name: Install control plane + WebRTC + Playwright Chromium
+        run: |
+          pip install -e ".[dev,webrtc,browser]"
+          playwright install --with-deps chromium
+      - name: Run Release 1 staging release gate (self-hosted)
+        run: |
+          mkdir -p .run
+          python scripts/staging_release_gate.py --self-host --out .run/staging_release_gate_evidence.json
+      - name: Run Release 1 real-browser WebRTC E2E
+        run: python scripts/webrtc_browser_e2e.py --require-browser-peer --out .run/webrtc_browser_e2e_evidence.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: release-1-gate-evidence
+          path: |
+            .run/staging_release_gate_evidence.json
+            .run/webrtc_browser_e2e_evidence.json
+          retention-days: 30

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import stat
 import subprocess
 import sys
@@ -574,8 +575,9 @@ def test_ocr_script_path_is_per_invocation_random_and_0600(tmp_path):
     try:
         assert p1 != p2
         assert p1.read_text(encoding="utf-8") == vision._POWERSHELL_OCR_SCRIPT
-        mode = stat.S_IMODE(p1.stat().st_mode)
-        assert mode == 0o600
+        if os.name != "nt":
+            mode = stat.S_IMODE(p1.stat().st_mode)
+            assert mode == 0o600
         assert "ai_bridge_ocr.ps1" not in str(p1)  # no predictable shared path
     finally:
         p1.unlink(missing_ok=True)

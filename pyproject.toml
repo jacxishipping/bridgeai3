@@ -51,6 +51,16 @@ where = ["src"]
 pythonpath = ["src", "."]
 testpaths = ["tests"]
 addopts = ["--import-mode=importlib"]
+markers = [
+    "windows_only: tests that require a Windows host",
+    "linux_only: tests that require a Linux host",
+    "macos_only: tests that require a macOS host",
+    "requires_api_keys: tests that require live external connector API keys",
+    "requires_webrtc: tests that require optional WebRTC/aiortc extras",
+    "requires_browser: tests that require optional Playwright/Chromium extras",
+    "perf: wall-clock throughput or latency assertions sensitive to host load",
+    "slow: long-running soak or integration tests",
+]
 
 [tool.ruff]
 line-length = 200

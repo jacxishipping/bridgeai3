@@ -9,6 +9,7 @@ plaintext downgrade when the token saver fails) and F07-06 (Linux token
 stored in one place only: device.token, 0600).
 """
 
+import os
 from pathlib import Path
 
 from agents.common.poller import Poller
@@ -199,7 +200,8 @@ def test_linux_token_stored_only_in_device_token(tmp_path, monkeypatch):
 
     token_file = tmp_path / "device.token"
     assert token_file.read_text(encoding="utf-8").strip() == "linux-test-token-777"
-    assert (token_file.stat().st_mode & 0o777) == 0o600
+    if os.name != "nt":
+        assert (token_file.stat().st_mode & 0o777) == 0o600
 
     agent_json = (tmp_path / "agent.json").read_text(encoding="utf-8")
     assert "linux-test-token-777" not in agent_json

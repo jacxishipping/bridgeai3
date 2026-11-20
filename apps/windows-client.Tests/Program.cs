@@ -157,7 +157,7 @@ await RunTest("NativeToolExecutor: edit/move/delete obey tiers and confinement",
         var cfg = new AgentGuiConfig
         {
             Workspace = tempWs,
-            Policy = new AgentPolicyConfig { AllowWrites = true, AllowTier3 = true, AllowTier4 = false },
+            Policy = new AgentPolicyConfig { AllowWrites = true, AllowTier3 = true, AllowTier4 = false, MaxTierUnattended = 3 },
         };
         var exec = new NativeToolExecutor(new SystemMonitorService(), Path.Combine(tempWs, "shots"));
 
@@ -219,7 +219,7 @@ await RunTest("NativeToolExecutor: AllowedApps blocks unapproved executables & c
     var cfg = new AgentGuiConfig
     {
         Workspace = Path.GetTempPath(),
-        Policy = new AgentPolicyConfig { AllowTier3 = true, AllowDesktopControl = true },
+        Policy = new AgentPolicyConfig { AllowTier3 = true, MaxTierUnattended = 3, AllowDesktopControl = true },
     };
     var exec = new NativeToolExecutor(new SystemMonitorService(), Path.GetTempPath());
 
@@ -449,6 +449,25 @@ await RunTest("Full PC Access gating: drives, directories, PowerShell & kill_pro
 
         var (okRead, readJson) = await exec.ExecuteAsync("read_pc_file", JsonSerializer.Serialize(new { path = outsideFile }), restrictedCfg, CancellationToken.None);
         Assert(okRead && readJson.Contains("outside pc data"), "read_pc_file must read outside file when AllowFullPcAccess=true");
+
+        // Safe defaults & tier checks (Release 1 security review):
+        var defaultPol = new AgentPolicyConfig();
+        Assert(!defaultPol.AllowTier3 && defaultPol.MaxTierUnattended == 2, "Default AgentPolicyConfig must keep Tier 3 off and MaxTierUnattended=2");
+        var defaultFns = new AgentFunctionPermissions();
+        Assert(!defaultFns.AllowFullPcFilesAndDrives && !defaultFns.AllowShellAndPowerShell, "Dangerous function groups must default off");
+
+        restrictedCfg.Policy.MaxTierUnattended = 2;
+        var (okDirTierBlocked, _) = await exec.ExecuteAsync("list_directory", JsonSerializer.Serialize(new { path = tempRoot }), restrictedCfg, CancellationToken.None);
+        Assert(!okDirTierBlocked, "list_directory must require Tier 3");
+
+        restrictedCfg.Policy.MaxTierUnattended = 3;
+        var outsideWrite = Path.Combine(tempRoot, "written.txt");
+        var (okWriteTierBlocked, _) = await exec.ExecuteAsync("write_pc_file", JsonSerializer.Serialize(new { path = outsideWrite, content = "hi" }), restrictedCfg, CancellationToken.None);
+        Assert(!okWriteTierBlocked, "write_pc_file must require Tier 4");
+
+        restrictedCfg.Policy.MaxTierUnattended = 4;
+        var (okWriteOk, _) = await exec.ExecuteAsync("write_pc_file", JsonSerializer.Serialize(new { path = outsideWrite, content = "hi" }), restrictedCfg, CancellationToken.None);
+        Assert(okWriteOk && File.ReadAllText(outsideWrite) == "hi", "write_pc_file must succeed when Full PC Access + Tier 4 enabled");
 
         var (okKillSelf, _) = await exec.ExecuteAsync("kill_process", JsonSerializer.Serialize(new { pid = Environment.ProcessId }), restrictedCfg, CancellationToken.None);
         Assert(!okKillSelf, "kill_process must refuse terminating active client self PID even when AllowFullPcAccess=true");

@@ -349,6 +349,10 @@ public sealed class NativeToolExecutor
     private static object ListDirectory(AgentGuiConfig config, JsonElement args)
     {
         RequireFullPcAccess(config, "list_directory");
+        if (!config.Policy.AllowTier3 || config.Policy.MaxTierUnattended < 3)
+        {
+            throw new UnauthorizedAccessException("Policy denied: Tier 3 directory listing outside workspace is disabled.");
+        }
         var requested = args.TryGetProperty("path", out var p) ? p.GetString() ?? "" : "";
         var target = string.IsNullOrWhiteSpace(requested)
             ? Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)
@@ -381,6 +385,11 @@ public sealed class NativeToolExecutor
 
     private static object ReadPcFile(AgentGuiConfig config, JsonElement args)
     {
+        RequireFullPcAccess(config, "read_pc_file");
+        if (!config.Policy.AllowTier3 || config.Policy.MaxTierUnattended < 3)
+        {
+            throw new UnauthorizedAccessException("Policy denied: Tier 3 file reads outside workspace are disabled.");
+        }
         var requested = args.TryGetProperty("path", out var p) ? p.GetString() ?? "" : "";
         var target = ResolveAccessiblePath(config, requested, requireFullPcFlag: true);
         if (!File.Exists(target)) throw new FileNotFoundException($"File not found: {target}");
@@ -396,9 +405,9 @@ public sealed class NativeToolExecutor
     private static object WritePcFile(AgentGuiConfig config, JsonElement args)
     {
         RequireFullPcAccess(config, "write_pc_file");
-        if (!config.Policy.AllowWrites || config.Policy.MaxTierUnattended < 2)
+        if (!config.Policy.AllowWrites || !config.Policy.AllowTier4 || config.Policy.MaxTierUnattended < 4)
         {
-            throw new UnauthorizedAccessException("Policy denied: Writes are disabled.");
+            throw new UnauthorizedAccessException("Policy denied: Tier 4 full-PC file writes are disabled.");
         }
         var requested = args.TryGetProperty("path", out var p) ? p.GetString() ?? "" : "";
         var content = args.TryGetProperty("content", out var c) ? c.GetString() ?? "" : "";

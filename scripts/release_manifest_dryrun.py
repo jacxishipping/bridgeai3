@@ -126,7 +126,7 @@ def main(argv: list[str] | None = None) -> int:
         gen = _run([
             sys.executable, str(REPO_ROOT / "scripts" / "generate_release_manifest.py"),
             "--repo", str(origin), "--version", "0.3.0-test",
-            "--base-url", f"file://{origin}", "--out", str(manifest_path),
+            "--base-url", origin.resolve().as_uri(), "--out", str(manifest_path),
         ])
         if gen.returncode != 0:
             raise RuntimeError(f"manifest generation failed: {gen.stdout} {gen.stderr}")
@@ -183,6 +183,7 @@ def main(argv: list[str] | None = None) -> int:
         os.environ["AI_BRIDGE_UPDATE_SIGNATURE_PATH"] = str(sig_path)
         os.environ["AI_BRIDGE_UPDATE_PUBLIC_KEY"] = str(pub)
         os.environ["HOME"] = str(home)
+        os.environ["USERPROFILE"] = str(home)
         try:
             result = tools.update_fleet_agent(approval_granted=True, policy=POLICY, repo_dir=agent)
         finally:
@@ -207,6 +208,7 @@ def main(argv: list[str] | None = None) -> int:
         os.environ["AI_BRIDGE_UPDATE_SIGNATURE_PATH"] = str(bad_sig_path)
         os.environ["AI_BRIDGE_UPDATE_PUBLIC_KEY"] = str(pub)
         os.environ["HOME"] = str(home)
+        os.environ["USERPROFILE"] = str(home)
         try:
             tools.update_fleet_agent(approval_granted=True, policy=POLICY, repo_dir=agent)
             refused = False

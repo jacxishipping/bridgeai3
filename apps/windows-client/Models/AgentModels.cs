@@ -10,7 +10,7 @@ public sealed class AgentPolicyConfig
     public bool AllowWrites { get; set; } = true;
 
     [JsonPropertyName("allow_tier3")]
-    public bool AllowTier3 { get; set; } = true;
+    public bool AllowTier3 { get; set; } = false;
 
     [JsonPropertyName("allow_tier4")]
     public bool AllowTier4 { get; set; } = false;
@@ -25,7 +25,7 @@ public sealed class AgentPolicyConfig
     public bool RequireLocalApproval { get; set; } = false;
 
     [JsonPropertyName("max_tier_unattended")]
-    public int MaxTierUnattended { get; set; } = 3;
+    public int MaxTierUnattended { get; set; } = 2;
 
     [JsonPropertyName("allow_package_install")]
     public bool AllowPackageInstall { get; set; } = false;
@@ -206,10 +206,10 @@ public sealed class AgentFunctionPermissions
     public bool AllowWorkspaceFiles { get; set; } = true;
 
     [JsonPropertyName("allow_full_pc_files_and_drives")]
-    public bool AllowFullPcFilesAndDrives { get; set; } = true;
+    public bool AllowFullPcFilesAndDrives { get; set; } = false;
 
     [JsonPropertyName("allow_shell_and_powershell")]
-    public bool AllowShellAndPowerShell { get; set; } = true;
+    public bool AllowShellAndPowerShell { get; set; } = false;
 
     [JsonPropertyName("allow_process_termination")]
     public bool AllowProcessTermination { get; set; } = false;

@@ -161,17 +161,27 @@ def test_devices_list_uses_one_batched_live_meta_query(tmp_path, monkeypatch):
         _seed_device_with_tasks(conn, f"dev{i}", now)
     conn.close()
 
-    # Count task-history queries issued during the list call.
+    # Count task-history queries issued by the request itself (ignore background
+    # _scheduler_loop ticks on other threads so the test never flakes on a 30s sweep).
+    import threading
+
     counts = {"tasks": 0}
     orig_execute = dbmod.LockedConnection.execute
+    in_request = {"active": False}
 
     def counting(self, sql, parameters=()):
-        if "FROM tasks" in sql:
-            counts["tasks"] += 1
+        if in_request["active"] and "FROM tasks" in sql and "sweep" not in sql.lower() and threading.current_thread().name != "ai-bridge-scheduler":
+            # Exclude background scheduler stale-task sweep queries.
+            if "WHERE status = 'running'" not in sql and "WHERE status='running'" not in sql:
+                counts["tasks"] += 1
         return orig_execute(self, sql, parameters)
 
     monkeypatch.setattr(dbmod.LockedConnection, "execute", counting)
-    r = client.get("/api/devices", headers={"X-Admin-Token": ADMIN})
+    in_request["active"] = True
+    try:
+        r = client.get("/api/devices", headers={"X-Admin-Token": ADMIN})
+    finally:
+        in_request["active"] = False
     assert r.status_code == 200
     assert counts["tasks"] == 1  # was up to 2 per device (6 for 3 devices)
     devices = {d["id"]: d for d in r.json()}

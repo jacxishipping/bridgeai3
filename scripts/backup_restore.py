@@ -34,13 +34,18 @@ copy). This tool never transmits anything.
 from __future__ import annotations
 
 import argparse
+import json
 import os
+import platform
 import shutil
 import sqlite3
 import subprocess
 import sys
+import tempfile
+import time
 from contextlib import closing
 from pathlib import Path
+from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
@@ -48,7 +53,158 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 from ai_bridge.control import db as dbmod  # noqa: E402
 from ai_bridge.control.backup import verified_backup  # noqa: E402
 
-_CORE_TABLES = ("users", "devices", "tasks", "sessions", "approvals")
+_CORE_TABLES = ("users", "devices", "tasks", "sessions", "approvals", "audit")
+
+
+def expected_migration_count() -> int:
+    mig_dir = REPO_ROOT / "migrations"
+    return len(sorted(mig_dir.glob("[0-9][0-9][0-9]_*.sql")))
+
+
+def _verify_restored_connection(conn: Any) -> dict[str, Any]:
+    """Validate migrations, core tables, and audit hash-chain continuity."""
+    versions = [
+        r[0]
+        for r in conn.execute("SELECT version FROM schema_migrations ORDER BY version").fetchall()
+    ]
+    counts: dict[str, int] = {}
+    for table in _CORE_TABLES:
+        counts[table] = int(conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
+    chain = dbmod.verify_audit_chain(conn)
+    expected = expected_migration_count()
+    return {
+        "migrations_applied": len(versions),
+        "migrations_expected": expected,
+        "migrations_ok": len(versions) == expected,
+        "table_counts": counts,
+        "audit_chain": chain,
+        "audit_chain_valid": bool(chain.get("ok")),
+    }
+
+
+def _boot_plane_smoke(*, db_path: Path | None = None, database_url: str | None = None) -> dict[str, Any]:
+    """Boot the real FastAPI control plane against the restored DB and verify readiness."""
+    from fastapi.testclient import TestClient
+
+    from ai_bridge.control.app import create_app
+
+    os.environ.setdefault("AI_BRIDGE_CSRF_SECRET", "restore-drill-csrf-secret")
+    app = create_app(
+        admin_token="restore-drill-admin",
+        db_path=db_path,
+        database_url=database_url,
+    )
+    try:
+        client = TestClient(app, raise_server_exceptions=False)
+        r_health = client.get("/health")
+        r_ready = client.get("/health/ready")
+        r_devs = client.get("/api/devices", headers={"X-Admin-Token": "restore-drill-admin"})
+        return {
+            "health_status": r_health.status_code,
+            "ready_status": r_ready.status_code,
+            "devices_status": r_devs.status_code,
+            "ok": r_health.status_code == 200 and r_ready.status_code == 200 and r_devs.status_code == 200,
+        }
+    finally:
+        try:
+            app.state.conn.close()
+        except Exception:
+            pass
+
+
+def drill_sqlite(db_path: Path, work_dir: Path, *, evidence_out: Path | None = None) -> dict[str, Any]:
+    """Full isolated SQLite backup + restore + app-boot + audit-continuity drill with RTO/RPO."""
+    work_dir.mkdir(parents=True, exist_ok=True)
+    backup_path = work_dir / "drill-backup.db"
+    restored_path = work_dir / "drill-restored.db"
+
+    t_backup_start = time.perf_counter()
+    backup_ts = time.time()
+    verified_backup(db_path, backup_path)
+    backup_duration = time.perf_counter() - t_backup_start
+
+    t_rto_start = time.perf_counter()
+    restore_sqlite(backup_path, restored_path)
+    conn = dbmod.connect(db_path=restored_path)
+    try:
+        verification = _verify_restored_connection(conn)
+    finally:
+        conn.close()
+    boot = _boot_plane_smoke(db_path=restored_path)
+    rto_seconds = time.perf_counter() - t_rto_start
+    rpo_seconds = max(0.0, time.time() - backup_ts)
+
+    ok = bool(verification["migrations_ok"] and verification["audit_chain_valid"] and boot["ok"])
+    report: dict[str, Any] = {
+        "drill": "release-1-db-restore-drill",
+        "engine": "sqlite",
+        "timestamp_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "host": platform.node(),
+        "ok": ok,
+        "backup_bytes": backup_path.stat().st_size,
+        "backup_seconds": round(backup_duration, 3),
+        "rto_seconds": round(rto_seconds, 3),
+        "rpo_seconds": round(rpo_seconds, 3),
+        **verification,
+        "app_boot": boot,
+    }
+    if evidence_out is not None:
+        evidence_out.parent.mkdir(parents=True, exist_ok=True)
+        evidence_out.write_text(json.dumps(report, indent=2), encoding="utf-8")
+    return report
+
+
+def drill_postgres(
+    source_dsn: str,
+    restore_dsn: str,
+    *,
+    fmt: str = "c",
+    evidence_out: Path | None = None,
+    keep_restored: bool = False,
+) -> dict[str, Any]:
+    """Full isolated PostgreSQL backup + restore + app-boot + audit-continuity drill with RTO/RPO."""
+    with tempfile.TemporaryDirectory(prefix="aibridge-pg-drill-") as td:
+        dump_path = Path(td) / ("staging-dump.dump" if fmt == "c" else "staging-dump.sql")
+
+        t_backup_start = time.perf_counter()
+        backup_ts = time.time()
+        backup_postgres(source_dsn, dump_path, fmt=fmt)
+        backup_duration = time.perf_counter() - t_backup_start
+
+        t_rto_start = time.perf_counter()
+        try:
+            restore_postgres(dump_path, restore_dsn, fmt=fmt)
+            conn = dbmod.connect(database_url=restore_dsn)
+            try:
+                verification = _verify_restored_connection(conn)
+            finally:
+                conn.close()
+            boot = _boot_plane_smoke(database_url=restore_dsn)
+            rto_seconds = time.perf_counter() - t_rto_start
+            rpo_seconds = max(0.0, time.time() - backup_ts)
+        finally:
+            if not keep_restored:
+                _dropdb(restore_dsn)
+
+        ok = bool(verification["migrations_ok"] and verification["audit_chain_valid"] and boot["ok"])
+        report: dict[str, Any] = {
+            "drill": "release-1-db-restore-drill",
+            "engine": "postgresql",
+            "timestamp_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "host": platform.node(),
+            "ok": ok,
+            "backup_format": fmt,
+            "backup_bytes": dump_path.stat().st_size,
+            "backup_seconds": round(backup_duration, 3),
+            "rto_seconds": round(rto_seconds, 3),
+            "rpo_seconds": round(rpo_seconds, 3),
+            **verification,
+            "app_boot": boot,
+        }
+        if evidence_out is not None:
+            evidence_out.parent.mkdir(parents=True, exist_ok=True)
+            evidence_out.write_text(json.dumps(report, indent=2), encoding="utf-8")
+        return report
 
 
 def _verify_sqlite(path: Path) -> dict[str, int]:
@@ -229,11 +385,41 @@ def main(argv: list[str] | None = None) -> int:
     p_restore.add_argument("--pg-format", choices=["c", "p"], default="c")
     p_drop = sub.add_parser("drop", help="drop a Postgres database named by DSN")
     p_drop.add_argument("--pg-dsn", required=True, help="Postgres DSN of the DB to drop")
+    p_drill = sub.add_parser("drill", help="run a full isolated backup -> restore -> app boot -> audit verify drill")
+    p_drill.add_argument("--db", type=Path, help="SQLite source DB path")
+    p_drill.add_argument("--pg-dsn", help="Postgres source DSN")
+    p_drill.add_argument("--restore-dsn", help="Postgres isolated target DSN (default: <source>_drill)")
+    p_drill.add_argument("--pg-format", choices=["c", "p"], default="c")
+    p_drill.add_argument("--evidence-out", type=Path, default=None, help="Optional JSON evidence output path")
+    p_drill.add_argument("--keep", action="store_true", help="Keep restored Postgres drill database")
     args = parser.parse_args(argv)
 
     if args.command == "drop":
         _dropdb(args.pg_dsn)
         return 0
+
+    if args.command == "drill":
+        if args.pg_dsn:
+            from urllib.parse import urlsplit, urlunsplit
+
+            restore_dsn = args.restore_dsn
+            if not restore_dsn:
+                u = urlsplit(args.pg_dsn)
+                restore_dsn = urlunsplit((u.scheme, u.netloc, "/ai_bridge_restore_drill", u.query, u.fragment))
+            report = drill_postgres(
+                args.pg_dsn,
+                restore_dsn,
+                fmt=args.pg_format,
+                evidence_out=args.evidence_out,
+                keep_restored=args.keep,
+            )
+        else:
+            if not args.db:
+                parser.error("drill needs --db (SQLite) or --pg-dsn (Postgres)")
+            with tempfile.TemporaryDirectory(prefix="aibridge-sqlite-drill-") as td:
+                report = drill_sqlite(args.db, Path(td), evidence_out=args.evidence_out)
+        print(json.dumps(report, indent=2))
+        return 0 if report["ok"] else 1
 
     if args.command == "backup":
         if args.pg_dsn:

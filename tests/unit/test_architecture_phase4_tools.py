@@ -149,7 +149,9 @@ def test_tools_package_exposes_exact_pre_split_public_names():
 
 
 def test_tools_package_is_a_package_not_a_module_file():
-    assert tools.__file__.endswith("tools/__init__.py")
+    from pathlib import Path
+
+    assert Path(tools.__file__).as_posix().endswith("tools/__init__.py")
     assert tools.__all__ == EXPECTED_TOOLS_PUBLIC_NAMES
 
 

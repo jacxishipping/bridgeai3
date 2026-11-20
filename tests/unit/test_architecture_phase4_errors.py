@@ -423,7 +423,7 @@ def test_get_settings_is_cached_and_env_sensitive(monkeypatch):
     assert get_settings() is first
     monkeypatch.setenv("AI_BRIDGE_WORKSPACE", "/tmp/ws-b")
     assert get_settings() is not first
-    assert str(get_settings().workspace) == "/tmp/ws-b"
+    assert get_settings().workspace.as_posix() == "/tmp/ws-b"
     reset_for_tests()
     assert get_settings() is not first
     assert hasattr(get_settings, "cache_clear")
@@ -459,11 +459,11 @@ def test_get_settings_no_expandvars_on_paths(monkeypatch):
     monkeypatch.setenv("AI_BRIDGE_DATA_DIR", "$HOME/.data")
     reset_for_tests()
     settings = get_settings()
-    assert str(settings.workspace) == "$HOME/somewhere"
-    assert str(settings.data_dir) == "$HOME/.data"
+    assert settings.workspace.as_posix() == "$HOME/somewhere"
+    assert settings.data_dir.as_posix() == "$HOME/.data"
     monkeypatch.setenv("AI_BRIDGE_WORKSPACE", "~/ws")
     reset_for_tests()
-    assert str(get_settings().workspace).endswith("/ws")
+    assert get_settings().workspace.as_posix().endswith("/ws")
     assert "$HOME" not in str(get_settings().workspace)
 
 

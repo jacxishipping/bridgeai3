@@ -477,7 +477,7 @@ def _restrict_launcher_acl(launcher: Path) -> tuple[bool, str]:
     script = """
 $ErrorActionPreference = 'Stop'
 $p = '__PATH__'
-$acl = Get-Acl -LiteralPath $p
+$acl = [System.IO.File]::GetAccessControl($p)
 $acl.SetAccessRuleProtection($true, $false)
 foreach ($r in @($acl.Access)) { [void]$acl.RemoveAccessRule($r) }
 $sys = New-Object System.Security.Principal.SecurityIdentifier('S-1-5-18')
@@ -486,8 +486,8 @@ $me = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
 $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($sys, 'FullControl', 'Allow')))
 $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($adm, 'FullControl', 'Allow')))
 $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($me, 'ReadAndExecute', 'Allow')))
-Set-Acl -LiteralPath $p -AclObject $acl
-$after = Get-Acl -LiteralPath $p
+[System.IO.File]::SetAccessControl($p, $acl)
+$after = [System.IO.File]::GetAccessControl($p)
 $aces = @($after.Access | ForEach-Object {
     [pscustomobject]@{
         sid = $_.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value

@@ -188,7 +188,13 @@ def render_generated_block() -> str:
 
     with tempfile.TemporaryDirectory(prefix="apiref-") as tmp:
         app = create_app(admin_token="test", db_path=str(Path(tmp) / "control.db"))
-        routes = _collect_routes(app)
+        try:
+            routes = _collect_routes(app)
+        finally:
+            try:
+                app.state.conn.close()
+            except Exception:
+                pass
 
     grouped: dict[str, list[dict]] = {area: [] for area in AREA_ORDER}
     for row in routes:

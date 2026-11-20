@@ -78,6 +78,7 @@ def _configure(monkeypatch, tmp_path, manifest_path, sig_path, pub):
     monkeypatch.setenv("AI_BRIDGE_UPDATE_SIGNATURE_PATH", str(sig_path))
     monkeypatch.setenv("AI_BRIDGE_UPDATE_PUBLIC_KEY", str(pub))
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
 
 
 def test_valid_signed_manifest_checkouts_pinned_commit(tmp_path, monkeypatch):

@@ -42,7 +42,7 @@ def main():
                 body = response.read(512_000)
                 valid = response.code == expected
                 if path == "/" and valid:
-                    valid = b"brand-mark.svg" in body
+                    valid = b'<div id="root">' in body and b"AI Bridge" in body
                 elif path == "/api/auth/oidc/configured" and valid:
                     valid = isinstance(json.loads(body).get("enabled"), bool)
                 print(f"{'PASS' if valid else 'FAIL'} {path}: HTTP {response.code}")

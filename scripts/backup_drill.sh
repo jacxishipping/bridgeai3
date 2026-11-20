@@ -1,29 +1,25 @@
 #!/bin/sh
-# One-shot Postgres backup/restore drill for the staging plane.
+# One-shot Postgres backup/restore drill for the staging/production plane (Release 1 P0).
 #
-# Run as a Render cron job (Docker runtime, same image as the plane):
+# Run as a Render cron job (Docker runtime, same image as the plane) or in CI:
 #   dockerCommand: sh scripts/backup_drill.sh
-#   env: DATABASE_URL = internal DSN of ai-bridge-staging-db
+#   env: DATABASE_URL = internal DSN of the PostgreSQL database
 #
-# Steps: pg_dump the live staging DB -> restore into a fresh database
-# ai_bridge_staging_drill on the same server -> verify the restored DB
-# has all 15 migrations and readable core tables -> drop the drill DB.
-# The live database is never written to. The dump is verification-only
-# and is discarded with the job's ephemeral disk. DSN passwords are never
-# printed (backup_restore.py redacts them).
+# Steps: pg_dump live DB -> restore into isolated ai_bridge_staging_drill ->
+# verify all migrations match migrations/[0-9]*.sql -> validate users/devices/
+# tasks/sessions/approvals/audit counts -> verify audit hash-chain continuity ->
+# boot the FastAPI control plane against the restored DB -> record RTO/RPO ->
+# drop the drill DB. The live database is never written to and DSN passwords
+# are redacted.
 set -eu
 
 RESTORE_DSN=$(python3 -c "import os; from urllib.parse import urlsplit, urlunsplit; u = urlsplit(os.environ['DATABASE_URL']); print(urlunsplit((u.scheme, u.netloc, '/ai_bridge_staging_drill', u.query, u.fragment)))")
+EVIDENCE_OUT="${AI_BRIDGE_DRILL_EVIDENCE:-.run/postgres_restore_drill_evidence.json}"
 
-echo "== backup: live staging DB -> /tmp/staging-dump.sql"
-python3 scripts/backup_restore.py backup --pg-dsn "$DATABASE_URL" --out /tmp/staging-dump.sql
+echo "== running Release 1 PostgreSQL restore drill (evidence: $EVIDENCE_OUT)"
+python3 scripts/backup_restore.py drill \
+  --pg-dsn "$DATABASE_URL" \
+  --restore-dsn "$RESTORE_DSN" \
+  --evidence-out "$EVIDENCE_OUT"
 
-echo "== restore: dump -> ai_bridge_staging_drill"
-python3 scripts/backup_restore.py restore --pg-dump /tmp/staging-dump.sql --pg-dsn "$RESTORE_DSN"
-
-echo "== verify: restored DB table counts (expect migrations=15)"
-psql "$RESTORE_DSN" -t -c "SELECT 'migrations', count(*) FROM schema_migrations UNION ALL SELECT 'users', count(*) FROM users UNION ALL SELECT 'devices', count(*) FROM devices UNION ALL SELECT 'tasks', count(*) FROM tasks UNION ALL SELECT 'sessions', count(*) FROM sessions UNION ALL SELECT 'approvals', count(*) FROM approvals;"
-
-echo "== cleanup: drop drill DB"
-python3 scripts/backup_restore.py drop --pg-dsn "$RESTORE_DSN"
 echo "DRILL OK"

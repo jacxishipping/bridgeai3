@@ -245,14 +245,20 @@ export function DesktopView({
             type="text"
             className="field"
             style={{ flex: "1 1 220px" }}
-            placeholder="Type text on active desktop window..."
+            disabled={!controlArmed}
+            placeholder={
+              controlArmed
+                ? "Type text on active desktop window..."
+                : "View-only mode — arm control above to send keyboard input"
+            }
             value={typeText}
             onChange={(e) => setTypeText(e.target.value)}
           />
           <Button
             size="sm"
-            disabled={!typeText}
+            disabled={!controlArmed || !typeText}
             onClick={async () => {
+              if (!controlArmed) return;
               try {
                 await api.sendDesktopInput(deviceId, { action: "type", text: typeText });
                 onToast("Text sent to desktop");
@@ -269,12 +275,15 @@ export function DesktopView({
             type="text"
             className="field mono"
             style={{ width: 130 }}
+            disabled={!controlArmed}
             value={hotkey}
             onChange={(e) => setHotkey(e.target.value)}
           />
           <Button
             size="sm"
+            disabled={!controlArmed}
             onClick={async () => {
+              if (!controlArmed) return;
               try {
                 await api.sendDesktopInput(deviceId, { action: "hotkey", key: hotkey });
                 onToast(`Hotkey ${hotkey} sent`);
