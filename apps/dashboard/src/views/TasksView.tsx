@@ -1,19 +1,57 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { AlertTriangle, ArrowUpDown, ExternalLink, Plus, RefreshCw, RotateCcw, Trash2 } from "lucide-react";
+import { AlertTriangle, ArrowUpDown, ExternalLink, Play, Plus, RefreshCw, RotateCcw, ShieldCheck, Trash2 } from "lucide-react";
 import type { ApiClient } from "../api";
-import type { DeadLetterRecord, DeviceRecord, TaskRecord } from "../types";
+import type { DeadLetterRecord, DeviceRecord, TaskRecord, TraceTimeline } from "../types";
 import {
   Button,
   Chip,
   Modal,
   SlideOverDrawer,
+  StateBanner,
   StatusBadge,
   SurfaceCard,
+  TimelineFeed,
   Toggle,
   UnderlineTabs,
 } from "../components/ui";
 
 const PAGE_SIZE = 10;
+
+const TASK_TEMPLATES: Array<{ label: string; tool: string; args: Record<string, unknown>; maxAttempts: string }> = [
+  { label: "System Info", tool: "get_system_info", args: {}, maxAttempts: "2" },
+  { label: "Resource Usage", tool: "get_resource_usage", args: {}, maxAttempts: "2" },
+  { label: "Network Info", tool: "get_network_info", args: {}, maxAttempts: "2" },
+  { label: "List Processes", tool: "list_processes", args: { limit: 25 }, maxAttempts: "2" },
+  { label: "Docker Containers", tool: "docker_ps", args: {}, maxAttempts: "1" },
+  { label: "Disk Usage", tool: "get_disk_usage", args: {}, maxAttempts: "2" },
+];
+
+function summarizeTaskResult(raw: string | null | undefined): {
+  redactionCount: number;
+  summary: string;
+} {
+  if (!raw) return { redactionCount: 0, summary: "No result payload recorded yet." };
+  const redactionCount = (raw.match(/\[REDACTED[^\]]*\]|\*\*\*REDACTED\*\*\*/gi) || []).length;
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      const keys = Object.keys(parsed);
+      const exitCode = "returncode" in parsed ? ` · exit=${String(parsed.returncode)}` : "";
+      const errMsg = typeof parsed.error === "string" ? ` · error: ${parsed.error.slice(0, 80)}` : "";
+      return {
+        redactionCount,
+        summary: `JSON object (${keys.slice(0, 5).join(", ")}${keys.length > 5 ? "…" : ""})${exitCode}${errMsg}`,
+      };
+    }
+  } catch {
+    // Plain text output
+  }
+  const lines = raw.split(/\r?\n/).filter(Boolean);
+  return {
+    redactionCount,
+    summary: `Text payload · ${lines.length} line${lines.length === 1 ? "" : "s"} · ${raw.length} chars`,
+  };
+}
 
 export function TasksView({
   api,
@@ -48,6 +86,10 @@ export function TasksView({
   const [inspectedTask, setInspectedTask] = useState<TaskRecord | null>(null);
   const [taskDetail, setTaskDetail] = useState<TaskRecord | null>(null);
   const [loadingDetail, setLoadingDetail] = useState(false);
+  const [taskTrace, setTaskTrace] = useState<TraceTimeline | null>(null);
+  const [taskEvents, setTaskEvents] = useState<Array<{ id: string; event: string; created_at: number; detail_json?: string }>>([]);
+  const [rerunConfirmOpen, setRerunConfirmOpen] = useState(false);
+  const [rerunning, setRerunning] = useState(false);
 
   // Dispatch Modal
   const [dispatchOpen, setDispatchOpen] = useState(false);
@@ -55,6 +97,8 @@ export function TasksView({
   const [toolName, setToolName] = useState("get_system_info");
   const [argsJson, setArgsJson] = useState("{}");
   const [maxAttempts, setMaxAttempts] = useState("1");
+  const [preflight, setPreflight] = useState<Record<string, unknown> | null>(null);
+  const [preflightLoading, setPreflightLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
   const loadDlq = useCallback(async () => {
@@ -117,14 +161,65 @@ export function TasksView({
   async function openTaskDrawer(task: TaskRecord) {
     setInspectedTask(task);
     setTaskDetail(task);
+    setTaskTrace(null);
+    setTaskEvents([]);
+    setRerunConfirmOpen(false);
     setLoadingDetail(true);
     try {
       const full = await api.getTask(task.id);
       setTaskDetail(full);
+      if (full.trace_id) {
+        api
+          .getTrace(full.trace_id)
+          .then((tr) => setTaskTrace(tr))
+          .catch(() => setTaskTrace(null));
+      }
+      api
+        .getTaskEvents(task.id)
+        .then((evs) => setTaskEvents(evs || []))
+        .catch(() => setTaskEvents([]));
     } catch {
       // Keep projected task data if detail fetch fails
     } finally {
       setLoadingDetail(false);
+    }
+  }
+
+  async function handlePreflight() {
+    if (!toolName.trim()) return;
+    setPreflightLoading(true);
+    try {
+      const res = await api.simulatePolicy(toolName.trim());
+      setPreflight(res);
+    } catch (err) {
+      setPreflight({ decision: "error", reason: err instanceof Error ? err.message : "Preflight failed" });
+    } finally {
+      setPreflightLoading(false);
+    }
+  }
+
+  async function handleRerunTask(task: TaskRecord) {
+    setRerunning(true);
+    try {
+      let parsedArgs: Record<string, unknown> = {};
+      try {
+        parsedArgs = task.args_json ? (JSON.parse(task.args_json) as Record<string, unknown>) : {};
+      } catch {
+        parsedArgs = {};
+      }
+      const res = await api.submitTask({
+        device_id: task.device_id,
+        tool: task.tool,
+        args: parsedArgs,
+        max_attempts: task.max_attempts ?? 1,
+      });
+      setRerunConfirmOpen(false);
+      onToast(`Re-ran ${task.tool} as ${String(res.task_id || "new task")}`);
+      await onRefresh();
+    } catch (err) {
+      onToast(err instanceof Error ? err.message : "Re-run failed");
+    } finally {
+      setRerunning(false);
     }
   }
 
@@ -542,8 +637,38 @@ export function TasksView({
       )}
 
       {/* Run Task Modal */}
-      <Modal open={dispatchOpen} title="Dispatch Remote Task" onClose={() => setDispatchOpen(false)}>
+      <Modal
+        open={dispatchOpen}
+        title="Dispatch Remote Task"
+        onClose={() => {
+          setDispatchOpen(false);
+          setPreflight(null);
+        }}
+        maxWidth={540}
+      >
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          <div>
+            <div style={{ fontSize: 11.5, color: "var(--text-muted)", marginBottom: 6 }}>
+              Quick Templates (Tier 1 Read-Only Diagnostics):
+            </div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+              {TASK_TEMPLATES.map((tpl) => (
+                <Chip
+                  key={tpl.tool}
+                  active={toolName === tpl.tool}
+                  onClick={() => {
+                    setToolName(tpl.tool);
+                    setArgsJson(JSON.stringify(tpl.args, null, 2));
+                    setMaxAttempts(tpl.maxAttempts);
+                    setPreflight(null);
+                  }}
+                >
+                  {tpl.label}
+                </Chip>
+              ))}
+            </div>
+          </div>
+
           <div>
             <label style={{ display: "block", fontSize: 12, fontWeight: 500, marginBottom: 5 }}>
               Target Device
@@ -556,7 +681,7 @@ export function TasksView({
               <option value="local">local (Control Plane Host)</option>
               {devices.map((d) => (
                 <option key={d.id} value={d.id}>
-                  {d.name} ({d.id})
+                  {d.name} ({d.id} · {d.revoked ? "revoked" : d.status})
                 </option>
               ))}
             </select>
@@ -570,7 +695,10 @@ export function TasksView({
                 type="text"
                 className="field mono"
                 value={toolName}
-                onChange={(e) => setToolName(e.target.value)}
+                onChange={(e) => {
+                  setToolName(e.target.value);
+                  setPreflight(null);
+                }}
                 placeholder="get_system_info, list_processes..."
               />
             </div>
@@ -601,13 +729,40 @@ export function TasksView({
               onChange={(e) => setArgsJson(e.target.value)}
             />
           </div>
-          <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, paddingTop: 8 }}>
-            <Button variant="ghost" onClick={() => setDispatchOpen(false)}>
-              Cancel
+
+          {preflight && (
+            <SurfaceCard style={{ padding: 12, background: "var(--bg-elevated)" }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
+                <span style={{ fontSize: 12, fontWeight: 600 }}>Dry-Run / Policy Preflight</span>
+                <StatusBadge
+                  status={
+                    preflight.decision === "allowed" || preflight.allowed === true
+                      ? "ok"
+                      : preflight.decision === "needs_approval"
+                        ? "warn"
+                        : "err"
+                  }
+                  label={String(preflight.decision ?? (preflight.allowed ? "allowed" : "denied"))}
+                />
+              </div>
+              <div className="mono" style={{ fontSize: 11, color: "var(--text-secondary)" }}>
+                Tier {String(preflight.tier ?? "?")} · {String(preflight.reason ?? "Evaluated against live global policy")}
+              </div>
+            </SurfaceCard>
+          )}
+
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 8, paddingTop: 8 }}>
+            <Button size="sm" disabled={preflightLoading || !toolName.trim()} onClick={() => void handlePreflight()}>
+              <ShieldCheck size={13} /> {preflightLoading ? "Checking..." : "Dry-Run Preflight"}
             </Button>
-            <Button variant="primary" disabled={submitting} onClick={() => void handleDispatch()}>
-              {submitting ? "Queueing..." : "Queue Task"}
-            </Button>
+            <div style={{ display: "flex", gap: 8 }}>
+              <Button variant="ghost" onClick={() => setDispatchOpen(false)}>
+                Cancel
+              </Button>
+              <Button variant="primary" disabled={submitting} onClick={() => void handleDispatch()}>
+                {submitting ? "Queueing..." : "Queue Task"}
+              </Button>
+            </div>
           </div>
         </div>
       </Modal>
@@ -621,6 +776,21 @@ export function TasksView({
         footer={
           inspectedTask && (
             <>
+              {taskDetail && (
+                <Button
+                  size="sm"
+                  disabled={rerunning}
+                  onClick={() => {
+                    if ((taskDetail.tier ?? 1) >= 3) {
+                      setRerunConfirmOpen(true);
+                    } else {
+                      void handleRerunTask(taskDetail);
+                    }
+                  }}
+                >
+                  <Play size={12} /> {rerunning ? "Re-running..." : "Re-Run"}
+                </Button>
+              )}
               {taskDetail?.trace_id && onInspectTrace && (
                 <Button
                   onClick={() => {
@@ -654,10 +824,37 @@ export function TasksView({
       >
         {taskDetail && (
           <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+            {rerunConfirmOpen && (
+              <StateBanner
+                kind="denied"
+                title={`Confirm guarded re-run of Tier ${taskDetail.tier ?? 3} tool`}
+                detail={`Re-running ${taskDetail.tool} on ${taskDetail.device_id} may have side effects and will go through policy/approval gates again.`}
+                action={
+                  <div style={{ display: "flex", gap: 6 }}>
+                    <Button size="sm" variant="ghost" onClick={() => setRerunConfirmOpen(false)}>
+                      Cancel
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="danger"
+                      disabled={rerunning}
+                      onClick={() => void handleRerunTask(taskDetail)}
+                    >
+                      Confirm Re-Run
+                    </Button>
+                  </div>
+                }
+              />
+            )}
+
             <SurfaceCard style={{ padding: 14, display: "flex", flexDirection: "column", gap: 8 }}>
               <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12 }}>
                 <span style={{ color: "var(--text-muted)" }}>Status</span>
                 <StatusBadge status={statusKind(taskDetail.status)} label={taskDetail.status} />
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12 }}>
+                <span style={{ color: "var(--text-muted)" }}>Owner / Requested By</span>
+                <span className="mono">{taskDetail.created_by || "system"}</span>
               </div>
               <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12 }}>
                 <span style={{ color: "var(--text-muted)" }}>Node</span>
@@ -704,13 +901,101 @@ export function TasksView({
               <div className="terminal">{taskDetail.args_json || "{}"}</div>
             </div>
 
+            {(() => {
+              const { redactionCount, summary } = summarizeTaskResult(taskDetail.result);
+              return (
+                <div>
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      fontSize: 11.5,
+                      color: "var(--text-muted)",
+                      marginBottom: 6,
+                    }}
+                  >
+                    <span>Redacted Result Summary {loadingDetail ? "(loading...)" : ""}</span>
+                    {redactionCount > 0 && (
+                      <StatusBadge status="warn" label={`${redactionCount} secret(s) redacted`} />
+                    )}
+                  </div>
+                  <div
+                    className="mono"
+                    style={{
+                      fontSize: 11,
+                      padding: "6px 10px",
+                      borderRadius: 6,
+                      background: "var(--bg-elevated)",
+                      border: "1px solid var(--border-hair)",
+                      marginBottom: 6,
+                      color: "var(--text-secondary)",
+                    }}
+                  >
+                    {summary}
+                  </div>
+                  <pre className="terminal" style={{ margin: 0, whiteSpace: "pre-wrap", maxHeight: 280 }}>
+                    {taskDetail.result || "(No result output yet)"}
+                  </pre>
+                </div>
+              );
+            })()}
+
+            {/* Approval-to-Audit Timeline (Release 3) */}
             <div>
-              <div style={{ fontSize: 11.5, color: "var(--text-muted)", marginBottom: 6 }}>
-                Execution Output {loadingDetail ? "(loading...)" : ""}
+              <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 8 }}>
+                Approval-to-Audit Timeline
               </div>
-              <pre className="terminal" style={{ margin: 0, whiteSpace: "pre-wrap", maxHeight: 340 }}>
-                {taskDetail.result || "(No result output yet)"}
-              </pre>
+              {(() => {
+                const items: Array<{ id: string; title: string; meta: string; color: string; ts: number }> = [];
+                if (taskTrace) {
+                  for (const ap of taskTrace.approvals || []) {
+                    items.push({
+                      id: `ap-${ap.id}`,
+                      title: `Approval ${ap.status} · ${ap.tool || taskDetail.tool}`,
+                      meta: `${ap.decided_by || ap.requested_by || "operator"} · ${ap.reason || "policy gate"}`,
+                      color: ap.status === "approved" ? "var(--emerald)" : ap.status === "denied" ? "var(--rose)" : "var(--amber)",
+                      ts: ap.decided_at || ap.created_at || 0,
+                    });
+                  }
+                  for (const ev of taskTrace.task_events || []) {
+                    items.push({
+                      id: `tev-${ev.id}`,
+                      title: `Task event · ${ev.event}`,
+                      meta: new Date(ev.created_at * 1000).toLocaleTimeString(),
+                      color: "var(--accent)",
+                      ts: ev.created_at,
+                    });
+                  }
+                  for (const au of taskTrace.audit || []) {
+                    items.push({
+                      id: `au-${au.id}`,
+                      title: `Audit · ${au.tool} (${au.decision})`,
+                      meta: `${new Date(au.ts * 1000).toLocaleTimeString()} · actor=${au.actor || "system"}`,
+                      color: au.decision === "denied" ? "var(--rose)" : "var(--emerald)",
+                      ts: au.ts,
+                    });
+                  }
+                } else {
+                  for (const ev of taskEvents) {
+                    items.push({
+                      id: `ev-${ev.id}`,
+                      title: `Task event · ${ev.event}`,
+                      meta: new Date(ev.created_at * 1000).toLocaleTimeString(),
+                      color: "var(--accent)",
+                      ts: ev.created_at,
+                    });
+                  }
+                }
+                items.sort((a, b) => a.ts - b.ts);
+                return items.length > 0 ? (
+                  <TimelineFeed items={items} />
+                ) : (
+                  <div style={{ fontSize: 11.5, color: "var(--text-muted)" }}>
+                    No lifecycle or audit events recorded for this task yet.
+                  </div>
+                );
+              })()}
             </div>
           </div>
         )}

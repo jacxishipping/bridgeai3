@@ -1,43 +1,83 @@
-import { useEffect, useState } from "react";
-import { Check, RefreshCw, X } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { Check, RefreshCw, ShieldAlert, X } from "lucide-react";
 import type { ApiClient } from "../api";
-import type { ApprovalRecord, AuditRecord, PolicyHistoryEntry, PolicyState } from "../types";
+import type { ApprovalRecord, AuditRecord, DeviceRecord, PolicyHistoryEntry, PolicyState } from "../types";
 import {
   Accordion,
   Button,
+  Modal,
+  StateBanner,
+  StatusBadge,
   SurfaceCard,
   TagInput,
   TimelineFeed,
   Toggle,
 } from "../components/ui";
 
+const DEFAULT_POLICY: PolicyState = {
+  allow_writes: true,
+  allow_tier3: false,
+  allow_shell: false,
+  allow_file_deletion: false,
+  allow_package_install: false,
+  desktop_enabled: false,
+  max_tier_unattended: 2,
+  allowed_apps: [],
+  note: "Updated via dashboard",
+};
+
+const POLICY_DIFF_FIELDS: Array<{ key: keyof PolicyState; label: string; riskOnEnable?: boolean }> = [
+  { key: "allow_writes", label: "Tier 2 File Writes", riskOnEnable: true },
+  { key: "allow_tier3", label: "Tier 3 System Actions", riskOnEnable: true },
+  { key: "allow_shell", label: "Shell Execution (run_shell)", riskOnEnable: true },
+  { key: "desktop_enabled", label: "Interactive Desktop Automation", riskOnEnable: true },
+  { key: "allow_file_deletion", label: "Tier 4 File Deletion", riskOnEnable: true },
+  { key: "max_tier_unattended", label: "Max Unattended Tier", riskOnEnable: true },
+  { key: "allowed_apps", label: "Allowed Desktop Apps" },
+];
+
+const PREPUBLISH_SIM_TOOLS = [
+  "get_system_info",
+  "write_workspace_file",
+  "run_shell",
+  "mouse_click",
+  "delete_workspace_file",
+];
+
+function formatExpiry(expiresAt?: number | null): { label: string; expired: boolean } {
+  if (!expiresAt) return { label: "No expiry set", expired: false };
+  const remainingSec = Math.floor(expiresAt - Date.now() / 1000);
+  if (remainingSec <= 0) return { label: "Expired", expired: true };
+  if (remainingSec < 60) return { label: `Expires in ${remainingSec}s`, expired: false };
+  const mins = Math.floor(remainingSec / 60);
+  return { label: `Expires in ${mins}m ${remainingSec % 60}s`, expired: false };
+}
+
 export function SecurityView({
   api,
   approvals,
   audit,
+  devices,
   onRefresh,
   onToast,
 }: {
   api: ApiClient;
   approvals: ApprovalRecord[];
   audit: AuditRecord[];
+  devices: DeviceRecord[];
   onRefresh: () => Promise<void>;
   onToast: (msg: string) => void;
 }) {
   const [policyVersion, setPolicyVersion] = useState(0);
   const [history, setHistory] = useState<PolicyHistoryEntry[]>([]);
-  const [policy, setPolicy] = useState<PolicyState>({
-    allow_writes: true,
-    allow_tier3: false,
-    allow_shell: false,
-    allow_file_deletion: false,
-    allow_package_install: false,
-    desktop_enabled: false,
-    max_tier_unattended: 2,
-    allowed_apps: [],
-    note: "Updated via dashboard",
-  });
+  const [livePolicy, setLivePolicy] = useState<PolicyState>(DEFAULT_POLICY);
+  const [policy, setPolicy] = useState<PolicyState>(DEFAULT_POLICY);
   const [saving, setSaving] = useState(false);
+
+  // Pre-publish Diff + Blast Radius + Simulation Review Modal (Release 3)
+  const [reviewOpen, setReviewOpen] = useState(false);
+  const [reviewSims, setReviewSims] = useState<Array<{ tool: string; result: Record<string, unknown> }>>([]);
+  const [reviewLoading, setReviewLoading] = useState(false);
 
   // Simulator
   const [simTool, setSimTool] = useState("run_shell");
@@ -50,7 +90,11 @@ export function SecurityView({
     ]);
     if (cur) {
       setPolicyVersion(cur.version);
-      if (cur.policy) setPolicy((p) => ({ ...p, ...cur.policy }));
+      if (cur.policy) {
+        const merged = { ...DEFAULT_POLICY, ...cur.policy };
+        setLivePolicy(merged);
+        setPolicy(merged);
+      }
     }
     setHistory(hist);
   }
@@ -59,6 +103,70 @@ export function SecurityView({
     void loadPolicyState();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [api]);
+
+  const devicesById = useMemo(() => {
+    const map = new Map<string, DeviceRecord>();
+    devices.forEach((d) => map.set(d.id, d));
+    return map;
+  }, [devices]);
+
+  const inheritingDevices = useMemo(
+    () => devices.filter((d) => !d.revoked && !d.has_custom_policy),
+    [devices],
+  );
+  const overrideDevicesCount = useMemo(
+    () => devices.filter((d) => !d.revoked && d.has_custom_policy).length,
+    [devices],
+  );
+
+  const policyDiffs = useMemo(() => {
+    return POLICY_DIFF_FIELDS.filter(({ key }) => {
+      return JSON.stringify(livePolicy[key]) !== JSON.stringify(policy[key]);
+    }).map(({ key, label, riskOnEnable }) => {
+      const before = livePolicy[key];
+      const after = policy[key];
+      const widened =
+        Boolean(riskOnEnable) &&
+        ((typeof after === "boolean" && after && !before) ||
+          (typeof after === "number" && typeof before === "number" && after > before));
+      return { key, label, before, after, widened };
+    });
+  }, [livePolicy, policy]);
+
+  async function openPublishReview() {
+    setReviewOpen(true);
+    setReviewLoading(true);
+    try {
+      const results = await Promise.all(
+        PREPUBLISH_SIM_TOOLS.map(async (tool) => {
+          try {
+            const res = await api.simulatePolicy(tool, policy);
+            return { tool, result: res };
+          } catch (err) {
+            return { tool, result: { decision: "error", reason: err instanceof Error ? err.message : "sim error" } };
+          }
+        }),
+      );
+      setReviewSims(results);
+    } finally {
+      setReviewLoading(false);
+    }
+  }
+
+  async function confirmPublishPolicy() {
+    setSaving(true);
+    try {
+      const res = await api.savePolicy(policy);
+      setPolicyVersion(res.version);
+      setReviewOpen(false);
+      onToast(`Published global policy v${res.version}`);
+      await loadPolicyState();
+    } catch (err) {
+      onToast(err instanceof Error ? err.message : "Failed to save policy");
+    } finally {
+      setSaving(false);
+    }
+  }
 
   const pendingApprovals = approvals.filter((a) => a.status === "pending");
 
@@ -81,7 +189,7 @@ export function SecurityView({
           Security Policy, Allowlists &amp; Approvals
         </h1>
         <p style={{ margin: "4px 0 0", fontSize: 13, color: "var(--text-secondary)" }}>
-          Review Tier 3/4 human approvals with command parameter inspection, publish versioned policies, and simulate rules.
+          Review Tier 3/4 human approvals with rule, device context, expiry, and blast radius; diff and simulate policies before publishing.
         </p>
       </div>
 
@@ -102,75 +210,123 @@ export function SecurityView({
         </div>
 
         {pendingApprovals.length === 0 ? (
-          <div style={{ fontSize: 12.5, color: "var(--text-muted)" }}>
-            No Tier 3/4 requests awaiting human approval.
-          </div>
+          <StateBanner
+            kind="empty"
+            title="No pending approvals"
+            detail="Tier 3/4 requests requiring human confirmation will appear here with full arguments, device context, expiry, and blast radius."
+          />
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-            {pendingApprovals.map((ap) => (
-              <div
-                key={ap.id}
-                style={{
-                  padding: 12,
-                  borderRadius: 8,
-                  background: "var(--bg-elevated)",
-                  border: "1px solid var(--border-hair)",
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: 8,
-                }}
-              >
-                <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
-                  <div>
-                    <div style={{ fontSize: 12.5, fontWeight: 600 }}>
-                      {ap.tool || "task"} <span className="mono">(Tier {ap.tier ?? 3})</span>
+            {pendingApprovals.map((ap) => {
+              const dev = ap.device_id ? devicesById.get(ap.device_id) : undefined;
+              const expiry = formatExpiry(ap.expires_at);
+              return (
+                <div
+                  key={ap.id}
+                  style={{
+                    padding: 14,
+                    borderRadius: 8,
+                    background: "var(--bg-elevated)",
+                    border: "1px solid var(--border-hair)",
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 10,
+                  }}
+                >
+                  <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+                    <div>
+                      <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8, fontSize: 13, fontWeight: 600 }}>
+                        <span>{ap.tool || "task"}</span>
+                        <StatusBadge status={(ap.tier ?? 3) >= 4 ? "err" : "warn"} label={`Tier ${ap.tier ?? 3}`} />
+                        <StatusBadge status={expiry.expired ? "err" : "muted"} label={expiry.label} />
+                      </div>
+                      <div className="mono" style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 4 }}>
+                        id={ap.id} · requested_by={ap.requested_by || "agent"}
+                      </div>
                     </div>
-                    <div className="mono" style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 2 }}>
-                      {ap.id} · device {ap.device_id || "—"} · by {ap.requested_by || "agent"}
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                      <Button
+                        size="sm"
+                        variant="primary"
+                        disabled={expiry.expired}
+                        onClick={async () => {
+                          await api.decideApproval(ap.id, "approved", "Approved in dashboard");
+                          onToast(`Approved ${ap.id}`);
+                          await onRefresh();
+                        }}
+                      >
+                        <Check size={13} /> Approve
+                      </Button>
+                      <Button
+                        size="sm"
+                        onClick={async () => {
+                          await api.replanApproval(ap.id, "Operator requested non-destructive replan.");
+                          onToast(`Sent ${ap.id} for replan`);
+                          await onRefresh();
+                        }}
+                      >
+                        <RefreshCw size={12} /> Replan
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="danger"
+                        onClick={async () => {
+                          await api.decideApproval(ap.id, "denied", "Denied in dashboard");
+                          onToast(`Denied ${ap.id}`);
+                          await onRefresh();
+                        }}
+                      >
+                        <X size={13} /> Deny
+                      </Button>
                     </div>
                   </div>
-                  <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-                    <Button
-                      size="sm"
-                      variant="primary"
-                      onClick={async () => {
-                        await api.decideApproval(ap.id, "approved", "Approved in dashboard");
-                        onToast(`Approved ${ap.id}`);
-                        await onRefresh();
-                      }}
-                    >
-                      <Check size={13} /> Approve
-                    </Button>
-                    <Button
-                      size="sm"
-                      onClick={async () => {
-                        await api.replanApproval(ap.id, "Operator requested non-destructive replan.");
-                        onToast(`Sent ${ap.id} for replan`);
-                        await onRefresh();
-                      }}
-                    >
-                      <RefreshCw size={12} /> Replan
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="danger"
-                      onClick={async () => {
-                        await api.decideApproval(ap.id, "denied", "Denied in dashboard");
-                        onToast(`Denied ${ap.id}`);
-                        await onRefresh();
-                      }}
-                    >
-                      <X size={13} /> Deny
-                    </Button>
+
+                  {/* Rule, Device Context & Blast Radius Grid */}
+                  <div
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+                      gap: 8,
+                      padding: 10,
+                      borderRadius: 6,
+                      background: "var(--bg-card)",
+                      border: "1px solid var(--border-hair)",
+                      fontSize: 11.5,
+                    }}
+                  >
+                    <div>
+                      <div style={{ color: "var(--text-muted)", fontSize: 10.5 }}>Rule / Reason</div>
+                      <div className="mono">{ap.reason || `Tier ${ap.tier ?? 3} requires explicit human approval`}</div>
+                    </div>
+                    <div>
+                      <div style={{ color: "var(--text-muted)", fontSize: 10.5 }}>Device Context</div>
+                      <div className="mono">
+                        {dev
+                          ? `${dev.name} (${dev.os || "node"} · ${dev.status}${dev.group ? ` · grp:${dev.group}` : ""})`
+                          : ap.device_id || "local"}
+                      </div>
+                    </div>
+                    <div>
+                      <div style={{ color: "var(--text-muted)", fontSize: 10.5 }}>Blast Radius</div>
+                      <div className="mono">
+                        1 endpoint ({dev?.name || ap.device_id || "local"})
+                      </div>
+                    </div>
                   </div>
+
+                  {ap.args_json && (
+                    <div>
+                      <div style={{ fontSize: 10.5, color: "var(--text-muted)", marginBottom: 4 }}>
+                        Exact Invocation Arguments:
+                      </div>
+                      <pre className="terminal" style={{ margin: 0, padding: 10, fontSize: 11 }}>
+                        {ap.args_json}
+                      </pre>
+                    </div>
+                  )}
                 </div>
-                {ap.args_json && (
-                  <pre className="terminal" style={{ margin: 0, padding: 10, fontSize: 11 }}>
-                    {ap.args_json}
-                  </pre>
-                )}
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </SurfaceCard>
@@ -181,7 +337,7 @@ export function SecurityView({
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
             <span style={{ fontSize: 13.5, fontWeight: 600 }}>Global Execution Policy</span>
             <span className="mono" style={{ fontSize: 11.5, color: "var(--text-muted)" }}>
-              v{policyVersion}
+              v{policyVersion} · {inheritingDevices.length} inheriting
             </span>
           </div>
 
@@ -237,25 +393,18 @@ export function SecurityView({
             />
           </div>
 
-          <div style={{ paddingTop: 6 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, paddingTop: 6 }}>
+            <span className="mono" style={{ fontSize: 11.5, color: "var(--text-muted)" }}>
+              {policyDiffs.length > 0
+                ? `${policyDiffs.length} pending change${policyDiffs.length === 1 ? "" : "s"}`
+                : "Matches live v" + policyVersion}
+            </span>
             <Button
               variant="primary"
               disabled={saving}
-              onClick={async () => {
-                setSaving(true);
-                try {
-                  const res = await api.savePolicy(policy);
-                  setPolicyVersion(res.version);
-                  onToast(`Saved global policy v${res.version}`);
-                  await loadPolicyState();
-                } catch (err) {
-                  onToast(err instanceof Error ? err.message : "Failed to save policy");
-                } finally {
-                  setSaving(false);
-                }
-              }}
+              onClick={() => void openPublishReview()}
             >
-              {saving ? "Publishing..." : "Publish New Policy Version"}
+              <ShieldAlert size={13} /> Review Diff &amp; Publish
             </Button>
           </div>
         </SurfaceCard>
@@ -338,6 +487,121 @@ export function SecurityView({
           />
         </div>
       </div>
+
+      {/* Pre-Publish Diff, Blast Radius & Simulation Review Modal (Release 3) */}
+      <Modal
+        open={reviewOpen}
+        title={`Pre-Publish Review · Policy v${policyVersion} → v${policyVersion + 1}`}
+        onClose={() => setReviewOpen(false)}
+        maxWidth={580}
+      >
+        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          <StateBanner
+            kind={policyDiffs.some((d) => d.widened) ? "denied" : "degraded"}
+            title={`Blast Radius: ${inheritingDevices.length} active device${inheritingDevices.length === 1 ? "" : "s"} inherit global policy`}
+            detail={`${overrideDevicesCount} device${overrideDevicesCount === 1 ? "" : "s"} use custom per-device overrides and will not be overwritten.${
+              policyDiffs.some((d) => d.widened)
+                ? " One or more changes widen execution permissions."
+                : ""
+            }`}
+          />
+
+          <div>
+            <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>
+              Policy Diff ({policyDiffs.length} field{policyDiffs.length === 1 ? "" : "s"} changed)
+            </div>
+            {policyDiffs.length === 0 ? (
+              <div style={{ fontSize: 12, color: "var(--text-muted)" }}>
+                No toggle differences detected against live v{policyVersion}.
+              </div>
+            ) : (
+              <SurfaceCard style={{ overflow: "hidden" }}>
+                <table className="saas-table" style={{ fontSize: 11.5 }}>
+                  <thead>
+                    <tr>
+                      <th>Setting</th>
+                      <th>Current (v{policyVersion})</th>
+                      <th>Proposed</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {policyDiffs.map((d) => (
+                      <tr key={String(d.key)}>
+                        <td>{d.label}</td>
+                        <td className="mono" style={{ color: "var(--text-muted)" }}>
+                          {JSON.stringify(d.before)}
+                        </td>
+                        <td
+                          className="mono"
+                          style={{
+                            fontWeight: 600,
+                            color: d.widened ? "var(--amber)" : "var(--emerald)",
+                          }}
+                        >
+                          {JSON.stringify(d.after)} {d.widened ? "▲ wider" : ""}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </SurfaceCard>
+            )}
+          </div>
+
+          <div>
+            <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>
+              Pre-Publish Simulation Results
+            </div>
+            {reviewLoading ? (
+              <div style={{ fontSize: 12, color: "var(--text-muted)" }}>Simulating representative tools...</div>
+            ) : (
+              <SurfaceCard style={{ overflow: "hidden" }}>
+                <table className="saas-table" style={{ fontSize: 11.5 }}>
+                  <thead>
+                    <tr>
+                      <th>Tool</th>
+                      <th>Tier</th>
+                      <th>Decision</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {reviewSims.map(({ tool, result }) => {
+                      const decision = String(result.decision ?? (result.allowed ? "allowed" : "denied"));
+                      return (
+                        <tr key={tool}>
+                          <td className="mono">{tool}</td>
+                          <td className="mono">Tier {String(result.tier ?? "?")}</td>
+                          <td>
+                            <StatusBadge
+                              status={
+                                decision === "allowed"
+                                  ? "ok"
+                                  : decision === "needs_approval"
+                                    ? "warn"
+                                    : "err"
+                              }
+                              label={decision}
+                            />
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </SurfaceCard>
+            )}
+          </div>
+
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, paddingTop: 4 }}>
+            <Button variant="ghost" disabled={saving} onClick={() => setReviewOpen(false)}>
+              Cancel
+            </Button>
+            <Button variant="primary" disabled={saving} onClick={() => void confirmPublishPolicy()}>
+              {saving ? "Publishing..." : `Confirm & Publish v${policyVersion + 1}`}
+            </Button>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 }

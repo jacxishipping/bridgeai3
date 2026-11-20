@@ -1,18 +1,50 @@
-import { useMemo, useState } from "react";
-import { ArrowUpDown, Plus, RefreshCw, ShieldAlert } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { ArrowUpDown, Bookmark, Plus, RefreshCw, ShieldAlert, Trash2 } from "lucide-react";
 import type { ApiClient } from "../api";
-import type { DeviceOverview, DeviceRecord, EnrollResult } from "../types";
+import type { DeviceOverview, DeviceRecord, EnrollResult, PolicyState } from "../types";
 import {
   Button,
   Chip,
   Modal,
   SlideOverDrawer,
+  StateBanner,
   StatusBadge,
   SurfaceCard,
   TagInput,
   Toggle,
   UnderlineTabs,
 } from "../components/ui";
+
+interface SavedFleetFilter {
+  id: string;
+  name: string;
+  query: string;
+  osFilter: "all" | "windows" | "linux" | "macos";
+  groupFilter: string;
+  statusFilter: "all" | "online" | "offline" | "revoked";
+}
+
+const SAVED_FILTERS_KEY = "aibridge.fleet.savedFilters.v1";
+const PAGE_SIZE = 15;
+
+function loadSavedFilters(): SavedFleetFilter[] {
+  try {
+    const raw = localStorage.getItem(SAVED_FILTERS_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? (parsed as SavedFleetFilter[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveFiltersStorage(filters: SavedFleetFilter[]): void {
+  try {
+    localStorage.setItem(SAVED_FILTERS_KEY, JSON.stringify(filters));
+  } catch {
+    // Ignore storage errors
+  }
+}
 
 export function FleetView({
   api,
@@ -31,9 +63,26 @@ export function FleetView({
 }) {
   const [query, setQuery] = useState("");
   const [osFilter, setOsFilter] = useState<"all" | "windows" | "linux" | "macos">("all");
+  const [groupFilter, setGroupFilter] = useState<string>("all");
+  const [statusFilter, setStatusFilter] = useState<"all" | "online" | "offline" | "revoked">("all");
   const [sortKey, setSortKey] = useState<"name" | "status" | "os">("name");
   const [asc, setAsc] = useState(true);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+
+  // Server-side pagination state (Release 3)
+  const [page, setPage] = useState(1);
+  const [pagedDevices, setPagedDevices] = useState<DeviceRecord[] | null>(null);
+  const [totalDevices, setTotalDevices] = useState<number>(devices.length);
+  const [pageError, setPageError] = useState<string | null>(null);
+
+  // Saved Filters (Release 3)
+  const [savedFilters, setSavedFilters] = useState<SavedFleetFilter[]>(() => loadSavedFilters());
+  const [filterName, setFilterName] = useState("");
+  const [saveFilterOpen, setSaveFilterOpen] = useState(false);
+
+  // Bulk Action Safeguard Modal (Release 3)
+  const [bulkAction, setBulkAction] = useState<"refresh" | "revoke" | null>(null);
+  const [bulkBusy, setBulkBusy] = useState(false);
 
   // Enrollment Wizard Modal State
   const [enrollOpen, setEnrollOpen] = useState(false);
@@ -50,52 +99,170 @@ export function FleetView({
   // Drawer Inspector State
   const [drawerTab, setDrawerTab] = useState<"overview" | "processes" | "policy" | "tags">("overview");
   const [overview, setOverview] = useState<DeviceOverview | null>(null);
+  const [globalPolicy, setGlobalPolicy] = useState<PolicyState | null>(null);
   const [localGroup, setLocalGroup] = useState("");
-  const [localTags, setLocalTags] = useState<string[]>(["windows", "workstation"]);
+  const [localTags, setLocalTags] = useState<string[]>([]);
   const [polWrites, setPolWrites] = useState(true);
   const [polTier3, setPolTier3] = useState(false);
   const [polDesktop, setPolDesktop] = useState(false);
   const [polShell, setPolShell] = useState(false);
   const [savingPolicy, setSavingPolicy] = useState(false);
 
-  const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    return devices
-      .filter((d) => {
-        if (osFilter !== "all" && !(d.os || "").toLowerCase().includes(osFilter)) {
-          return false;
-        }
-        if (!q) return true;
-        return (
-          d.name.toLowerCase().includes(q) ||
-          d.id.toLowerCase().includes(q) ||
-          (d.hostname || "").toLowerCase().includes(q) ||
-          (d.group || "").toLowerCase().includes(q)
-        );
-      })
-      .sort((a, b) => {
-        const av = String(a[sortKey] ?? "").toLowerCase();
-        const bv = String(b[sortKey] ?? "").toLowerCase();
-        return asc ? av.localeCompare(bv) : bv.localeCompare(av);
+  const availableGroups = useMemo(() => {
+    const set = new Set<string>();
+    devices.forEach((d) => {
+      if (d.group?.trim()) set.add(d.group.trim());
+    });
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [devices]);
+
+  const fetchServerPage = useCallback(async () => {
+    try {
+      const res = await api.listDevicesPaged({
+        limit: PAGE_SIZE,
+        offset: (page - 1) * PAGE_SIZE,
+        group: groupFilter !== "all" ? groupFilter : undefined,
+        os: osFilter !== "all" ? osFilter : undefined,
+        status: statusFilter !== "all" ? statusFilter : undefined,
+        q: query.trim() || undefined,
       });
-  }, [devices, query, osFilter, sortKey, asc]);
+      setPagedDevices(res.items);
+      setTotalDevices(res.total);
+      setPageError(null);
+    } catch (err) {
+      setPagedDevices(null);
+      setPageError(err instanceof Error ? err.message : "Failed to load device page");
+    }
+  }, [api, page, groupFilter, osFilter, statusFilter, query]);
+
+  useEffect(() => {
+    void fetchServerPage();
+  }, [fetchServerPage, devices.length]);
+
+  const filtered = useMemo(() => {
+    const source = pagedDevices ?? devices.filter((d) => {
+      if (osFilter !== "all" && !(d.os || "").toLowerCase().includes(osFilter)) return false;
+      if (groupFilter !== "all" && (d.group || "") !== groupFilter) return false;
+      if (statusFilter !== "all") {
+        const eff = d.revoked ? "revoked" : (d.status || "offline").toLowerCase();
+        if (eff !== statusFilter) return false;
+      }
+      const q = query.trim().toLowerCase();
+      if (!q) return true;
+      return (
+        d.name.toLowerCase().includes(q) ||
+        d.id.toLowerCase().includes(q) ||
+        (d.hostname || "").toLowerCase().includes(q) ||
+        (d.group || "").toLowerCase().includes(q) ||
+        (d.tags || []).some((t) => t.toLowerCase().includes(q))
+      );
+    });
+    return [...source].sort((a, b) => {
+      const av = String(a[sortKey] ?? "").toLowerCase();
+      const bv = String(b[sortKey] ?? "").toLowerCase();
+      return asc ? av.localeCompare(bv) : bv.localeCompare(av);
+    });
+  }, [pagedDevices, devices, query, osFilter, groupFilter, statusFilter, sortKey, asc]);
+
+  const totalCount = pagedDevices ? totalDevices : filtered.length;
+  const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
 
   async function openInspector(dev: DeviceRecord) {
     onSelectDevice(dev);
     setDrawerTab("overview");
     setLocalGroup(dev.group || "");
-    setLocalTags(dev.tags?.length ? dev.tags : ["workstation", (dev.os || "node").toLowerCase()]);
+    // Release 3 truthfulness: show actual tags (never invent default placeholder tags)
+    setLocalTags(dev.tags ?? []);
     const p = dev.policy || {};
     setPolWrites(Boolean(p.allow_writes ?? true));
     setPolTier3(Boolean(p.allow_tier3 ?? false));
     setPolDesktop(Boolean(p.desktop_enabled ?? false));
     setPolShell(Boolean(p.allow_shell ?? false));
     setOverview(null);
+    const [ov, gp] = await Promise.all([
+      api.getDeviceOverview(dev.id).catch(() => null),
+      api.getPolicy().catch(() => null),
+    ]);
+    if (ov) setOverview(ov);
+    if (gp?.policy) {
+      setGlobalPolicy(gp.policy);
+      if (!dev.has_custom_policy) {
+        setPolWrites(Boolean(gp.policy.allow_writes));
+        setPolTier3(Boolean(gp.policy.allow_tier3));
+        setPolDesktop(Boolean(gp.policy.desktop_enabled));
+        setPolShell(Boolean(gp.policy.allow_shell));
+      }
+    }
+  }
+
+  function handleSaveCurrentFilter() {
+    const trimmed = filterName.trim();
+    if (!trimmed) return;
+    const entry: SavedFleetFilter = {
+      id: `flt-${Date.now().toString(36)}`,
+      name: trimmed,
+      query,
+      osFilter,
+      groupFilter,
+      statusFilter,
+    };
+    const next = [...savedFilters, entry];
+    setSavedFilters(next);
+    saveFiltersStorage(next);
+    setFilterName("");
+    setSaveFilterOpen(false);
+    onToast(`Saved filter "${trimmed}"`);
+  }
+
+  function applySavedFilter(f: SavedFleetFilter) {
+    setQuery(f.query);
+    setOsFilter(f.osFilter);
+    setGroupFilter(f.groupFilter);
+    setStatusFilter(f.statusFilter);
+    setPage(1);
+    onToast(`Applied filter "${f.name}"`);
+  }
+
+  function deleteSavedFilter(id: string) {
+    const next = savedFilters.filter((f) => f.id !== id);
+    setSavedFilters(next);
+    saveFiltersStorage(next);
+  }
+
+  const selectedDevicesList = useMemo(
+    () => devices.filter((d) => selectedIds.has(d.id)),
+    [devices, selectedIds],
+  );
+
+  async function executeBulkAction() {
+    if (!bulkAction || selectedDevicesList.length === 0) return;
+    setBulkBusy(true);
+    let okCount = 0;
+    let errCount = 0;
     try {
-      const ov = await api.getDeviceOverview(dev.id);
-      setOverview(ov);
-    } catch {
-      // Non-fatal
+      for (const dev of selectedDevicesList) {
+        try {
+          if (bulkAction === "refresh") {
+            await api.refreshDeviceTelemetry(dev.id);
+          } else if (bulkAction === "revoke" && !dev.revoked) {
+            await api.revokeDevice(dev.id);
+          }
+          okCount += 1;
+        } catch {
+          errCount += 1;
+        }
+      }
+      onToast(
+        `${bulkAction === "revoke" ? "Revoked" : "Queued refresh on"} ${okCount} node(s)${
+          errCount ? ` (${errCount} failed)` : ""
+        }`,
+      );
+      setSelectedIds(new Set());
+      setBulkAction(null);
+      await onRefresh();
+      await fetchServerPage();
+    } finally {
+      setBulkBusy(false);
     }
   }
 
@@ -199,6 +366,116 @@ export function FleetView({
         </Button>
       </div>
 
+      {pageError && (
+        <StateBanner
+          kind="degraded"
+          title="Server-side fleet pagination fallback active"
+          detail={`Falling back to cached device list (${pageError}).`}
+        />
+      )}
+
+      {/* Saved Filters & Group Quick-Select */}
+      <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8 }}>
+        <Button size="sm" onClick={() => setSaveFilterOpen(true)}>
+          <Bookmark size={12} /> Save Filter
+        </Button>
+        {savedFilters.map((f) => (
+          <span
+            key={f.id}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 4,
+              padding: "2px 6px",
+              borderRadius: 6,
+              border: "1px solid var(--border-hair)",
+              background: "var(--bg-elevated)",
+              fontSize: 11.5,
+            }}
+          >
+            <button
+              type="button"
+              className="chip"
+              style={{ padding: "2px 4px" }}
+              onClick={() => applySavedFilter(f)}
+            >
+              {f.name}
+            </button>
+            <button
+              type="button"
+              aria-label={`Delete saved filter ${f.name}`}
+              style={{
+                background: "transparent",
+                border: 0,
+                color: "var(--text-muted)",
+                cursor: "pointer",
+                padding: 2,
+                display: "inline-flex",
+              }}
+              onClick={() => deleteSavedFilter(f.id)}
+            >
+              <Trash2 size={11} />
+            </button>
+          </span>
+        ))}
+        {availableGroups.length > 0 && (
+          <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 4, marginInlineStart: "auto" }}>
+            <span style={{ fontSize: 11.5, color: "var(--text-muted)" }}>Group:</span>
+            <Chip
+              active={groupFilter === "all"}
+              onClick={() => {
+                setGroupFilter("all");
+                setPage(1);
+              }}
+            >
+              All
+            </Chip>
+            {availableGroups.map((grp) => (
+              <Chip
+                key={grp}
+                active={groupFilter === grp}
+                onClick={() => {
+                  setGroupFilter(grp);
+                  setPage(1);
+                }}
+              >
+                {grp}
+              </Chip>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Bulk-Action Bar (Safeguarded by Confirmation Modal) */}
+      {selectedIds.size > 0 && (
+        <SurfaceCard
+          style={{
+            padding: "10px 14px",
+            display: "flex",
+            flexWrap: "wrap",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 10,
+            borderColor: "var(--accent)",
+          }}
+        >
+          <span className="mono" style={{ fontSize: 12, fontWeight: 600 }}>
+            {selectedIds.size} node{selectedIds.size === 1 ? "" : "s"} selected
+          </span>
+          <div style={{ display: "flex", gap: 8 }}>
+            <Button size="sm" onClick={() => setBulkAction("refresh")}>
+              <RefreshCw size={12} /> Bulk Refresh ({selectedIds.size})
+            </Button>
+            <Button size="sm" variant="danger" onClick={() => setBulkAction("revoke")}>
+              <ShieldAlert size={12} /> Bulk Revoke ({selectedIds.size})
+            </Button>
+            <Button size="sm" variant="ghost" onClick={() => setSelectedIds(new Set())}>
+              Clear
+            </Button>
+          </div>
+        </SurfaceCard>
+      )}
+
       <SurfaceCard style={{ overflow: "hidden" }}>
         <div
           style={{
@@ -218,19 +495,43 @@ export function FleetView({
               style={{ width: 240 }}
               placeholder="Search node name, host, group, ID..."
               value={query}
-              onChange={(e) => setQuery(e.target.value)}
+              onChange={(e) => {
+                setQuery(e.target.value);
+                setPage(1);
+              }}
             />
             <div style={{ display: "flex", gap: 4 }}>
               {(["all", "windows", "linux", "macos"] as const).map((os) => (
-                <Chip key={os} active={osFilter === os} onClick={() => setOsFilter(os)}>
+                <Chip
+                  key={os}
+                  active={osFilter === os}
+                  onClick={() => {
+                    setOsFilter(os);
+                    setPage(1);
+                  }}
+                >
                   {os === "all" ? "All OS" : os.toUpperCase()}
+                </Chip>
+              ))}
+            </div>
+            <div style={{ display: "flex", gap: 4 }}>
+              {(["all", "online", "offline", "revoked"] as const).map((st) => (
+                <Chip
+                  key={st}
+                  active={statusFilter === st}
+                  onClick={() => {
+                    setStatusFilter(st);
+                    setPage(1);
+                  }}
+                >
+                  {st === "all" ? "All Status" : st}
                 </Chip>
               ))}
             </div>
           </div>
 
           <span className="mono" style={{ fontSize: 11.5, color: "var(--text-muted)" }}>
-            {selectedIds.size} selected · {filtered.length} visible
+            {selectedIds.size} selected · {filtered.length} of {totalCount} matching
           </span>
         </div>
 
@@ -320,7 +621,112 @@ export function FleetView({
             </tbody>
           </table>
         </div>
+
+        <div
+          style={{
+            padding: "10px 16px",
+            borderTop: "1px solid var(--border-hair)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            fontSize: 12,
+            color: "var(--text-muted)",
+          }}
+        >
+          <span className="mono">
+            Page {page} of {totalPages} ({totalCount} total{pagedDevices ? " · server-paginated" : ""})
+          </span>
+          <div style={{ display: "flex", gap: 6 }}>
+            <Button size="sm" disabled={page <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))}>
+              Prev
+            </Button>
+            <Button
+              size="sm"
+              disabled={page >= totalPages}
+              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+            >
+              Next
+            </Button>
+          </div>
+        </div>
       </SurfaceCard>
+
+      {/* Save Filter Modal */}
+      <Modal
+        open={saveFilterOpen}
+        title="Save Fleet Filter"
+        onClose={() => setSaveFilterOpen(false)}
+        maxWidth={400}
+      >
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>
+            Saves current search (<span className="mono">{query || "any"}</span>), OS (
+            <span className="mono">{osFilter}</span>), group (<span className="mono">{groupFilter}</span>), and status (
+            <span className="mono">{statusFilter}</span>).
+          </div>
+          <input
+            type="text"
+            className="field"
+            placeholder="Filter name (e.g. Prod Windows Online)"
+            value={filterName}
+            onChange={(e) => setFilterName(e.target.value)}
+          />
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+            <Button variant="ghost" onClick={() => setSaveFilterOpen(false)}>
+              Cancel
+            </Button>
+            <Button variant="primary" disabled={!filterName.trim()} onClick={handleSaveCurrentFilter}>
+              Save Filter
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Bulk-Action Safeguard Confirmation Modal */}
+      <Modal
+        open={Boolean(bulkAction)}
+        title={bulkAction === "revoke" ? "Confirm Bulk Node Revocation" : "Confirm Bulk Telemetry Refresh"}
+        onClose={() => setBulkAction(null)}
+        maxWidth={460}
+      >
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          <StateBanner
+            kind={bulkAction === "revoke" ? "denied" : "degraded"}
+            title={`Blast radius: ${selectedDevicesList.length} endpoint${selectedDevicesList.length === 1 ? "" : "s"}`}
+            detail={
+              bulkAction === "revoke"
+                ? "Revoking device tokens immediately disconnects these agents and blocks further task execution until re-enrolled."
+                : "Dispatches a diagnostic refresh (sysinfo, CPU/RAM, network) to every selected endpoint."
+            }
+          />
+          <div
+            className="terminal"
+            style={{ maxHeight: 160, overflowY: "auto", fontSize: 11.5 }}
+          >
+            {selectedDevicesList.map((d) => (
+              <div key={d.id}>
+                • {d.name} ({d.id}) · {d.os || "node"} · {d.revoked ? "revoked" : d.status}
+              </div>
+            ))}
+          </div>
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+            <Button variant="ghost" disabled={bulkBusy} onClick={() => setBulkAction(null)}>
+              Cancel
+            </Button>
+            <Button
+              variant={bulkAction === "revoke" ? "danger" : "primary"}
+              disabled={bulkBusy}
+              onClick={() => void executeBulkAction()}
+            >
+              {bulkBusy
+                ? "Executing..."
+                : bulkAction === "revoke"
+                  ? `Confirm Revoke (${selectedDevicesList.length})`
+                  : `Confirm Refresh (${selectedDevicesList.length})`}
+            </Button>
+          </div>
+        </div>
+      </Modal>
 
       {/* Multi-Step Enrollment Wizard Modal */}
       <Modal
@@ -608,6 +1014,58 @@ export function FleetView({
 
             {drawerTab === "policy" && (
               <div className="anim-enter" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                  <span style={{ fontSize: 12.5, fontWeight: 600 }}>Inheritance &amp; Override Breakdown</span>
+                  <StatusBadge
+                    status={selectedDevice.has_custom_policy ? "warn" : "ok"}
+                    label={selectedDevice.has_custom_policy ? "Custom Device Override" : "Inherits Global Policy"}
+                  />
+                </div>
+
+                <SurfaceCard style={{ overflow: "hidden" }}>
+                  <table className="saas-table" style={{ fontSize: 11.5 }}>
+                    <thead>
+                      <tr>
+                        <th>Rule</th>
+                        <th>Global</th>
+                        <th>Override</th>
+                        <th>Effective</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(
+                        [
+                          ["Tier 2 Writes", "allow_writes", polWrites],
+                          ["Tier 3 Actions", "allow_tier3", polTier3],
+                          ["Shell (run_shell)", "allow_shell", polShell],
+                          ["Desktop Control", "desktop_enabled", polDesktop],
+                        ] as const
+                      ).map(([label, key, draftVal]) => {
+                        const globalVal = globalPolicy ? Boolean(globalPolicy[key]) : undefined;
+                        const hasOverride = Boolean(
+                          selectedDevice.has_custom_policy &&
+                            selectedDevice.policy &&
+                            key in selectedDevice.policy,
+                        );
+                        const overrideVal = hasOverride ? Boolean(selectedDevice.policy?.[key]) : null;
+                        const effectiveVal = hasOverride ? Boolean(overrideVal) : Boolean(globalVal ?? draftVal);
+                        return (
+                          <tr key={key}>
+                            <td>{label}</td>
+                            <td className="mono">{globalVal === undefined ? "—" : globalVal ? "ON" : "OFF"}</td>
+                            <td className="mono" style={{ color: hasOverride ? "var(--amber)" : "var(--text-muted)" }}>
+                              {hasOverride ? (overrideVal ? "ON" : "OFF") : "inherit"}
+                            </td>
+                            <td className="mono" style={{ fontWeight: 600 }}>
+                              {effectiveVal ? "ALLOW" : "DENY"}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </SurfaceCard>
+
                 <Toggle checked={polWrites} onChange={setPolWrites} label="Allow Tier 2 File Writes" />
                 <Toggle checked={polTier3} onChange={setPolTier3} label="Allow Tier 3 Unattended" />
                 <Toggle checked={polShell} onChange={setPolShell} label="Allow Shell Execution (run_shell)" />

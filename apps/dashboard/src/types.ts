@@ -267,6 +267,7 @@ export interface ApprovalRecord {
   reason?: string | null;
   args_json?: string;
   created_at?: number;
+  decided_at?: number | null;
   expires_at?: number | null;
 }
 

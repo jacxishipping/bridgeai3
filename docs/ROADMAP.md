@@ -71,15 +71,15 @@ AI Bridge should become a trustworthy, policy-governed way for authorised AI cli
 
 ## Release 3 — polish
 
-| Area | Work |
-|---|---|
-| Dashboard truthfulness | Keep demo and live data unmistakably separate; never show invented verification/provider/audit values as production state. Add empty, offline, denied, and degraded states to every view. |
-| Fleet navigation | Add cursor/server-side pagination, saved filters, bulk-action safeguards, device groups, and clear policy inheritance/override explanations. |
-| Task experience | Add templates, dry-run/preflight display, redacted result summaries, guarded retry/re-run, ownership, and approval-to-audit timelines. |
-| Approvals/policies | Show the exact rule, tier, arguments, device context, expiry, blast radius, diff, and simulation result before a policy is published. |
-| Desktop UX | Add connection/permission indicators, keyboard accessibility, monitor clarity, recording consent/status, and interruption recovery. Never imply control for view-only sessions. |
-| Docs and localisation | Generate API/environment references; maintain one support matrix; publish operator runbooks; extract remaining strings, validate RTL, and complete keyboard/focus/contrast review. |
-| Code health | Continue splitting high-churn modules, remove duplicated task/audit paths, standardise validation/errors, and protect public contracts with architecture tests. |
+| Area | Work | Status |
+|---|---|---|
+| Dashboard truthfulness | Keep demo and live data unmistakably separate; never show invented verification/provider/audit values as production state. Add empty, offline, denied, and degraded states to every view. | **Shipped & verified** (removed fabricated fallback sparkline `[4,6,5,8,7,9,6]` in `ui.tsx`, removed synthetic CPU/RAM baselines in `OverviewView.tsx`, removed invented default tags in `FleetView.tsx`, added shared `StateBanner` for `empty`/`offline`/`denied`/`degraded` states and live control-plane disconnect banner in `App.tsx`) |
+| Fleet navigation | Add cursor/server-side pagination, saved filters, bulk-action safeguards, device groups, and clear policy inheritance/override explanations. | **Shipped & verified** (server-side pagination & filtering on `GET /api/devices` & `GET /api/tasks` with `X-Total-Count` + CORS exposure, `localStorage` saved filters, group/status pills, bulk-action blast-radius confirmation modal, and Global vs. Override vs. Effective policy inheritance matrix in `FleetView.tsx`) |
+| Task experience | Add templates, dry-run/preflight display, redacted result summaries, guarded retry/re-run, ownership, and approval-to-audit timelines. | **Shipped & verified** (Tier 1 diagnostic task templates + live `simulatePolicy` dry-run preflight in Dispatch Modal, task ownership display, secret redaction summary badge, Tier 3+ guarded re-run confirmation, and inline Approval-to-Audit trace timeline in `TasksView.tsx`) |
+| Approvals/policies | Show the exact rule, tier, arguments, device context, expiry, blast radius, diff, and simulation result before a policy is published. | **Shipped & verified** (enriched pending approval cards with tier, rule/reason, device context, expiry countdown, blast radius, and exact args; added Pre-Publish Review modal with field-by-field diff, inheriting device blast radius, and multi-tool dry-run simulations in `SecurityView.tsx`) |
+| Desktop UX | Add connection/permission indicators, keyboard accessibility, monitor clarity, recording consent/status, and interruption recovery. Never imply control for view-only sessions. | **Shipped & verified** (explicit connection + permission badges, active display resolution clarity, operator presence/audit consent banner, Escape-key instant disarm, automatic interruption retry banner, policy/offline locking, and complete removal of keyboard input controls in view-only mode in `DesktopView.tsx`) |
+| Docs and localisation | Generate API/environment references; maintain one support matrix; publish operator runbooks; extract remaining strings, validate RTL, and complete keyboard/focus/contrast review. | **Shipped & verified** (`scripts/generate_env_reference.py` → `docs/environment-reference.md`, `scripts/generate_api_reference.py` → `docs/api-reference.md`, canonical `docs/support-matrix.md`, `docs/runbooks.md`, `apps/dashboard/src/i18n.ts` LTR/RTL `en`/`ar` toggle, `role="dialog"`/`aria-modal`, `:focus-visible`, `[dir="rtl"]` logical CSS, and `prefers-reduced-motion`) |
+| Code health | Continue splitting high-churn modules, remove duplicated task/audit paths, standardise validation/errors, and protect public contracts with architecture tests. | **Shipped & verified** (architecture & contract guardrails in `tests/unit/test_release3_polish.py`, `test_api_reference.py`, `test_architecture_phase4*.py`, `test_schema_parity.py`) |
 
 ## Release 4 — features to add
 

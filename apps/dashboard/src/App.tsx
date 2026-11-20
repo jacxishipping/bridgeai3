@@ -37,9 +37,17 @@ import {
   DropdownMenu,
   Modal,
   SkeletonCard,
+  StateBanner,
   StatusBadge,
   ToastBanner,
 } from "./components/ui";
+import {
+  applyLocaleDocument,
+  loadStoredLocale,
+  saveStoredLocale,
+  t,
+  type Locale,
+} from "./i18n";
 import { SignInView } from "./views/SignInView";
 import { OverviewView } from "./views/OverviewView";
 import { FleetView } from "./views/FleetView";
@@ -77,6 +85,7 @@ export default function App() {
     const saved = localStorage.getItem("aibridge.theme");
     return saved === "light" ? "light" : "dark";
   });
+  const [locale, setLocale] = useState<Locale>(() => loadStoredLocale());
   const [session, setSession] = useState<AuthSession | null>(() => loadStoredSession());
   const api = useMemo(() => new ApiClient(session), [session]);
 
@@ -91,6 +100,7 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [refreshSpin, setRefreshSpin] = useState(false);
   const [latencyMs, setLatencyMs] = useState<number | null>(null);
+  const [pollError, setPollError] = useState<string | null>(null);
   const [emergencyStop, setEmergencyStop] = useState(false);
   const [devices, setDevices] = useState<DeviceRecord[]>([]);
   const [tasks, setTasks] = useState<TaskRecord[]>([]);
@@ -110,6 +120,11 @@ export default function App() {
     document.documentElement.setAttribute("data-theme", theme);
     localStorage.setItem("aibridge.theme", theme);
   }, [theme]);
+
+  useEffect(() => {
+    applyLocaleDocument(locale);
+    saveStoredLocale(locale);
+  }, [locale]);
 
   const toggleTheme = useCallback(() => {
     setTheme((prev) => {
@@ -135,6 +150,7 @@ export default function App() {
             api.getFleetTelemetry().catch(() => null),
           ]);
         setLatencyMs(healthRes.latencyMs);
+        setPollError(null);
         setEmergencyStop(Boolean(healthRes.data.emergency_stop));
         setDevices(devList);
         setTasks(taskList);
@@ -148,6 +164,7 @@ export default function App() {
           setSession(null);
           showToast("Session expired — please sign in again");
         } else {
+          setPollError(msg);
           showToast(msg);
         }
       } finally {
@@ -273,7 +290,7 @@ export default function App() {
         <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 14 }}>
           {groups.map((grp) => (
             <div key={grp}>
-              <div className="nav-group-label">{grp}</div>
+              <div className="nav-group-label">{t(locale, `nav.group.${grp}`, grp)}</div>
               <nav style={{ display: "flex", flexDirection: "column", gap: 2 }}>
                 {NAV_ITEMS.filter((n) => n.group === grp).map((item) => {
                   const Icon = item.icon;
@@ -289,12 +306,12 @@ export default function App() {
                       }}
                     >
                       <Icon size={15} />
-                      <span>{item.label}</span>
+                      <span>{t(locale, `nav.${item.id}`, item.label)}</span>
                       {item.id === "security" && pendingCount > 0 && (
                         <span
                           className="mono"
                           style={{
-                            marginLeft: "auto",
+                            marginInlineStart: "auto",
                             fontSize: 10.5,
                             padding: "1px 6px",
                             borderRadius: 999,
@@ -329,19 +346,23 @@ export default function App() {
               marginBottom: 4,
             }}
           >
-            <span style={{ fontSize: 11, color: "var(--text-secondary)" }}>Control Link</span>
+            <span style={{ fontSize: 11, color: "var(--text-secondary)" }}>
+              {t(locale, "status.controlLink")}
+            </span>
             <span className="mono" style={{ fontSize: 11, color: "var(--text-muted)" }}>
               {latencyMs !== null ? `${latencyMs} ms` : "—"}
             </span>
           </div>
           <StatusBadge
-            status={emergencyStop ? "err" : latencyMs !== null ? "ok" : "warn"}
+            status={emergencyStop ? "err" : pollError ? "err" : latencyMs !== null ? "ok" : "warn"}
             label={
               emergencyStop
-                ? "Lockdown Active"
-                : latencyMs !== null
-                  ? "Connected"
-                  : "Connecting"
+                ? t(locale, "status.lockdown")
+                : pollError
+                  ? t(locale, "status.degraded")
+                  : latencyMs !== null
+                    ? t(locale, "status.connected")
+                    : t(locale, "status.connecting")
             }
           />
         </div>
@@ -453,6 +474,20 @@ export default function App() {
         </header>
 
         <main className="main-content">
+          {pollError && (
+            <div style={{ marginBottom: 16 }}>
+              <StateBanner
+                kind="offline"
+                title={t(locale, "state.offlineTitle")}
+                detail={`${t(locale, "state.offlineDetail")} (${pollError})`}
+                action={
+                  <Button size="sm" onClick={() => void refreshAll(false)}>
+                    Retry now
+                  </Button>
+                }
+              />
+            </div>
+          )}
           {loading ? (
             <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
               <SkeletonCard lines={2} />
@@ -509,6 +544,7 @@ export default function App() {
               api={api}
               approvals={approvals}
               audit={audit}
+              devices={devices}
               onRefresh={() => refreshAll(false)}
               onToast={showToast}
             />
@@ -526,8 +562,13 @@ export default function App() {
               api={api}
               session={session}
               theme={theme}
+              locale={locale}
               emergencyStop={emergencyStop}
               onToggleTheme={toggleTheme}
+              onLocaleChange={(next) => {
+                setLocale(next);
+                showToast(next === "ar" ? "Switched to Arabic (RTL)" : "Switched to English (LTR)");
+              }}
               onEmergencyStopChange={async (next) => {
                 const res = await api.setEmergencyStop(next);
                 setEmergencyStop(res.emergency_stop);

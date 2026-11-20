@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import { Activity, Cpu, HardDrive, Monitor, Terminal } from "lucide-react";
 import type {
   AuditRecord,
@@ -9,8 +9,8 @@ import type {
 } from "../types";
 import {
   Button,
-  Chip,
   Sparkline,
+  StateBanner,
   StatusBadge,
   SurfaceCard,
   TimelineFeed,
@@ -35,8 +35,6 @@ export function OverviewView({
   onNavigate: (sec: NavSection) => void;
   onInspectDevice: (device: DeviceRecord) => void;
 }) {
-  const [windowRange, setWindowRange] = useState<"15m" | "1h" | "24h" | "7d">("1h");
-
   const onlineDevices = devices.filter((d) => d.status === "online" && !d.revoked).length;
   const pendingOrRunning = tasks.filter(
     (t) => t.status === "queued" || t.status === "running" || t.status === "needs_approval",
@@ -46,32 +44,28 @@ export function OverviewView({
   const avgCpu = telemetry?.avg_cpu_percent;
   const avgMem = telemetry?.avg_memory_percent;
 
+  // Release 3 truthfulness: only plot real per-device telemetry readings — never invent placeholder curves.
   const cpuSeries = useMemo(() => {
-    const base = typeof avgCpu === "number" ? avgCpu : 14;
-    const offset = windowRange === "15m" ? 0 : windowRange === "1h" ? 3 : windowRange === "24h" ? 6 : 8;
-    return [
-      Math.max(2, base - 5 + offset),
-      Math.max(2, base - 2),
-      Math.min(98, base + 7 - offset * 0.4),
-      Math.max(2, base - 3),
-      Math.min(98, base + 4),
-      Math.max(2, base - 1),
-      base,
-    ];
-  }, [avgCpu, windowRange]);
+    const samples = (telemetry?.devices ?? [])
+      .map((d) => d.telemetry?.cpu_percent)
+      .filter((v): v is number => typeof v === "number" && Number.isFinite(v));
+    return samples;
+  }, [telemetry]);
 
   const memSeries = useMemo(() => {
-    const base = typeof avgMem === "number" ? avgMem : 42;
-    return [
-      Math.max(5, base - 4),
-      Math.max(5, base - 2),
-      Math.min(98, base + 1),
-      Math.max(5, base - 1),
-      Math.min(98, base + 2),
-      base,
-      Math.min(98, base + 1),
-    ];
-  }, [avgMem]);
+    const samples = (telemetry?.devices ?? [])
+      .map((d) => d.telemetry?.memory_percent)
+      .filter((v): v is number => typeof v === "number" && Number.isFinite(v));
+    return samples;
+  }, [telemetry]);
+
+  const reportingNodes = useMemo(
+    () =>
+      (telemetry?.devices ?? []).filter(
+        (d) => typeof d.telemetry?.cpu_percent === "number" || typeof d.telemetry?.memory_percent === "number",
+      ).length,
+    [telemetry],
+  );
 
   const timelineItems = audit.slice(0, 5).map((a) => ({
     id: a.id,
@@ -107,23 +101,30 @@ export function OverviewView({
           </p>
         </div>
 
-        <div
-          style={{
-            display: "inline-flex",
-            padding: 3,
-            borderRadius: 8,
-            gap: 2,
-            background: "var(--bg-input)",
-            border: "1px solid var(--border-hair)",
-          }}
-        >
-          {(["15m", "1h", "24h", "7d"] as const).map((w) => (
-            <Chip key={w} active={windowRange === w} onClick={() => setWindowRange(w)}>
-              {w}
-            </Chip>
-          ))}
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <StatusBadge
+            status={reportingNodes > 0 ? "ok" : "muted"}
+            label={
+              reportingNodes > 0
+                ? `Live telemetry · ${reportingNodes} node${reportingNodes === 1 ? "" : "s"}`
+                : "No live telemetry yet"
+            }
+          />
         </div>
       </div>
+
+      {devices.length === 0 && (
+        <StateBanner
+          kind="empty"
+          title="No endpoints enrolled yet"
+          detail="Live fleet telemetry and task execution appear here once you enroll at least one Windows, Linux, or macOS agent."
+          action={
+            <Button size="sm" variant="primary" onClick={() => onNavigate("devices")}>
+              Enroll First Node
+            </Button>
+          }
+        />
+      )}
 
       {/* KPI Row */}
       <div className="kpi-grid">
@@ -236,13 +237,17 @@ export function OverviewView({
                 color: "var(--text-secondary)",
               }}
             >
-              <Cpu size={14} /> Fleet Average CPU ({windowRange})
+              <Cpu size={14} /> Fleet CPU Across Reporting Nodes
             </span>
             <span className="mono status-ok" style={{ fontSize: 12.5, fontWeight: 600 }}>
-              {typeof avgCpu === "number" ? `${avgCpu.toFixed(1)}%` : "No telemetry"}
+              {typeof avgCpu === "number" ? `${avgCpu.toFixed(1)}% avg` : "No telemetry"}
             </span>
           </div>
-          <Sparkline values={cpuSeries} stroke="#6366F1" />
+          <Sparkline
+            values={cpuSeries}
+            stroke="#6366F1"
+            emptyLabel="Requires ≥2 nodes reporting CPU telemetry"
+          />
         </SurfaceCard>
 
         <SurfaceCard lift style={{ padding: 18 }}>
@@ -264,13 +269,17 @@ export function OverviewView({
                 color: "var(--text-secondary)",
               }}
             >
-              <HardDrive size={14} /> Fleet Memory Utilization ({windowRange})
+              <HardDrive size={14} /> Fleet Memory Across Reporting Nodes
             </span>
             <span className="mono" style={{ fontSize: 12.5, fontWeight: 600, color: "var(--emerald)" }}>
-              {typeof avgMem === "number" ? `${avgMem.toFixed(1)}%` : "No telemetry"}
+              {typeof avgMem === "number" ? `${avgMem.toFixed(1)}% avg` : "No telemetry"}
             </span>
           </div>
-          <Sparkline values={memSeries} stroke="#10B981" />
+          <Sparkline
+            values={memSeries}
+            stroke="#10B981"
+            emptyLabel="Requires ≥2 nodes reporting memory telemetry"
+          />
         </SurfaceCard>
       </div>
 

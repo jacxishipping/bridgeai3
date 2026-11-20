@@ -183,25 +183,54 @@ export function Sparkline({
   values,
   stroke = "#6366F1",
   height = 44,
+  emptyLabel = "No telemetry samples yet",
 }: {
   values: number[];
   stroke?: string;
   height?: number;
+  emptyLabel?: string;
 }) {
-  const safe = values.length >= 2 ? values : [4, 6, 5, 8, 7, 9, 6];
-  const max = Math.max(100, ...safe);
-  const min = Math.min(0, ...safe);
+  const gradId = useId();
+  const valid = values.filter((v) => Number.isFinite(v));
+  if (valid.length < 2) {
+    return (
+      <div
+        role="status"
+        style={{
+          height,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          padding: "0 10px",
+          borderRadius: 8,
+          border: "1px dashed var(--border-hair)",
+          background: "var(--bg-elevated)",
+          fontSize: 11.5,
+          color: "var(--text-muted)",
+        }}
+      >
+        <span>{emptyLabel}</span>
+        {valid.length === 1 && (
+          <span className="mono" style={{ color: "var(--text-secondary)", fontWeight: 600 }}>
+            Latest: {valid[0].toFixed(1)}%
+          </span>
+        )}
+      </div>
+    );
+  }
+
+  const max = Math.max(100, ...valid);
+  const min = Math.min(0, ...valid);
   const range = Math.max(1, max - min);
   const w = 360;
   const h = height;
 
-  const points = safe.map((v, idx) => {
-    const x = (idx / (safe.length - 1)) * w;
+  const points = valid.map((v, idx) => {
+    const x = (idx / (valid.length - 1)) * w;
     const y = h - 4 - ((v - min) / range) * (h - 8);
     return `${x.toFixed(1)},${y.toFixed(1)}`;
   });
   const d = `M ${points.join(" L ")}`;
-  const gradId = useId();
 
   return (
     <svg viewBox={`0 0 ${w} ${h}`} style={{ width: "100%", height, display: "block" }}>
@@ -223,6 +252,83 @@ export function Sparkline({
         strokeLinejoin="round"
       />
     </svg>
+  );
+}
+
+export function StateBanner({
+  kind,
+  title,
+  detail,
+  action,
+}: {
+  kind: "empty" | "offline" | "denied" | "degraded";
+  title: string;
+  detail: string;
+  action?: React.ReactNode;
+}) {
+  const palette: Record<typeof kind, { border: string; bg: string; accent: string; badge: string }> = {
+    empty: {
+      border: "var(--border-hair)",
+      bg: "var(--bg-elevated)",
+      accent: "var(--text-secondary)",
+      badge: "EMPTY",
+    },
+    offline: {
+      border: "rgba(239, 68, 68, 0.35)",
+      bg: "rgba(239, 68, 68, 0.08)",
+      accent: "var(--rose)",
+      badge: "OFFLINE",
+    },
+    denied: {
+      border: "rgba(245, 158, 11, 0.4)",
+      bg: "rgba(245, 158, 11, 0.08)",
+      accent: "var(--amber)",
+      badge: "DENIED",
+    },
+    degraded: {
+      border: "rgba(245, 158, 11, 0.4)",
+      bg: "rgba(245, 158, 11, 0.08)",
+      accent: "var(--amber)",
+      badge: "DEGRADED",
+    },
+  };
+  const p = palette[kind];
+  return (
+    <div
+      role={kind === "offline" || kind === "denied" ? "alert" : "status"}
+      className="state-banner"
+      style={{
+        padding: "12px 14px",
+        borderRadius: 10,
+        border: `1px solid ${p.border}`,
+        background: p.bg,
+        display: "flex",
+        flexWrap: "wrap",
+        alignItems: "center",
+        justifyContent: "space-between",
+        gap: 10,
+      }}
+    >
+      <div style={{ display: "flex", flexDirection: "column", gap: 3, minWidth: 0 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, fontWeight: 600 }}>
+          <span
+            className="mono"
+            style={{
+              fontSize: 10,
+              padding: "1px 6px",
+              borderRadius: 4,
+              border: `1px solid ${p.border}`,
+              color: p.accent,
+            }}
+          >
+            {p.badge}
+          </span>
+          <span>{title}</span>
+        </div>
+        <div style={{ fontSize: 12, color: "var(--text-secondary)", lineHeight: 1.45 }}>{detail}</div>
+      </div>
+      {action && <div style={{ flexShrink: 0 }}>{action}</div>}
+    </div>
   );
 }
 
@@ -507,6 +613,9 @@ export function SlideOverDrawer({
       }}
     >
       <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
         className="surface drawer-panel"
         style={{
           width: "min(440px, 100vw)",
@@ -596,7 +705,13 @@ export function Modal({
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div className="surface modal-card" style={{ width: "100%", maxWidth, padding: 20 }}>
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        className="surface modal-card"
+        style={{ width: "100%", maxWidth, padding: 20 }}
+      >
         <div
           style={{
             display: "flex",
@@ -638,6 +753,8 @@ export function ToastBanner({ message }: { message: string | null }) {
   if (!message) return null;
   return createPortal(
     <div
+      role="status"
+      aria-live="polite"
       className="surface modal-card"
       style={{
         position: "fixed",

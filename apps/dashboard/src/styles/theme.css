@@ -698,3 +698,47 @@ table.saas-table tbody tr:hover {
     display: none;
   }
 }
+
+/* Keyboard Accessibility & Focus Rings (Release 3) */
+.btn:focus-visible,
+.chip:focus-visible,
+.nav-item:focus-visible,
+.tab-underline:focus-visible,
+.field:focus-visible,
+a:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* RTL Logical Adjustments (Release 3) */
+[dir="rtl"] .sidebar {
+  border-right: 0;
+  border-inline-end: 1px solid var(--border-hair);
+}
+
+[dir="rtl"] .nav-item:hover {
+  transform: translateX(-2px);
+}
+
+[dir="rtl"] .saas-table th,
+[dir="rtl"] .saas-table td {
+  text-align: start;
+}
+
+[dir="rtl"] .drawer-panel {
+  border-right: 1px solid var(--border-hair);
+  border-left: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

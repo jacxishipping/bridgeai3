@@ -273,6 +273,34 @@ export class ApiClient {
     return this.request<DeviceRecord[]>("/api/devices");
   }
 
+  async listDevicesPaged(params?: {
+    limit?: number;
+    offset?: number;
+    group?: string;
+    os?: string;
+    status?: string;
+    q?: string;
+  }): Promise<{ items: DeviceRecord[]; total: number }> {
+    const qs = new URLSearchParams();
+    if (params?.limit != null) qs.set("limit", String(params.limit));
+    if (params?.offset != null && params.offset > 0) qs.set("offset", String(params.offset));
+    if (params?.group) qs.set("group", params.group);
+    if (params?.os && params.os !== "all") qs.set("os", params.os);
+    if (params?.status && params.status !== "all") qs.set("status", params.status);
+    if (params?.q?.trim()) qs.set("q", params.q.trim());
+    const suffix = qs.toString() ? `?${qs.toString()}` : "";
+    const res = await fetch(this.resolveUrl(`/api/devices${suffix}`), {
+      headers: { ...this.authHeaders() },
+    });
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status}`);
+    }
+    const items = (await res.json()) as DeviceRecord[];
+    const totalHeader = res.headers.get("X-Total-Count");
+    const total = totalHeader !== null ? Number(totalHeader) || items.length : items.length;
+    return { items, total };
+  }
+
   async enrollDevice(payload: {
     name: string;
     hostname: string;
@@ -341,6 +369,34 @@ export class ApiClient {
   async listTasks(deviceId?: string): Promise<TaskRecord[]> {
     const q = deviceId ? `?device_id=${encodeURIComponent(deviceId)}` : "";
     return this.request<TaskRecord[]>(`/api/tasks${q}`);
+  }
+
+  async listTasksPaged(params?: {
+    deviceId?: string;
+    status?: string;
+    limit?: number;
+    offset?: number;
+  }): Promise<{ items: TaskRecord[]; total: number }> {
+    const qs = new URLSearchParams();
+    if (params?.deviceId) qs.set("device_id", params.deviceId);
+    if (params?.status && params.status !== "all") qs.set("status", params.status);
+    if (params?.limit != null) qs.set("limit", String(params.limit));
+    if (params?.offset != null && params.offset > 0) qs.set("offset", String(params.offset));
+    const suffix = qs.toString() ? `?${qs.toString()}` : "";
+    const res = await fetch(this.resolveUrl(`/api/tasks${suffix}`), {
+      headers: { ...this.authHeaders() },
+    });
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status}`);
+    }
+    const items = (await res.json()) as TaskRecord[];
+    const totalHeader = res.headers.get("X-Total-Count");
+    const total = totalHeader !== null ? Number(totalHeader) || items.length : items.length;
+    return { items, total };
+  }
+
+  async getTaskEvents(taskId: string): Promise<Array<{ id: string; event: string; detail?: Record<string, unknown>; detail_json?: string; created_at: number; trace_id?: string }>> {
+    return this.request(`/api/tasks/${encodeURIComponent(taskId)}/events`);
   }
 
   async getTask(taskId: string): Promise<TaskRecord> {

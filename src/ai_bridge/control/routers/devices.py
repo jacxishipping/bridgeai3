@@ -13,7 +13,7 @@ import secrets
 import time
 import uuid
 
-from fastapi import APIRouter, Body, Header, HTTPException
+from fastapi import APIRouter, Body, Header, HTTPException, Response
 
 from ...policy import TOOL_TIERS
 from .. import db as dbmod
@@ -109,24 +109,77 @@ def create_devices_router(ctx: ControlContext) -> APIRouter:
             "note": "Store the device token securely; it will not be shown again. It expires and must be rotated.",
         }
 
-    @router.get("/api/devices", summary="List devices", description="Lists all devices in the fleet with their status, metadata, and live telemetry.")
-    def list_devices(x_admin_token: str | None = Header(default=None), x_session_token: str | None = Header(default=None), tenant: str | None = None):
+    @router.get(
+        "/api/devices",
+        summary="List devices",
+        description="Lists devices in the fleet with optional server-side filtering, pagination (limit/offset + X-Total-Count), metadata, and live telemetry.",
+    )
+    def list_devices(
+        response: Response,
+        x_admin_token: str | None = Header(default=None),
+        x_session_token: str | None = Header(default=None),
+        tenant: str | None = None,
+        limit: int | None = None,
+        offset: int = 0,
+        group: str | None = None,
+        os: str | None = None,
+        status: str | None = None,
+        q: str | None = None,
+    ):
         tenant = resolve_request_tenant(tenant, x_admin_token, x_session_token)
         require_role("viewer", x_admin_token, x_session_token)
         rows = conn.execute(
             "SELECT d.id, d.name, d.hostname, d.os, d.tenant, d.status, d.last_seen, d.revoked, d.created_at, "
             "d.token_expires_at, d.policy_json, m.group_name, m.tags_json FROM devices d "
-            "LEFT JOIN device_metadata m ON m.device_id=d.id WHERE d.tenant=?",
+            "LEFT JOIN device_metadata m ON m.device_id=d.id WHERE d.tenant=? ORDER BY d.created_at DESC, d.name ASC",
             (tenant,),
         ).fetchall()
         result = []
-        # Wave 6A (W5E-01): one batched live-meta lookup for the whole
-        # fleet instead of up to 2 task-history queries per device.
-        live_metas = _get_devices_live_meta([r["id"] for r in rows])
+        group_q = (group or "").strip().lower()
+        os_q = (os or "").strip().lower()
+        status_q = (status or "").strip().lower()
+        search_q = (q or "").strip().lower()
+
+        filtered_rows = []
         for r in rows:
             d = dict(r)
             d["group"] = d.pop("group_name", None) or ""
             d["tags"] = json.loads(d.pop("tags_json", None) or "[]")
+            if group_q and d["group"].lower() != group_q:
+                continue
+            if os_q and os_q not in (d.get("os") or "").lower():
+                continue
+            if status_q:
+                effective_status = "revoked" if d.get("revoked") else (d.get("status") or "offline").lower()
+                if effective_status != status_q:
+                    continue
+            if search_q:
+                haystack = " ".join([
+                    str(d.get("id") or ""),
+                    str(d.get("name") or ""),
+                    str(d.get("hostname") or ""),
+                    str(d.get("group") or ""),
+                    " ".join(str(t) for t in d.get("tags") or []),
+                ]).lower()
+                if search_q not in haystack:
+                    continue
+            filtered_rows.append(d)
+
+        total = len(filtered_rows)
+        response.headers["X-Total-Count"] = str(total)
+        safe_offset = max(0, int(offset or 0))
+        if limit is not None:
+            safe_limit = max(1, min(500, int(limit)))
+            page_rows = filtered_rows[safe_offset : safe_offset + safe_limit]
+        elif safe_offset > 0:
+            page_rows = filtered_rows[safe_offset:]
+        else:
+            page_rows = filtered_rows
+
+        # Wave 6A (W5E-01): one batched live-meta lookup for the returned page
+        # instead of up to 2 task-history queries per device.
+        live_metas = _get_devices_live_meta([d["id"] for d in page_rows])
+        for d in page_rows:
             raw_p = d.get("policy_json") or "{}"
             try:
                 parsed_p = json.loads(raw_p) if isinstance(raw_p, str) else (raw_p or {})

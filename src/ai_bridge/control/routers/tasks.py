@@ -13,7 +13,7 @@ import json
 import threading
 import time
 
-from fastapi import APIRouter, Header, HTTPException, Request
+from fastapi import APIRouter, Header, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse
 
 from ...policy import TOOL_TIERS
@@ -88,13 +88,40 @@ def create_tasks_router(ctx: ControlContext) -> APIRouter:
         return created
 
     @router.get("/api/tasks")
-    def list_tasks(x_admin_token: str | None = Header(default=None), x_session_token: str | None = Header(default=None), tenant: str | None = None, device_id: str | None = None):
+    def list_tasks(
+        response: Response,
+        x_admin_token: str | None = Header(default=None),
+        x_session_token: str | None = Header(default=None),
+        tenant: str | None = None,
+        device_id: str | None = None,
+        status: str | None = None,
+        limit: int = 200,
+        offset: int = 0,
+    ):
         require_role("viewer", x_admin_token, x_session_token)
         tenant = resolve_request_tenant(tenant, x_admin_token, x_session_token)
+        count_sql = "SELECT COUNT(*) FROM tasks WHERE tenant=?"
+        count_params: list[object] = [tenant]
+        if device_id:
+            count_sql += " AND device_id=?"
+            count_params.append(device_id)
+        if status:
+            count_sql += " AND status=?"
+            count_params.append(status)
+        total_row = conn.execute(count_sql, tuple(count_params)).fetchone()
+        total = int(total_row[0]) if total_row else 0
+        response.headers["X-Total-Count"] = str(total)
         # PERF-03: projected columns only — the returned dicts have no
         # "result" key, so a 200-row list can no longer return multi-MB
         # screenshot payloads. Same tenant/device filtering as before.
-        return dbmod.list_tasks_projected(conn, tenant=tenant, device_id=device_id, limit=200)
+        return dbmod.list_tasks_projected(
+            conn,
+            tenant=tenant,
+            device_id=device_id,
+            status=status,
+            limit=limit,
+            offset=offset,
+        )
 
     @router.get("/api/tasks/dead-letter")
     def list_dead_letter_tasks(

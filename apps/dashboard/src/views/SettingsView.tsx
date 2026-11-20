@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
-import { AlertOctagon, Bell, Database, Moon, Plus, Sun, Users } from "lucide-react";
+import { AlertOctagon, Bell, Database, Globe, Moon, Plus, Sun, Users } from "lucide-react";
 import type { ApiClient } from "../api";
+import type { Locale } from "../i18n";
 import type {
   AlertConfigState,
   AlertDelivery,
@@ -16,8 +17,10 @@ export function SettingsView({
   api,
   session,
   theme,
+  locale,
   emergencyStop,
   onToggleTheme,
+  onLocaleChange,
   onEmergencyStopChange,
   onLogout,
   onToast,
@@ -25,8 +28,10 @@ export function SettingsView({
   api: ApiClient;
   session: AuthSession;
   theme: ThemeMode;
+  locale: Locale;
   emergencyStop: boolean;
   onToggleTheme: () => void;
+  onLocaleChange: (next: Locale) => void;
   onEmergencyStopChange: (next: boolean) => Promise<void>;
   onLogout: () => Promise<void>;
   onToast: (msg: string) => void;
@@ -120,6 +125,22 @@ export function SettingsView({
               {theme === "dark" ? <Sun size={13} /> : <Moon size={13} />}
               <span>Switch to {theme === "dark" ? "Light" : "Dark"}</span>
             </Button>
+          </div>
+
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12.5 }}>
+              <Globe size={13} /> Language &amp; Direction
+            </span>
+            <select
+              aria-label="Language and direction"
+              className="field mono"
+              style={{ width: 170 }}
+              value={locale}
+              onChange={(e) => onLocaleChange(e.target.value === "ar" ? "ar" : "en")}
+            >
+              <option value="en">English (LTR)</option>
+              <option value="ar">العربية (RTL)</option>
+            </select>
           </div>
 
           <div style={{ paddingTop: 6 }}>

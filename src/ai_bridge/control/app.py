@@ -943,7 +943,7 @@ def create_app(
             "X-Correlation-ID",
             "X-Request-ID",
         ],
-        expose_headers=["X-Correlation-ID"],
+        expose_headers=["X-Correlation-ID", "X-Total-Count"],
     )
     app.state.conn = conn
     app.state.admin_token = token
