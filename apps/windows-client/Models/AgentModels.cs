@@ -57,7 +57,7 @@ public sealed class AgentGuiConfig
 {
     // Control Plane settings
     [JsonPropertyName("control_url")]
-    public string ControlUrl { get; set; } = "http://127.0.0.1:8000";
+    public string ControlUrl { get; set; } = "https://ec2-77-114-76-12.us-east-2.compute.amazonaws.com";
 
     [JsonPropertyName("device_id")]
     public string DeviceId { get; set; } = Environment.MachineName.ToLowerInvariant();

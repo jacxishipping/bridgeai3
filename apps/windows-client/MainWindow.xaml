@@ -375,7 +375,7 @@
                                                             </Border>
                                                             <TextBlock Text="Endpoint &amp; Credential Controls" FontSize="13" FontWeight="Medium" Foreground="{DynamicResource TextPrimary}" VerticalAlignment="Center"/>
                                                         </StackPanel>
-                                                        <TextBlock x:Name="OverviewEndpointText" Text="https://www.jxiptvplayer.app" FontSize="12" FontFamily="Consolas" Foreground="{DynamicResource TextMuted}" TextTrimming="CharacterEllipsis" Margin="0,5,0,0"/>
+                                                        <TextBlock x:Name="OverviewEndpointText" Text="https://ec2-77-114-76-12.us-east-2.compute.amazonaws.com" FontSize="12" FontFamily="Consolas" Foreground="{DynamicResource TextMuted}" TextTrimming="CharacterEllipsis" Margin="0,5,0,0"/>
                                                     </StackPanel>
                                                     <WrapPanel Grid.Column="1" VerticalAlignment="Center">
                                                         <Button Content="Rotate Token" Style="{StaticResource BtnStyle}" Click="OnRotateTokenClick" Margin="0,2,8,2"/>

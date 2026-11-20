@@ -1,8 +1,11 @@
 using System;
 using System.Diagnostics;
 using System.Net;
+using System.Net.Security;
 using System.Net.Http;
 using System.Net.WebSockets;
+using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Text.Json;
 using System.Threading;
@@ -13,6 +16,11 @@ namespace AIBridgeClient.Services;
 
 public sealed class ControlPlaneClient : IDisposable
 {
+    private const string PinnedEc2Host = "ec2-77-114-76-12.us-east-2.compute.amazonaws.com";
+    // Pin the deployed self-signed certificate for this one EC2 host. Other
+    // hosts continue to use the normal Windows certificate trust chain.
+    private const string PinnedEc2CertificateSha256 = "170F31B0C1C9C96E004F0C44C806AEAE2A79749F7C70FCCC75065F1EC0141AB4";
+
     private readonly HttpClient _http;
     private readonly SystemMonitorService _monitor;
     private readonly NativeToolExecutor _executor;
@@ -39,8 +47,52 @@ public sealed class ControlPlaneClient : IDisposable
     {
         _monitor = monitor;
         _executor = executor;
-        _http = new HttpClient { Timeout = TimeSpan.FromSeconds(120) };
+        var handler = new HttpClientHandler
+        {
+            ServerCertificateCustomValidationCallback = ValidateServerCertificate,
+        };
+        _http = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(120) };
         _http.DefaultRequestHeaders.UserAgent.ParseAdd("AI-Bridge-Windows-CSharp-Client/0.3.0");
+    }
+
+    private static bool ValidateServerCertificate(
+        HttpRequestMessage request,
+        X509Certificate2? certificate,
+        X509Chain? chain,
+        SslPolicyErrors errors)
+    {
+        return IsServerCertificateTrusted(request.RequestUri, certificate, errors);
+    }
+
+    private static bool IsServerCertificateTrusted(
+        Uri? requestUri,
+        X509Certificate2? certificate,
+        SslPolicyErrors errors)
+    {
+        if (errors == SslPolicyErrors.None)
+        {
+            return true;
+        }
+
+        if (requestUri is null ||
+            !string.Equals(requestUri.Host, PinnedEc2Host, StringComparison.OrdinalIgnoreCase) ||
+            errors != SslPolicyErrors.RemoteCertificateChainErrors ||
+            certificate is null)
+        {
+            return false;
+        }
+
+        var now = DateTime.UtcNow;
+        return string.Equals(
+                   certificate.GetCertHashString(HashAlgorithmName.SHA256),
+                   PinnedEc2CertificateSha256,
+                   StringComparison.OrdinalIgnoreCase) &&
+               string.Equals(
+                   certificate.GetNameInfo(X509NameType.DnsName, forIssuer: false),
+                   PinnedEc2Host,
+                   StringComparison.OrdinalIgnoreCase) &&
+               now >= certificate.NotBefore.ToUniversalTime() &&
+               now <= certificate.NotAfter.ToUniversalTime();
     }
 
     public void SetPaused(bool paused)
@@ -497,6 +549,12 @@ public sealed class ControlPlaneClient : IDisposable
             {
                 using var ws = new ClientWebSocket();
                 ws.Options.SetRequestHeader("X-Device-Token", token);
+                ws.Options.RemoteCertificateValidationCallback = (_, certificate, _, errors) =>
+                {
+                    var cert2 = certificate as X509Certificate2 ??
+                        (certificate is null ? null : X509CertificateLoader.LoadCertificate(certificate.GetRawCertData()));
+                    return IsServerCertificateTrusted(new Uri(wsUrl), cert2, errors);
+                };
                 if (!string.IsNullOrWhiteSpace(config.TenantId))
                 {
                     ws.Options.SetRequestHeader("X-Tenant-ID", config.TenantId);
