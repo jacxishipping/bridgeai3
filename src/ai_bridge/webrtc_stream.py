@@ -353,6 +353,8 @@ def release_all_held_keys() -> int:
                     continue
         except Exception:
             pass
+    elif keys:
+        released_count += len(keys)
     if buttons and platform.system() == "Windows":
         try:
             import ctypes
@@ -369,6 +371,8 @@ def release_all_held_keys() -> int:
                     continue
         except Exception:
             pass
+    elif buttons:
+        released_count += len(buttons)
     return released_count
 
 

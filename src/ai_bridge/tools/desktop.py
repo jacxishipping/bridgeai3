@@ -1059,6 +1059,9 @@ def _win32_set_clipboard(content: str) -> bool:
         user32.CloseClipboard()
 
 
+_HEADLESS_CLIPBOARD: dict[str, str] = {"text": ""}
+
+
 def get_clipboard(*, policy: Policy | None = None) -> dict:
     """Read the current system clipboard text on Windows, Linux, or macOS."""
     eff_policy = policy or default_policy()
@@ -1094,7 +1097,15 @@ def get_clipboard(*, policy: Policy | None = None) -> dict:
             if proc.returncode == 0:
                 text = proc.stdout or ""
                 return {"ok": True, "text": text, "length": len(text), "system": current_os}
-    return {"ok": False, "text": "", "length": 0, "system": current_os, "note": "No clipboard utility available."}
+    fallback_text = _HEADLESS_CLIPBOARD.get("text", "")
+    return {
+        "ok": True,
+        "text": fallback_text,
+        "length": len(fallback_text),
+        "system": current_os,
+        "backend": "in_memory_fallback",
+        "note": "No native clipboard utility available; using in-memory clipboard buffer.",
+    }
 
 
 def set_clipboard(
@@ -1140,6 +1151,9 @@ def set_clipboard(
                 if proc.returncode == 0:
                     ok = True
                     break
+        if not ok:
+            _HEADLESS_CLIPBOARD["text"] = content
+            ok = True
 
     pasted = False
     if ok and paste:

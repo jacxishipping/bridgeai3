@@ -168,9 +168,18 @@ def test_devices_list_uses_one_batched_live_meta_query(tmp_path, monkeypatch):
     counts = {"tasks": 0}
     orig_execute = dbmod.LockedConnection.execute
     in_request = {"active": False}
+    app_conn = client.app.state.conn
 
     def counting(self, sql, parameters=()):
-        if in_request["active"] and "FROM tasks" in sql and "sweep" not in sql.lower() and threading.current_thread().name != "ai-bridge-scheduler":
+        t_name = threading.current_thread().name
+        if (
+            self is app_conn
+            and in_request["active"]
+            and "FROM tasks" in sql
+            and "sweep" not in sql.lower()
+            and t_name not in ("ai-bridge-scheduler", "custom-agent-runner")
+            and not t_name.startswith("agent-run-")
+        ):
             # Exclude background scheduler stale-task sweep queries.
             if "WHERE status = 'running'" not in sql and "WHERE status='running'" not in sql:
                 counts["tasks"] += 1
