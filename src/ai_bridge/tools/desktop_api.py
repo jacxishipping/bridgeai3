@@ -583,6 +583,7 @@ def desktop_get_ui_elements(
             WNDENUMPROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
 
             def _enum_win_cb(hwnd: Any, _lparam: Any) -> bool:
+                nonlocal grounding_source
                 if not u.IsWindowVisible(hwnd) or u.IsIconic(hwnd):
                     return True
                 length = u.GetWindowTextLengthW(hwnd)
