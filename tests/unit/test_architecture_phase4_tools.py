@@ -120,6 +120,7 @@ EXPECTED_TOOLS_PUBLIC_NAMES = [
     "re",
     "read_file",
     "redact",
+    "rollback_fleet_agent",
     "run_linter",
     "run_project_tests",
     "run_shell",

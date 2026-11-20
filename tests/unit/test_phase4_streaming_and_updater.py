@@ -131,7 +131,7 @@ def test_fleet_version_endpoint(tmp_path):
     v_res = client.get("/api/fleet/version", headers={"X-Admin-Token": admin_token})
     assert v_res.status_code == 200
     v_data = v_res.json()
-    assert v_data["control_plane_version"] == "1.30.0"
+    assert v_data["control_plane_version"] == "0.3.0"
     assert "git_commit" in v_data
     assert "git_branch" in v_data
 

@@ -135,7 +135,7 @@ def test_stale_task_requeue_defaults_off_for_non_idempotent_tool(tmp_path, monke
     _app, conn = _seed_stale_app(tmp_path, "orch-off.db")
     _seed_stale_task(conn, "stale-shell", "run_shell")
     stats = orchestration.sweep_stale_running_tasks(conn, lease_sec=60)
-    assert stats == {"timed_out": 1, "requeued": 0, "scanned": 1}
+    assert stats == {"timed_out": 1, "requeued": 0, "dead_lettered": 1, "scanned": 1}
     row = conn.execute("SELECT status FROM tasks WHERE id='stale-shell'").fetchone()
     assert row["status"] == "timed_out"
 

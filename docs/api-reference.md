@@ -103,7 +103,7 @@ beyond the approver.
 | GET | `/health/ready` | Public | Readiness probe |
 | GET | `/install.ps1` | Public | Windows agent installer |
 | GET | `/install.sh` | Public | Linux/macOS agent installer |
-| GET | `/metrics` | Admin, Session | Prometheus metrics |
+| GET | `/metrics` | Bearer, Admin, Session | Prometheus metrics |
 | GET HEAD | `/openapi.json` | Public | openapi |
 | GET HEAD | `/redoc` | Public | redoc_html |
 | GET | `/{full_path:path}` | Public | serve_spa_frontend |
@@ -133,6 +133,7 @@ beyond the approver.
 | PUT | `/api/devices/{device_id}/policy` | Admin, Device, Session | set_device_policy_api |
 | POST | `/api/devices/{device_id}/refresh` | Admin, Session | refresh_device_telemetry |
 | POST | `/api/devices/{device_id}/revoke` | Admin, Session | revoke |
+| PUT | `/api/devices/{device_id}/ring` | Admin, Session | set_device_update_ring |
 | GET | `/api/devices/{device_id}/telemetry` | Admin, Session | get_device_telemetry |
 | GET | `/api/devices/{device_id}/terminal/sessions` | Admin, Session | list_terminal_endpoint |
 | POST | `/api/devices/{device_id}/terminal/sessions` | Admin, Session | create_terminal_endpoint |
@@ -149,6 +150,9 @@ beyond the approver.
 | DELETE | `/api/tasks` | Admin, Session | clear_tasks |
 | GET | `/api/tasks` | Admin, Session | list_tasks |
 | POST | `/api/tasks` | Admin, Session | submit_task |
+| GET | `/api/tasks/dead-letter` | Admin, Session | list_dead_letter_tasks |
+| DELETE | `/api/tasks/dead-letter/{dlq_id}` | Admin, Session | purge_dead_letter_task |
+| POST | `/api/tasks/dead-letter/{dlq_id}/replay` | Admin, Session | replay_dead_letter_task |
 | GET | `/api/tasks/history` | Admin, Session | task_history |
 | DELETE | `/api/tasks/{task_id}` | Admin, Session | delete_task |
 | GET | `/api/tasks/{task_id}` | Admin, Session | get_task |
@@ -373,6 +377,12 @@ beyond the approver.
 | GET | `/api/fleet/health` | Admin, Session | fleet_health_summary |
 | GET | `/api/fleet/inventory` | Admin, Session | inventory |
 | GET | `/api/fleet/notifications` | Admin, Session | notifications |
+| GET | `/api/fleet/rollouts` | Admin, Session | list_fleet_rollouts |
+| POST | `/api/fleet/rollouts` | Admin, Session | create_fleet_rollout |
+| POST | `/api/fleet/rollouts/{rollout_id}/advance` | Admin, Session | advance_fleet_rollout |
+| POST | `/api/fleet/rollouts/{rollout_id}/pause` | Admin, Session | pause_fleet_rollout |
+| POST | `/api/fleet/rollouts/{rollout_id}/resume` | Admin, Session | resume_fleet_rollout |
+| POST | `/api/fleet/rollouts/{rollout_id}/rollback` | Admin, Session | rollback_fleet_rollout |
 | GET | `/api/fleet/telemetry` | Admin, Session | get_fleet_telemetry |
 | POST | `/api/fleet/update` | Admin, Session | update_fleet |
 | GET | `/api/fleet/version` | Admin, Session | get_fleet_version |
@@ -386,8 +396,9 @@ beyond the approver.
 | POST | `/api/supervisor/handoff` | Admin, Session | supervisor_handoff_api |
 | GET | `/api/supervisor/handoffs/{handoff_id}` | Admin, Session | supervisor_handoff_status_api |
 | POST | `/api/supervisor/recover` | Admin, Session | supervisor_recover_api |
+| GET | `/api/traces/{trace_id}` | Admin, Session | get_trace_timeline |
 
-*227 (method, path) pairs listed — generated from the live app; see the note at the top of this file.*
+*238 (method, path) pairs listed — generated from the live app; see the note at the top of this file.*
 <!-- END GENERATED ROUTES -->
 
 ## Mounted surfaces (combined app)
