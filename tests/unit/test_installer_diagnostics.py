@@ -146,13 +146,15 @@ def test_install_agent_can_run_diagnose_without_mandatory_parameters():
 
 def test_install_agent_keeps_the_token_out_of_the_task_definition():
     text = _text(Path("deployment/windows/install-agent.ps1"))
-    task_line = next(line for line in text.splitlines() if "schtasks /create" in line)
+    action_line = next(line for line in text.splitlines() if "New-ScheduledTaskAction" in line)
 
     # 'schtasks /query /v' exposes task actions to anyone who can query tasks,
     # so the credential belongs in the launcher the task points at.
-    assert "$DeviceToken" not in task_line
-    assert "--device-token" not in task_line
-    assert "cmd.exe /c '$Launcher'" in text
+    assert "$DeviceToken" not in action_line
+    assert "--device-token" not in action_line
+    assert '-Execute "cmd.exe" -Argument "/c `"$Launcher`""' in action_line
+    assert "-LogonType S4U" in text
+    assert "Register-ScheduledTask" in text
     assert "run-agent.cmd" in text
 
 

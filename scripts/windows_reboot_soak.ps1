@@ -26,11 +26,14 @@ param(
     [string]$DeviceToken = "",
     [string]$AdminToken = "",
     [string]$DeviceId = "",
-    [string]$EvidencePath = "$PSScriptRoot\..\.run\windows_reboot_soak_evidence.json"
+    [string]$EvidencePath = ""
 )
 
 $ErrorActionPreference = "Stop"
 $RepoRoot = (Resolve-Path "$PSScriptRoot\..").Path
+if (-not $EvidencePath) {
+    $EvidencePath = Join-Path $RepoRoot ".run\windows_reboot_soak_evidence.json"
+}
 $EvidenceDir = Split-Path -Parent $EvidencePath
 if ($EvidenceDir -and -not (Test-Path $EvidenceDir)) {
     New-Item -ItemType Directory -Force -Path $EvidenceDir | Out-Null
@@ -101,7 +104,9 @@ elseif ($Phase -eq "PostReboot") {
     if (-not $ControlUrl -or -not $AdminToken -or -not $DeviceId) {
         throw "PostReboot requires -ControlUrl, -AdminToken, and -DeviceId."
     }
-    $bootAfter = (Get-CimInstance Win32_OperatingSystem).LastBootUpTime.ToUniversalTime().ToString("o")
+    $bootAfterDt = (Get-CimInstance Win32_OperatingSystem).LastBootUpTime.ToUniversalTime()
+    $bootAfter = $bootAfterDt.ToString("o")
+    $bootAfterEpoch = [double]([DateTimeOffset]$bootAfterDt).ToUnixTimeSeconds()
     $headers = @{
         "X-Admin-Token" = $AdminToken
         "Content-Type" = "application/json"
@@ -109,14 +114,30 @@ elseif ($Phase -eq "PostReboot") {
     }
     $base = $ControlUrl.TrimEnd("/")
 
-    # Wait up to 90s for post-boot heartbeat
+    # Wait up to 90s for a fresh post-boot heartbeat using the server's own clock
+    # (HTTP Date header) so host/server clock skew never causes false positives/negatives.
     $dev = $null
+    $freshHeartbeat = $false
     $deadline = (Get-Date).AddSeconds(90)
     while ((Get-Date) -lt $deadline) {
-        $devs = Invoke-RestMethod "$base/api/devices" -Headers $headers
+        $resp = Invoke-WebRequest -UseBasicParsing "$base/api/devices" -Headers $headers
+        $serverNowEpoch = if ($resp.Headers["Date"]) {
+            [double]([DateTimeOffset]::Parse($resp.Headers["Date"])).ToUnixTimeSeconds()
+        } else {
+            [double]([DateTimeOffset]::UtcNow).ToUnixTimeSeconds()
+        }
+        $devs = $resp.Content | ConvertFrom-Json
         $dev = $devs | Where-Object { $_.id -eq $DeviceId } | Select-Object -First 1
-        if ($dev -and $dev.status -eq "online") { break }
+        $lastSeenAge = if ($dev -and $dev.last_seen) { $serverNowEpoch - [double]($dev.last_seen) } else { 999999 }
+        if ($dev -and $dev.status -eq "online" -and $lastSeenAge -le 60) {
+            $freshHeartbeat = $true
+            break
+        }
         Start-Sleep -Seconds 3
+    }
+    if (-not $freshHeartbeat) {
+        Write-Warning "No fresh post-boot heartbeat seen within 90s. Scheduled task state:"
+        & schtasks /query /tn "AI Bridge Agent" /v /fo LIST 2>&1 | Select-String "Status|Last Run|Last Result|Task To Run|Run As|Logon Mode" | Out-Host
     }
 
     # Safe Tier-1 task
@@ -158,12 +179,12 @@ elseif ($Phase -eq "PostReboot") {
         timestamp_utc = (Get-Date).ToUniversalTime().ToString("o")
         boot_time_after_utc = $bootAfter
         boot_time_changed = $bootChanged
-        device_online = ($null -ne $dev -and $dev.status -eq "online")
+        device_online = ($null -ne $dev -and $dev.status -eq "online" -and $freshHeartbeat)
         safe_task_status = $t1Status
         tier3_blocked_before_approval = $blockedBefore
         tier3_status_after_approval = $t3Status
         revoked = $true
-        ok = ($bootChanged -and ($null -ne $dev -and $dev.status -eq "online") -and $t1Status -eq "completed" -and $blockedBefore -and $t3Status -in @("completed", "failed"))
+        ok = ($bootChanged -and $freshHeartbeat -and $t1Status -eq "completed" -and $blockedBefore -and $t3Status -in @("completed", "failed"))
     }
     $Report | ConvertTo-Json -Depth 6 | Set-Content -Encoding UTF8 $EvidencePath
     Write-Host "PostReboot recorded -> $EvidencePath (ok=$($Report.phases.post_reboot.ok))."

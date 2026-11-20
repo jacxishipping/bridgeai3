@@ -318,15 +318,33 @@ if ($Mode -eq "Attended") {
     Write-Host "     Start the tray client (gui_app.py / AIBridge-Agent.exe) while logged in."
     Write-Host "     For Headless (sign-in) or Service (boot) pollers, re-run with -Mode Headless|Service."
 } else {
-    # Single quotes around the path deliberately: PowerShell drops double quotes on
-    # the way to schtasks, which stored '/c <path>' and would break on any path
-    # containing a space. With single quotes schtasks writes '/c "<path>"' into the
-    # definition, verified by running a task against a launcher in a spaced folder.
-    $taskCmd = "cmd.exe /c '$Launcher'"
-    $schedule = if ($Mode -eq "Headless") { "ONLOGON" } else { "ONSTART" }
-    schtasks /create /tn "AI Bridge Agent" /tr $taskCmd /sc $schedule /ru $User /rl limited /f
-    if ($LASTEXITCODE -ne 0) { throw "schtasks create failed ($LASTEXITCODE) for mode $Mode" }
-    Write-Host "[OK] Agent scheduled as '$User' ($schedule). Start with: schtasks /run /tn 'AI Bridge Agent'" -ForegroundColor Green
+    # Register via ScheduledTasks cmdlets instead of schtasks.exe:
+    #  1) Double-quoted "/c `"$Launcher`"" survives spaces and parentheses
+    #     without cmd.exe rejecting single quotes.
+    #  2) Service mode (AtStartup) uses LogonType S4U so Windows actually
+    #     starts the task at OS boot without storing a password or elevating
+    #     to SYSTEM (InteractiveToken tasks cannot run at boot).
+    #  3) Credentials stay in $Launcher (ACL-locked), never in the task action.
+    $action = New-ScheduledTaskAction -Execute "cmd.exe" -Argument "/c `"$Launcher`""
+    if ($Mode -eq "Headless") {
+        $trigger = New-ScheduledTaskTrigger -AtLogOn -User $User
+        $principal = New-ScheduledTaskPrincipal -UserId $User -LogonType Interactive -RunLevel Limited
+        $schedule = "ONLOGON"
+    } else {
+        $trigger = New-ScheduledTaskTrigger -AtStartup
+        $principal = New-ScheduledTaskPrincipal -UserId $User -LogonType S4U -RunLevel Limited
+        $schedule = "ONSTART"
+    }
+    $settings = New-ScheduledTaskSettingsSet `
+        -AllowStartIfOnBatteries `
+        -DontStopIfGoingOnBatteries `
+        -StartWhenAvailable `
+        -RestartCount 3 `
+        -RestartInterval (New-TimeSpan -Minutes 1) `
+        -ExecutionTimeLimit (New-TimeSpan -Days 0)
+    Register-ScheduledTask -TaskName "AI Bridge Agent" `
+        -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
+    Write-Host "[OK] Agent scheduled as '$User' ($schedule). Start with: Start-ScheduledTask -TaskName 'AI Bridge Agent'" -ForegroundColor Green
 }
 Write-Host "Desktop automation is a separate interactive helper (agents/windows/desktop_helper.py) and must be started in a logged-in session."
 Write-Host "Modes: Attended (tray only) | Headless (sign-in poller) | Service (boot poller). Native Session-0: windows-agent/installer/install-service.ps1"
