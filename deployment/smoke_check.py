@@ -25,6 +25,7 @@ def main():
         parser.error("Use an HTTP(S) base URL without credentials, query or fragment.")
     base = args.url.rstrip("/")
     opener = urllib.request.build_opener(NoRedirect)
+    opener.addheaders = [("User-Agent", "AI-Bridge-SmokeCheck/0.3")]
     failed = False
     for path, expected in [
         ("/health/live", 200),

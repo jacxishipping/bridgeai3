@@ -388,6 +388,7 @@ class Poller:
             headers={
                 "X-Device-Token": self.device_token,
                 "Content-Type": "application/json",
+                "User-Agent": "AI-Bridge-Agent/0.3",
             },
         )
         try:
