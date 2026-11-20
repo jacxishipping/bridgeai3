@@ -53,7 +53,9 @@ def _seed_plane(conn) -> float:
         ("u1", "alice", "h", "s", "operator", "default", now),
     )
     conn.execute(
-        "INSERT INTO devices VALUES (?,?,?,?,?,?,?,?,?,?,?,NULL,NULL,'[]',NULL)",
+        "INSERT INTO devices (id, name, hostname, os, tenant, token_hash, status,"
+        " last_seen, policy_json, revoked, created_at, capabilities_json)"
+        " VALUES (?,?,?,?,?,?,?,?,?,?,?,'[]')",
         ("d1", "srv", "srv", "linux", "default", "tok", "online", now, "{}", 0, now),
     )
     conn.execute(
@@ -71,7 +73,8 @@ def _seed_plane(conn) -> float:
         ("a1", "t1", "run_shell", "r", "default", "pending", now, None, None, None),
     )
     conn.execute(
-        "INSERT INTO task_events VALUES (?,?,?,?,?)", ("e1", "t1", "created", "{}", now)
+        "INSERT INTO task_events (id, task_id, event, detail_json, created_at) VALUES (?,?,?,?,?)",
+        ("e1", "t1", "created", "{}", now),
     )
     conn.execute(
         "INSERT INTO telemetry (device_id, tenant, cpu_percent, memory_percent,"
@@ -142,7 +145,8 @@ def test_stream_ticket_roundtrip_single_use_and_expiry(conn):
         "INSERT INTO tasks (id, device_id, tenant, tool, tier, status, created_at, updated_at)"
         " VALUES ('tx','d1','default','x',0,'queued',1,1)",
         "INSERT INTO users VALUES ('u2','bob','h','s','superuser','default',1,0)",
-        "INSERT INTO devices VALUES ('d2','x',NULL,NULL,'default','t','weird',NULL,'{}',0,1,NULL,NULL,'[]',NULL)",
+        "INSERT INTO devices (id, name, tenant, token_hash, status, policy_json, revoked, created_at)"
+        " VALUES ('d2','x','default','t','weird','{}',0,1)",
         "INSERT INTO approvals VALUES ('a2','t1','x','r','default','maybe',1,NULL,NULL,NULL,0)",
     ],
 )
@@ -156,7 +160,7 @@ def test_015_check_constraints_reject_bad_enums(conn, sql):
 def test_015_foreign_keys_and_cascades(conn):
     _seed_plane(conn)
     with pytest.raises(sqlite3.IntegrityError):
-        conn.execute("INSERT INTO task_events VALUES ('e9','nope','created','{}',1)")
+        conn.execute("INSERT INTO task_events (id, task_id, event, detail_json, created_at) VALUES ('e9','nope','created','{}',1)")
         conn.commit()
     conn.rollback()
     conn.execute("DELETE FROM tasks WHERE id='t1'")
@@ -285,9 +289,8 @@ def test_minimal_pre013_db_applies_013_014_015_016(tmp_path):
     )
     raw.commit()
     applied = migrations.run_migrations(raw)
-    # 016 (Wave 6A, Gate 16) also applies: it creates idx_approvals_task_id,
-    # which the PostgreSQL path was missing.
-    assert applied == ["013", "014", "015", "016"]
+    # 016 (Wave 6A, Gate 16) and 017 (Release 2) also apply cleanly on minimal DBs.
+    assert applied == ["013", "014", "015", "016", "017"]
     assert raw.execute("SELECT COUNT(*) FROM tasks").fetchone()[0] == 1
     raw.close()
 

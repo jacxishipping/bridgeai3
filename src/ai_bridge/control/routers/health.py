@@ -62,14 +62,19 @@ def create_health_router(ctx: ControlContext) -> APIRouter:
         from .. import production_readiness as prodready
 
         try:
+            t0 = time.perf_counter()
             row = conn.execute("SELECT 1 AS alive").fetchone()
+            db_latency_ms = round((time.perf_counter() - t0) * 1000.0, 2)
             if not row:
                 raise HTTPException(status_code=503, detail="Database unhealthy")
             plane_state.sync_emergency_stop_to_app(conn, app.state)
             checklist = prodready.assess_production_readiness(conn)
+            db_stats = conn.get_db_stats() if hasattr(conn, "get_db_stats") else {"dialect": getattr(conn, "dialect", "sqlite")}
             body = {
                 "status": "ready",
                 "database": "connected",
+                "db_latency_ms": db_latency_ms,
+                "db_stats": db_stats,
                 "emergency_stop": app.state.emergency_stop,
                 "emergency_stop_durable": checklist.get("emergency_stop_durable"),
                 "production_checklist": checklist,
@@ -103,12 +108,29 @@ def create_health_router(ctx: ControlContext) -> APIRouter:
     def metrics_endpoint(
         x_admin_token: str | None = Header(default=None),
         x_session_token: str | None = Header(default=None),
+        authorization: str | None = Header(default=None),
     ):
-        """Prometheus metrics exposition endpoint."""
+        """Prometheus metrics exposition endpoint.
+
+        Supports dedicated ``AI_BRIDGE_METRICS_TOKEN`` (Bearer) for Prometheus
+        scrapers, plus RBAC ``viewer`` role when in production profile or when
+        ``AI_BRIDGE_METRICS_REQUIRE_AUTH=1``.
+        """
+        import hmac
+        import os
+
         from .. import production_readiness as prodready
 
-        if prodready.is_production_profile():
-            require_role("viewer", x_admin_token, x_session_token)
+        metrics_token = os.environ.get("AI_BRIDGE_METRICS_TOKEN", "").strip()
+        require_auth = prodready.is_production_profile() or bool(metrics_token) or (
+            os.environ.get("AI_BRIDGE_METRICS_REQUIRE_AUTH", "").strip().lower() in ("1", "true", "yes")
+        )
+        if require_auth:
+            bearer = ""
+            if authorization and authorization.strip().lower().startswith("bearer "):
+                bearer = authorization.strip()[7:].strip()
+            if not (metrics_token and bearer and hmac.compare_digest(bearer, metrics_token)):
+                require_role("viewer", x_admin_token, x_session_token)
         payload, content_type = metricsmod.get_metrics_payload(conn)
         return Response(content=payload, media_type=content_type)
 

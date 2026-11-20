@@ -29,6 +29,10 @@ CREATE TABLE IF NOT EXISTS devices (
   policy_json TEXT NOT NULL DEFAULT '{}', revoked INTEGER NOT NULL DEFAULT 0,
   created_at REAL NOT NULL, token_expires_at REAL, token_issued_at REAL,
   capabilities_json TEXT NOT NULL DEFAULT '[]', mtls_fingerprint TEXT,
+  agent_version TEXT DEFAULT '', agent_commit TEXT DEFAULT '',
+  reported_policy_hash TEXT DEFAULT '', update_ring TEXT NOT NULL DEFAULT 'general',
+  update_state TEXT DEFAULT 'idle', poll_state_json TEXT NOT NULL DEFAULT '{}',
+  spool_stats_json TEXT NOT NULL DEFAULT '{}',
   CHECK (status IN ('online', 'offline', 'revoked')));
 CREATE TABLE IF NOT EXISTS tasks (
   id TEXT PRIMARY KEY, device_id TEXT NOT NULL, tenant TEXT NOT NULL DEFAULT 'default',
@@ -36,6 +40,11 @@ CREATE TABLE IF NOT EXISTS tasks (
   status TEXT NOT NULL DEFAULT 'queued', result TEXT DEFAULT '',
   approval_id TEXT, created_at REAL NOT NULL, updated_at REAL NOT NULL,
   epoch INTEGER NOT NULL DEFAULT 0, handoff_id TEXT, parent_task_id TEXT,
+  attempt INTEGER NOT NULL DEFAULT 0, max_attempts INTEGER NOT NULL DEFAULT 1,
+  next_attempt_at REAL, failure_reason TEXT DEFAULT '', failure_class TEXT DEFAULT '',
+  lease_expires_at REAL, started_at REAL, progress_pct REAL,
+  status_message TEXT DEFAULT '', dead_lettered INTEGER NOT NULL DEFAULT 0,
+  trace_id TEXT DEFAULT '',
   CHECK (status IN ('queued', 'running', 'completed', 'failed', 'cancelled', 'timed_out', 'needs_approval')),
   CHECK (tier IS NULL OR (tier >= 1 AND tier <= 4)));
 CREATE TABLE IF NOT EXISTS approvals (
@@ -52,7 +61,7 @@ CREATE TABLE IF NOT EXISTS approvals (
 CREATE TABLE IF NOT EXISTS audit (
   id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL NOT NULL, tenant TEXT,
   actor TEXT, device_id TEXT, tool TEXT, args_json TEXT, decision TEXT, result TEXT,
-  prev_hash TEXT, entry_hash TEXT);
+  prev_hash TEXT, entry_hash TEXT, trace_id TEXT DEFAULT '');
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT);
 CREATE TABLE IF NOT EXISTS users (
   id TEXT PRIMARY KEY, username TEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL,
@@ -213,8 +222,49 @@ CREATE TABLE IF NOT EXISTS task_events (
   event TEXT NOT NULL,
   detail_json TEXT,
   created_at REAL NOT NULL,
+  trace_id TEXT DEFAULT '',
   FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE);
 CREATE INDEX IF NOT EXISTS idx_task_events_task ON task_events(task_id, created_at);
+CREATE TABLE IF NOT EXISTS task_dead_letters (
+  id TEXT PRIMARY KEY,
+  task_id TEXT NOT NULL,
+  device_id TEXT NOT NULL,
+  tenant TEXT NOT NULL DEFAULT 'default',
+  tool TEXT NOT NULL,
+  args_json TEXT NOT NULL DEFAULT '{}',
+  attempts INTEGER NOT NULL DEFAULT 0,
+  failure_reason TEXT DEFAULT '',
+  failure_class TEXT DEFAULT '',
+  last_error TEXT DEFAULT '',
+  trace_id TEXT DEFAULT '',
+  created_at REAL NOT NULL,
+  replayed_task_id TEXT,
+  replayed_at REAL);
+CREATE TABLE IF NOT EXISTS update_rollouts (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  tenant TEXT NOT NULL DEFAULT 'default',
+  target_version TEXT NOT NULL DEFAULT '',
+  target_commit TEXT NOT NULL DEFAULT '',
+  manifest_url TEXT DEFAULT '',
+  current_ring TEXT NOT NULL DEFAULT 'canary',
+  rings_json TEXT NOT NULL DEFAULT '["canary","early","general"]',
+  status TEXT NOT NULL DEFAULT 'active',
+  max_failure_rate REAL NOT NULL DEFAULT 0.25,
+  dispatched_json TEXT NOT NULL DEFAULT '{}',
+  created_by TEXT DEFAULT 'admin',
+  created_at REAL NOT NULL,
+  updated_at REAL NOT NULL);
+CREATE INDEX IF NOT EXISTS idx_tasks_device_status_created ON tasks(device_id, status, created_at);
+CREATE INDEX IF NOT EXISTS idx_tasks_device_tool_status_updated ON tasks(device_id, tool, status, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_tasks_trace_id ON tasks(trace_id);
+CREATE INDEX IF NOT EXISTS idx_task_submissions_created ON task_submissions(created_at);
+CREATE INDEX IF NOT EXISTS idx_task_events_created ON task_events(created_at);
+CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at);
+CREATE INDEX IF NOT EXISTS idx_approvals_status_expires ON approvals(status, expires_at);
+CREATE INDEX IF NOT EXISTS idx_audit_trace_id ON audit(trace_id);
+CREATE INDEX IF NOT EXISTS idx_task_dead_letters_tenant ON task_dead_letters(tenant, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_update_rollouts_tenant ON update_rollouts(tenant, created_at DESC);
 CREATE TABLE IF NOT EXISTS agent_memory_chunks (
   id TEXT PRIMARY KEY,
   agent_id TEXT NOT NULL,
@@ -497,6 +547,59 @@ class _LockedResult:
         return iter(self._rows)
 
 
+_DB_LOGGER = None
+
+
+def _db_log():
+    global _DB_LOGGER
+    if _DB_LOGGER is None:
+        import logging
+
+        _DB_LOGGER = logging.getLogger("ai_bridge.db")
+    return _DB_LOGGER
+
+
+def _sql_op(sql: str) -> str:
+    head = (sql or "").lstrip().split(None, 1)
+    if not head:
+        return "other"
+    word = head[0].upper()
+    return word if word in ("SELECT", "INSERT", "UPDATE", "DELETE", "CREATE", "ALTER", "PRAGMA") else "other"
+
+
+def _slow_query_threshold_ms() -> float:
+    try:
+        return max(1.0, float(os.environ.get("AI_BRIDGE_SLOW_QUERY_MS", "250") or "250"))
+    except ValueError:
+        return 250.0
+
+
+def _observe_query(dialect: str, sql: str, elapsed_s: float, *, ok: bool, stats: dict[str, Any]) -> None:
+    op = _sql_op(sql)
+    stats["queries_total"] = int(stats.get("queries_total", 0)) + 1
+    if not ok:
+        stats["query_errors"] = int(stats.get("query_errors", 0)) + 1
+    elapsed_ms = elapsed_s * 1000.0
+    stats["last_query_ms"] = round(elapsed_ms, 3)
+    if elapsed_ms >= _slow_query_threshold_ms():
+        stats["slow_queries"] = int(stats.get("slow_queries", 0)) + 1
+        _db_log().warning(
+            "Slow DB query detected",
+            extra={
+                "dialect": dialect,
+                "op": op,
+                "duration_ms": round(elapsed_ms, 2),
+                "sql_preview": " ".join((sql or "").split())[:160],
+            },
+        )
+    try:
+        from . import metrics as metricsmod
+
+        metricsmod.record_db_query(dialect, op, elapsed_s, ok=ok)
+    except Exception:
+        pass
+
+
 class LockedConnection:
     """Thread-safe wrapper around sqlite3.Connection for multi-threaded FastAPI routes."""
 
@@ -504,6 +607,20 @@ class LockedConnection:
         self._conn = conn
         self._lock = threading.RLock()
         self.dialect = "sqlite"
+        self._stats: dict[str, Any] = {
+            "dialect": "sqlite",
+            "pooled": False,
+            "pool_size": 1,
+            "pool_available": 1,
+            "pool_waiting": 0,
+            "queries_total": 0,
+            "query_errors": 0,
+            "slow_queries": 0,
+            "last_query_ms": 0.0,
+        }
+
+    def get_db_stats(self) -> dict[str, Any]:
+        return dict(self._stats)
 
     @contextlib.contextmanager
     def transaction(self):
@@ -516,10 +633,18 @@ class LockedConnection:
                 raise
 
     def execute(self, sql: str, parameters: tuple | list = ()) -> _LockedResult:
-        with self._lock:
-            cur = self._conn.execute(sql, parameters)
-            rows = cur.fetchall()
-            return _LockedResult(rows, cur.rowcount, cur.lastrowid)
+        t0 = time.perf_counter()
+        ok = True
+        try:
+            with self._lock:
+                cur = self._conn.execute(sql, parameters)
+                rows = cur.fetchall()
+                return _LockedResult(rows, cur.rowcount, cur.lastrowid)
+        except Exception:
+            ok = False
+            raise
+        finally:
+            _observe_query("sqlite", sql, time.perf_counter() - t0, ok=ok, stats=self._stats)
 
     def executescript(self, sql_script: str):
         with self._lock:
@@ -542,17 +667,91 @@ class LockedConnection:
 
 
 class PostgresConnection:
-    """Thread-safe connection wrapper for PostgreSQL using psycopg."""
+    """Thread-safe connection wrapper for PostgreSQL with optional psycopg_pool pooling."""
 
     def __init__(self, dsn: str):
         import psycopg
+
         self.dsn = dsn
-        self._conn = psycopg.connect(dsn, autocommit=False)
         self._lock = threading.RLock()
+        self._tx_local = threading.local()
         self.dialect = "postgres"
+        self._pool = None
+        self._conn = None
+        self._stats: dict[str, Any] = {
+            "dialect": "postgres",
+            "pooled": False,
+            "pool_size": 1,
+            "pool_available": 1,
+            "pool_waiting": 0,
+            "queries_total": 0,
+            "query_errors": 0,
+            "slow_queries": 0,
+            "last_query_ms": 0.0,
+        }
+        stmt_ms = max(1000, int(os.environ.get("AI_BRIDGE_DB_STATEMENT_TIMEOUT_MS", "30000") or "30000"))
+        lock_ms = max(500, int(os.environ.get("AI_BRIDGE_DB_LOCK_TIMEOUT_MS", "5000") or "5000"))
+        self._pg_options = f"-c statement_timeout={stmt_ms} -c lock_timeout={lock_ms}"
+
+        use_pool = os.environ.get("AI_BRIDGE_DB_POOL_ENABLED", "1").strip().lower() in ("1", "true", "yes")
+        if use_pool:
+            try:
+                from psycopg_pool import ConnectionPool
+
+                min_sz = max(1, int(os.environ.get("AI_BRIDGE_DB_POOL_MIN", "2") or "2"))
+                max_sz = max(min_sz, int(os.environ.get("AI_BRIDGE_DB_POOL_MAX", "10") or "10"))
+                timeout_s = max(1.0, float(os.environ.get("AI_BRIDGE_DB_POOL_TIMEOUT", "15") or "15"))
+                self._pool = ConnectionPool(
+                    conninfo=dsn,
+                    min_size=min_sz,
+                    max_size=max_sz,
+                    timeout=timeout_s,
+                    kwargs={"autocommit": False, "options": self._pg_options},
+                    open=True,
+                )
+                self._stats["pooled"] = True
+                self._stats["pool_max"] = max_sz
+            except Exception:
+                self._pool = None
+        if self._pool is None:
+            self._conn = psycopg.connect(dsn, autocommit=False, options=self._pg_options)
+
+    def get_db_stats(self) -> dict[str, Any]:
+        out = dict(self._stats)
+        if self._pool is not None:
+            try:
+                ps = self._pool.get_stats()
+                out["pool_size"] = int(ps.get("pool_size", 0))
+                out["pool_available"] = int(ps.get("pool_available", 0))
+                out["pool_waiting"] = int(ps.get("requests_waiting", 0))
+                out["pool_utilization"] = round(
+                    (out["pool_size"] - out["pool_available"]) / max(1, out.get("pool_max", out["pool_size"] or 1)),
+                    3,
+                )
+            except Exception:
+                pass
+        return out
 
     @contextlib.contextmanager
     def transaction(self):
+        if self._pool is not None:
+            active = getattr(self._tx_local, "conn", None)
+            if active is not None:
+                # Re-entrant nested transaction block on same thread.
+                yield self
+                return
+            with self._pool.connection() as pg_conn:
+                self._tx_local.conn = pg_conn
+                try:
+                    yield self
+                    pg_conn.commit()
+                except Exception:
+                    with contextlib.suppress(Exception):
+                        pg_conn.rollback()
+                    raise
+                finally:
+                    self._tx_local.conn = None
+            return
         with self._lock:
             try:
                 yield self
@@ -562,42 +761,76 @@ class PostgresConnection:
                 raise
 
     def _ensure_conn(self) -> None:
-        if getattr(self._conn, "closed", False):
+        if self._conn is None or getattr(self._conn, "closed", False) or getattr(self._conn, "broken", False):
             import psycopg
-            self._conn = psycopg.connect(self.dsn, autocommit=False)
+
+            self._conn = psycopg.connect(self.dsn, autocommit=False, options=self._pg_options)
+
+    def _run_on_conn(self, pg_conn: Any, pg_sql: str, parameters: tuple | list) -> _LockedResult:
+        cur = pg_conn.cursor()
+        cur.execute(pg_sql, parameters)
+        if cur.description:
+            cols = [desc[0] for desc in cur.description]
+            raw_rows = cur.fetchall()
+            rows = [RowDict(dict(zip(cols, r)), cols) for r in raw_rows]
+        else:
+            rows = []
+        return _LockedResult(rows, cur.rowcount, getattr(cur, "lastrowid", None))
 
     def execute(self, sql: str, parameters: tuple | list = ()) -> _LockedResult:
-        with self._lock:
-            self._ensure_conn()
-            pg_sql = to_pg_sql(sql)
-            cur = self._conn.cursor()
-            try:
-                cur.execute(pg_sql, parameters)
-                if cur.description:
-                    cols = [desc[0] for desc in cur.description]
-                    raw_rows = cur.fetchall()
-                    rows = [RowDict(dict(zip(cols, r)), cols) for r in raw_rows]
-                else:
-                    rows = []
-                return _LockedResult(rows, cur.rowcount, getattr(cur, "lastrowid", None))
-            except Exception:
-                with contextlib.suppress(Exception):
-                    self._conn.rollback()
-                raise
+        t0 = time.perf_counter()
+        ok = True
+        pg_sql = to_pg_sql(sql)
+        try:
+            if self._pool is not None:
+                tx_conn = getattr(self._tx_local, "conn", None)
+                if tx_conn is not None:
+                    return self._run_on_conn(tx_conn, pg_sql, parameters)
+                with self._pool.connection() as pg_conn:
+                    try:
+                        res = self._run_on_conn(pg_conn, pg_sql, parameters)
+                        pg_conn.commit()
+                        return res
+                    except Exception:
+                        with contextlib.suppress(Exception):
+                            pg_conn.rollback()
+                        raise
+            with self._lock:
+                self._ensure_conn()
+                try:
+                    return self._run_on_conn(self._conn, pg_sql, parameters)
+                except Exception:
+                    with contextlib.suppress(Exception):
+                        self._conn.rollback()
+                    raise
+        except Exception:
+            ok = False
+            raise
+        finally:
+            _observe_query("postgres", sql, time.perf_counter() - t0, ok=ok, stats=self._stats)
 
     def executescript(self, sql_script: str):
-        # Wave 3A (DB-08): split with the migration lexer, not str.split(";"),
-        # so semicolons inside strings/triggers/dollar-quoted bodies survive.
         from .migrations import _split_statements
 
+        stmts = [item["sql"].strip() for item in _split_statements(sql_script) if item["sql"].strip()]
+        if self._pool is not None:
+            with self._pool.connection() as pg_conn:
+                cur = pg_conn.cursor()
+                try:
+                    for stmt in stmts:
+                        cur.execute(to_pg_sql(stmt))
+                    pg_conn.commit()
+                except Exception:
+                    with contextlib.suppress(Exception):
+                        pg_conn.rollback()
+                    raise
+            return
         with self._lock:
             self._ensure_conn()
             cur = self._conn.cursor()
             try:
-                for item in _split_statements(sql_script):
-                    stmt = item["sql"].strip()
-                    if stmt:
-                        cur.execute(to_pg_sql(stmt))
+                for stmt in stmts:
+                    cur.execute(to_pg_sql(stmt))
                 self._conn.commit()
             except Exception:
                 with contextlib.suppress(Exception):
@@ -605,16 +838,33 @@ class PostgresConnection:
                 raise
 
     def commit(self) -> None:
+        if self._pool is not None:
+            tx_conn = getattr(self._tx_local, "conn", None)
+            if tx_conn is not None:
+                tx_conn.commit()
+            return
         with self._lock:
-            self._conn.commit()
+            if self._conn is not None:
+                self._conn.commit()
 
     def rollback(self) -> None:
+        if self._pool is not None:
+            tx_conn = getattr(self._tx_local, "conn", None)
+            if tx_conn is not None:
+                tx_conn.rollback()
+            return
         with self._lock:
-            self._conn.rollback()
+            if self._conn is not None:
+                self._conn.rollback()
 
     def close(self) -> None:
+        if self._pool is not None:
+            self._pool.close()
+            self._pool = None
+            return
         with self._lock:
-            self._conn.close()
+            if self._conn is not None:
+                self._conn.close()
 
 
 def connect(db_path: Path | None = None, database_url: str | None = None) -> LockedConnection | PostgresConnection:
@@ -775,11 +1025,20 @@ def verify_audit_chain(conn: Any) -> dict[str, Any]:
 
 
 def audit(conn: Any, *, tenant: str, actor: str, device_id: str,
-          tool: str, args: dict, decision: str, result: str = "") -> None:
+          tool: str, args: dict, decision: str, result: str = "",
+          trace_id: str | None = None) -> None:
     safe_args = redact_obj(json.loads(json.dumps(args or {}, default=str)))
     safe_result = redact(result or "")[:2000]
     args_json = json.dumps(safe_args, default=str)
     ts = now()
+    if trace_id is None:
+        try:
+            from ..logging_config import get_correlation_id
+
+            trace_id = get_correlation_id() or ""
+        except Exception:
+            trace_id = ""
+    resolved_trace = str(trace_id or "")[:128]
     _ensure_audit_hash_columns(conn)
     # DB-05: read the chain tip, compute the hash, and INSERT the complete
     # row inside ONE transaction, so concurrent writers cannot interleave a
@@ -801,11 +1060,18 @@ def audit(conn: Any, *, tenant: str, actor: str, device_id: str,
         entry_hash = _audit_entry_hash(
             _audit_payload(prev_hash, ts, actor, device_id, tool, args_json, decision)
         )
-        cur = conn.execute(
-            "INSERT INTO audit (ts, tenant, actor, device_id, tool, args_json, decision, result, prev_hash, entry_hash)"
-            " VALUES (?,?,?,?,?,?,?,?,?,?)",
-            (ts, tenant, actor, device_id, tool, args_json, decision, safe_result, prev_hash, entry_hash),
-        )
+        try:
+            cur = conn.execute(
+                "INSERT INTO audit (ts, tenant, actor, device_id, tool, args_json, decision, result, prev_hash, entry_hash, trace_id)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                (ts, tenant, actor, device_id, tool, args_json, decision, safe_result, prev_hash, entry_hash, resolved_trace),
+            )
+        except Exception:
+            cur = conn.execute(
+                "INSERT INTO audit (ts, tenant, actor, device_id, tool, args_json, decision, result, prev_hash, entry_hash)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?)",
+                (ts, tenant, actor, device_id, tool, args_json, decision, safe_result, prev_hash, entry_hash),
+            )
         row_id = getattr(cur, "lastrowid", None)
     # WORM/SIEM emit happens only after the transaction has committed.
     try:
@@ -823,6 +1089,7 @@ def audit(conn: Any, *, tenant: str, actor: str, device_id: str,
                     "decision": decision,
                     "prev_hash": prev_hash,
                     "entry_hash": entry_hash,
+                    "trace_id": resolved_trace,
                 }
             )
     except Exception:
@@ -958,7 +1225,9 @@ def redeem_stream_ticket(
 # follow-up — these helpers are the mechanism, with tests below.
 TASK_LIST_COLUMNS = (
     "id, device_id, tenant, tool, args_json, tier, status, approval_id, "
-    "created_at, updated_at, epoch, handoff_id, parent_task_id"
+    "created_at, updated_at, epoch, handoff_id, parent_task_id, "
+    "attempt, max_attempts, next_attempt_at, failure_reason, failure_class, "
+    "lease_expires_at, started_at, progress_pct, status_message, dead_lettered, trace_id"
 )
 
 
@@ -1101,6 +1370,20 @@ def retention_prune_audit(
     return int(cur.rowcount or 0)
 
 
+def prune_expired_sessions(conn: Any) -> int:
+    """Delete expired local RBAC session rows."""
+    cur = conn.execute("DELETE FROM sessions WHERE expires_at < ?", (now(),))
+    conn.commit()
+    return int(cur.rowcount or 0)
+
+
+def prune_expired_stream_tickets(conn: Any) -> int:
+    """Delete expired or consumed WebRTC stream tickets."""
+    cur = conn.execute("DELETE FROM stream_tickets WHERE expires_at < ? OR used = 1", (now(),))
+    conn.commit()
+    return int(cur.rowcount or 0)
+
+
 def retention_sweep(
     conn: Any,
     *,
@@ -1120,7 +1403,16 @@ def retention_sweep(
     wanted. Telemetry is pruned per device via
     :func:`maybe_prune_telemetry` (amortized, PERF-05).
     """
-    counts: dict[str, int] = {"telemetry": 0, "task_events": 0, "tasks": 0, "audit": 0, "task_submissions": 0}
+    counts: dict[str, int] = {
+        "telemetry": 0,
+        "task_events": 0,
+        "tasks": 0,
+        "audit": 0,
+        "task_submissions": 0,
+        "sessions": 0,
+        "stream_tickets": 0,
+        "ratelimits": 0,
+    }
     device_rows = conn.execute("SELECT DISTINCT device_id FROM telemetry").fetchall()
     for r in device_rows:
         dev = r["device_id"] if hasattr(r, "keys") else r[0]
@@ -1134,7 +1426,43 @@ def retention_sweep(
             conn, older_than_s=audit_older_than_s, worm_export_ok=True
         )
     counts["task_submissions"] = prune_task_submissions(conn, ttl_s=idempotency_ttl_s)
+    try:
+        counts["sessions"] = prune_expired_sessions(conn)
+    except Exception:
+        pass
+    try:
+        counts["stream_tickets"] = prune_expired_stream_tickets(conn)
+    except Exception:
+        pass
+    try:
+        from . import durable_ratelimit as _drl
+
+        counts["ratelimits"] = _drl.prune_expired_db_ratelimits(conn)
+    except Exception:
+        pass
     return counts
+
+
+def retention_sweep_from_env(conn: Any) -> dict[str, int]:
+    """Run :func:`retention_sweep` with operator-configured environment TTLs.
+
+    Defaults:
+    - ``AI_BRIDGE_RETENTION_TELEMETRY_KEEP``: 500 rows/device
+    - ``AI_BRIDGE_RETENTION_TASK_EVENTS_DAYS``: 30 days
+    - ``AI_BRIDGE_RETENTION_TASKS_DAYS``: 90 days
+    - ``AI_BRIDGE_RETENTION_IDEMPOTENCY_HOURS``: 24 hours
+    """
+    keep = max(50, int(os.environ.get("AI_BRIDGE_RETENTION_TELEMETRY_KEEP", "500") or "500"))
+    events_days = float(os.environ.get("AI_BRIDGE_RETENTION_TASK_EVENTS_DAYS", "30") or "30")
+    tasks_days = float(os.environ.get("AI_BRIDGE_RETENTION_TASKS_DAYS", "90") or "90")
+    idem_hours = float(os.environ.get("AI_BRIDGE_RETENTION_IDEMPOTENCY_HOURS", "24") or "24")
+    return retention_sweep(
+        conn,
+        telemetry_keep=keep,
+        task_events_older_than_s=events_days * 86400.0 if events_days > 0 else None,
+        terminal_tasks_older_than_s=tasks_days * 86400.0 if tasks_days > 0 else None,
+        idempotency_ttl_s=max(300.0, idem_hours * 3600.0),
+    )
 
 
 def delete_device_cascade(conn: Any, device_id: str) -> dict[str, int]:

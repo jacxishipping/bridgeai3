@@ -94,4 +94,65 @@ def create_audit_router(ctx: ControlContext) -> APIRouter:
         audit(actor, "", "audit_retention", {"days": days, "deleted_count": cur.rowcount}, "allowed")
         return {"retention_days": days, "deleted_count": cur.rowcount}
 
+    @router.get("/api/traces/{trace_id}")
+    def get_trace_timeline(
+        trace_id: str,
+        tenant: str | None = None,
+        x_admin_token: str | None = Header(default=None),
+        x_session_token: str | None = Header(default=None),
+    ):
+        """Return correlated end-to-end execution timeline for a trace/correlation ID.
+
+        Joins tasks, task_events, approvals, and audit records scoped to the caller's
+        tenant so a single request can be traced from dashboard/MCP submission through
+        agent execution and audit logging.
+        """
+        require_role("viewer", x_admin_token, x_session_token)
+        eff_tenant = resolve_request_tenant(tenant, x_admin_token, x_session_token)
+        tid = (trace_id or "").strip()
+        if not tid or len(tid) > 128:
+            raise HTTPException(status_code=400, detail="Invalid trace_id.")
+        tasks = [
+            dict(r)
+            for r in conn.execute(
+                f"SELECT {dbmod.TASK_LIST_COLUMNS} FROM tasks WHERE tenant=? AND trace_id=? ORDER BY created_at ASC LIMIT 200",
+                (eff_tenant, tid),
+            ).fetchall()
+        ]
+        task_ids = [t["id"] for t in tasks]
+        events: list[dict] = []
+        approvals: list[dict] = []
+        if task_ids:
+            placeholders = ",".join("?" for _ in task_ids)
+            events = [
+                dict(r)
+                for r in conn.execute(
+                    f"SELECT id, task_id, event, detail_json, created_at, trace_id FROM task_events "
+                    f"WHERE task_id IN ({placeholders}) ORDER BY created_at ASC LIMIT 500",
+                    tuple(task_ids),
+                ).fetchall()
+            ]
+            approvals = [
+                dict(r)
+                for r in conn.execute(
+                    f"SELECT * FROM approvals WHERE task_id IN ({placeholders}) ORDER BY created_at ASC LIMIT 200",
+                    tuple(task_ids),
+                ).fetchall()
+            ]
+        audit_rows = [
+            dict(r)
+            for r in conn.execute(
+                "SELECT * FROM audit WHERE tenant=? AND trace_id=? ORDER BY id ASC LIMIT 500",
+                (eff_tenant, tid),
+            ).fetchall()
+        ]
+        return {
+            "trace_id": tid,
+            "tenant": eff_tenant,
+            "tasks": tasks,
+            "task_events": events,
+            "approvals": approvals,
+            "audit": audit_rows,
+        }
+
     return router

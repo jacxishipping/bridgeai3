@@ -1,0 +1,11 @@
+[Unit]
+Description=Run AI Bridge Database Backup & Isolated Restore Drill Daily
+
+[Timer]
+OnCalendar=*-*-* 03:15:00 UTC
+RandomizedDelaySec=600
+Persistent=true
+Unit=ai-bridge-backup.service
+
+[Install]
+WantedBy=timers.target

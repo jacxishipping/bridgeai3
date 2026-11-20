@@ -113,7 +113,7 @@ from .files import (
     read_file,
     write_file,
 )
-from .fleet import broadcast_fleet_command, capture_desktop_frame, update_fleet_agent
+from .fleet import broadcast_fleet_command, capture_desktop_frame, rollback_fleet_agent, update_fleet_agent
 from .project import (
     _is_safe_workspace_file,
     create_backup,
@@ -303,6 +303,7 @@ __all__ = [
     "terminal_exec",
     "threading",
     "time",
+    "rollback_fleet_agent",
     "update_fleet_agent",
     "uuid",
     "verify_screen_contains",

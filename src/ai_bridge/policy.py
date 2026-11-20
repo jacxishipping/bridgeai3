@@ -75,6 +75,7 @@ TOOL_TIERS: dict[str, RiskTier] = {
     "start_webrtc_stream": RiskTier.SENSITIVE,
     "stop_webrtc_stream": RiskTier.SENSITIVE,
     "update_fleet_agent": RiskTier.SENSITIVE,
+    "rollback_fleet_agent": RiskTier.SENSITIVE,
     "ocr_screen": RiskTier.SENSITIVE,
     "click_text": RiskTier.SENSITIVE,
     "click_element": RiskTier.SENSITIVE,
@@ -438,3 +439,30 @@ def revoke_unrestricted_policy(policy: Policy, *, revoked_by: str, db_path: str 
         db_path=db_path,
     )
     return revoked
+
+
+def is_tool_idempotent(tool: str) -> bool:
+    """Return True iff ``tool`` is safe to retry automatically after an ambiguous failure.
+
+    Only Tier 1 (READ_ONLY) tools and explicit pure-inspection tools are classified
+    idempotent; all mutating, shell, write, and desktop-input tools fail closed (False).
+    """
+    name = normalize_tool_name(str(tool or "").strip())
+    tier = TOOL_TIERS.get(name)
+    if tier is None:
+        return False
+    if tier == RiskTier.READ_ONLY:
+        # interact_and_view_screen can bundle input actions, so keep it non-idempotent.
+        return name != "interact_and_view_screen"
+    return name in {
+        "capture_desktop_screenshot",
+        "take_screenshot",
+        "capture_desktop_frame",
+        "desktop_get_screenshot",
+        "desktop_get_window_screenshot",
+        "ocr_screen",
+        "verify_screen_contains",
+        "desktop_verify_action",
+        "list_directory",
+        "read_pc_file",
+    }

@@ -55,8 +55,39 @@ def legacy_webrtc_routes_allowed() -> bool:
     return not is_production_profile()
 
 
+def configured_workers() -> int:
+    raw = os.environ.get("AI_BRIDGE_WORKERS", "").strip()
+    if not raw:
+        return 1
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return 1
+
+
 def require_redis_for_multi_host() -> bool:
-    return _truthy_env("AI_BRIDGE_REQUIRE_REDIS") or _truthy_env("AI_BRIDGE_MULTI_HOST")
+    return _truthy_env("AI_BRIDGE_REQUIRE_REDIS") or _truthy_env("AI_BRIDGE_MULTI_HOST") or configured_workers() > 1
+
+
+def enforce_multi_worker_redis(conn: Any) -> None:
+    """Fail fast at boot when multi-host or multi-worker production lacks Redis.
+
+    Enforced when ``AI_BRIDGE_REQUIRE_REDIS=1`` or ``AI_BRIDGE_MULTI_HOST=1`` is
+    set, or when running under the production profile with ``AI_BRIDGE_WORKERS > 1``.
+    """
+    explicit_multi_host = _truthy_env("AI_BRIDGE_REQUIRE_REDIS") or _truthy_env("AI_BRIDGE_MULTI_HOST")
+    prod_multi_worker = is_production_profile() and configured_workers() > 1
+    if not (explicit_multi_host or prod_multi_worker):
+        return
+    from . import durable_ratelimit as drl
+
+    backend = str(drl.backend_name(conn)).lower()
+    if backend != "redis":
+        raise RuntimeError(
+            "Redis is required when multi-host operation (AI_BRIDGE_MULTI_HOST / AI_BRIDGE_REQUIRE_REDIS) "
+            "or multi-worker production (AI_BRIDGE_WORKERS > 1) is enabled. "
+            f"Configure reachable REDIS_URL or AI_BRIDGE_REDIS_URL (current backend: {backend})."
+        )
 
 
 def assess_production_readiness(conn: Any) -> dict[str, Any]:
@@ -179,12 +210,16 @@ def assess_production_readiness(conn: Any) -> dict[str, Any]:
 
     rate_backend = drl.backend_name(conn)
     backend_l = str(rate_backend).lower()
-    if prod and require_redis_for_multi_host() and backend_l != "redis":
+    explicit_multi_host = _truthy_env("AI_BRIDGE_REQUIRE_REDIS") or _truthy_env("AI_BRIDGE_MULTI_HOST")
+    if (explicit_multi_host or (prod and require_redis_for_multi_host())) and backend_l != "redis":
         issues.append(
             {
                 "code": "redis_required_for_multi_host",
                 "severity": "critical",
-                "message": ("AI_BRIDGE_REQUIRE_REDIS / AI_BRIDGE_MULTI_HOST requires Redis (REDIS_URL or AI_BRIDGE_REDIS_URL) for shared WebRTC/HTTP throttles."),
+                "message": (
+                    "Multi-host / multi-worker operation (AI_BRIDGE_REQUIRE_REDIS, AI_BRIDGE_MULTI_HOST, "
+                    "or AI_BRIDGE_WORKERS > 1 in production) requires reachable Redis (REDIS_URL or AI_BRIDGE_REDIS_URL)."
+                ),
             }
         )
     elif prod and backend_l in ("memory", "mem", "inmemory", "local"):
@@ -236,6 +271,8 @@ def assess_production_readiness(conn: Any) -> dict[str, Any]:
     return {
         "ok": len(critical) == 0,
         "production_profile": prod,
+        "configured_workers": configured_workers(),
+        "redis_required": require_redis_for_multi_host(),
         "turn_configured": turn_credentials_configured(),
         "emergency_stop_durable": emergency_stop_durable,
         "rate_limit_backend": rate_backend,

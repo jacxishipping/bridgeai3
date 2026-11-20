@@ -106,8 +106,14 @@ export class ApiClient {
     const method = (fetchOpts.method ?? "GET").toUpperCase();
     const isMutating = method !== "GET" && method !== "HEAD" && method !== "OPTIONS";
 
+    const correlationId =
+      typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+        ? `ui-${crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`
+        : `ui-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+
     const headers: Record<string, string> = {
       ...(fetchOpts.body ? { "Content-Type": "application/json" } : {}),
+      "X-Correlation-ID": correlationId,
       ...this.authHeaders(),
       ...(fetchOpts.headers as Record<string, string> | undefined),
     };
@@ -689,5 +695,67 @@ export class ApiClient {
       method: "POST",
       body: JSON.stringify(payload),
     });
+  }
+
+  // Release 2: Dead-letter queue, end-to-end traces, update rings & staged rollouts
+  async listDeadLetterTasks(includeReplayed = false): Promise<{ items: Record<string, unknown>[]; count: number }> {
+    return this.request(`/api/tasks/dead-letter?include_replayed=${includeReplayed ? "true" : "false"}`);
+  }
+
+  async replayDeadLetterTask(dlqId: string): Promise<Record<string, unknown>> {
+    return this.request(`/api/tasks/dead-letter/${encodeURIComponent(dlqId)}/replay`, { method: "POST" });
+  }
+
+  async deleteDeadLetterTask(dlqId: string): Promise<{ dlq_id: string; deleted: boolean }> {
+    return this.request(`/api/tasks/dead-letter/${encodeURIComponent(dlqId)}`, { method: "DELETE" });
+  }
+
+  async getTrace(traceId: string): Promise<Record<string, unknown>> {
+    return this.request(`/api/traces/${encodeURIComponent(traceId)}`);
+  }
+
+  async updateDeviceAgent(deviceId: string): Promise<Record<string, unknown>> {
+    return this.request(`/api/devices/${encodeURIComponent(deviceId)}/update`, { method: "POST" });
+  }
+
+  async setDeviceRing(deviceId: string, ring: "canary" | "early" | "general"): Promise<{ device_id: string; update_ring: string }> {
+    return this.request(`/api/devices/${encodeURIComponent(deviceId)}/ring`, {
+      method: "PUT",
+      body: JSON.stringify({ ring }),
+    });
+  }
+
+  async listRollouts(): Promise<{ rollouts: Record<string, unknown>[]; count: number }> {
+    return this.request("/api/fleet/rollouts");
+  }
+
+  async createRollout(payload: {
+    name?: string;
+    target_version?: string;
+    target_commit?: string;
+    manifest_url?: string;
+    rings?: string[];
+    max_failure_rate?: number;
+  }): Promise<Record<string, unknown>> {
+    return this.request("/api/fleet/rollouts", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async advanceRollout(rolloutId: string): Promise<Record<string, unknown>> {
+    return this.request(`/api/fleet/rollouts/${encodeURIComponent(rolloutId)}/advance`, { method: "POST" });
+  }
+
+  async pauseRollout(rolloutId: string): Promise<Record<string, unknown>> {
+    return this.request(`/api/fleet/rollouts/${encodeURIComponent(rolloutId)}/pause`, { method: "POST" });
+  }
+
+  async resumeRollout(rolloutId: string): Promise<Record<string, unknown>> {
+    return this.request(`/api/fleet/rollouts/${encodeURIComponent(rolloutId)}/resume`, { method: "POST" });
+  }
+
+  async rollbackRollout(rolloutId: string): Promise<Record<string, unknown>> {
+    return this.request(`/api/fleet/rollouts/${encodeURIComponent(rolloutId)}/rollback`, { method: "POST" });
   }
 }

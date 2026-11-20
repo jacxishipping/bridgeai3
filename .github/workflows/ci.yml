@@ -241,3 +241,71 @@ jobs:
             .run/staging_release_gate_evidence.json
             .run/webrtc_browser_e2e_evidence.json
           retention-days: 30
+
+  security-and-supply-chain:
+    name: Security, SBOM & Supply-Chain Gate (Release 2)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: apps/dashboard/package-lock.json
+      - name: Install AI Bridge + pip-audit
+        run: |
+          pip install -e ".[dev]" pip-audit
+      - name: Python dependency vulnerability audit
+        run: |
+          mkdir -p .run
+          pip-audit --format json --output .run/pip-audit.json || true
+      - name: Dashboard npm audit (high/critical)
+        working-directory: apps/dashboard
+        run: |
+          npm ci
+          npm audit --audit-level=high --json > ../../.run/npm-audit.json || true
+      - name: Secret hygiene scan (tracked files)
+        run: |
+          python -c "
+          import pathlib, re, sys
+          bad = []
+          pat = re.compile(r'-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----')
+          for p in pathlib.Path('.').rglob('*'):
+              if not p.is_file() or '.git' in p.parts or 'node_modules' in p.parts or '.run' in p.parts:
+                  continue
+              if p.suffix in ('.png', '.jpg', '.ico', '.woff2', '.pdf', '.zip', '.db', '.exe'):
+                  continue
+              try:
+                  txt = p.read_text(encoding='utf-8', errors='ignore')
+              except Exception:
+                  continue
+              if pat.search(txt) and 'tests' not in p.parts and 'scripts' not in p.parts:
+                  bad.append(str(p))
+          if bad:
+              print('Potential private key material found in:', bad, file=sys.stderr)
+              sys.exit(1)
+          print('Secret hygiene scan passed.')
+          "
+      - name: Signed release manifest end-to-end dry run
+        run: |
+          python scripts/release_manifest_dryrun.py --evidence-out .run/release_manifest_dryrun.json
+      - name: Generate CycloneDX SBOM & assemble release evidence bundle
+        run: |
+          python scripts/generate_sbom.py --out .run/sbom.cdx.json
+          python scripts/assemble_release_evidence.py --out-dir .run/release-evidence --evidence-dir .run
+      - name: Validate production Dockerfile build
+        run: |
+          docker build -f deployment/docker/Dockerfile.prod -t ai-bridge:ci-check .
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: release-2-supply-chain-evidence
+          path: |
+            .run/sbom.cdx.json
+            .run/pip-audit.json
+            .run/npm-audit.json
+            .run/release_manifest_dryrun.json
+            .run/release-evidence/
+          retention-days: 90

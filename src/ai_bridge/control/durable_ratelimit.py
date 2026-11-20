@@ -454,6 +454,28 @@ async def allow_async(key: str, limit: int, window: float = 60.0, *, conn: Any |
     return _memory_allow(key, limit, window)
 
 
+def prune_expired_db_ratelimits(conn: Any, *, max_age_sec: float = 3600.0) -> int:
+    """Remove stale ``ratelimit.*`` counter rows from the shared settings table."""
+    cutoff_ms = int((time.time() - max(60.0, float(max_age_sec))) * 1000)
+    rows = conn.execute("SELECT key, value FROM settings WHERE key LIKE 'ratelimit.%'").fetchall()
+    removed = 0
+    for row in rows:
+        k = row["key"] if hasattr(row, "keys") else row[0]
+        raw = str(row["value"] if hasattr(row, "keys") else row[1])
+        try:
+            num = abs(int(raw))
+            t0_ms = num // _DB_COUNT_MODULUS
+            stale = t0_ms < cutoff_ms
+        except Exception:
+            stale = True
+        if stale:
+            conn.execute("DELETE FROM settings WHERE key=?", (k,))
+            removed += 1
+    if removed:
+        conn.commit()
+    return removed
+
+
 def reset_for_tests() -> None:
     """Clear cached clients, once-per-process warnings, and buckets."""
     global _SYNC_REDIS, _SYNC_REDIS_OK, _SYNC_REDIS_FAILED_AT

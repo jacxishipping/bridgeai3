@@ -60,6 +60,7 @@ def create_tasks_router(ctx: ControlContext) -> APIRouter:
             conn, actor=actor, role=role, tenant=tenant,
             device_id=body.device_id, tool=body.tool, args=body.args,
             request_key=request_key, human_initiated=False,
+            max_attempts=getattr(body, "max_attempts", 1),
             get_effective_device_policy=get_effective_device_policy,
             get_current_policy=get_current_policy, notify=notify_tasks, audit_fn=audit,
         )
@@ -94,6 +95,80 @@ def create_tasks_router(ctx: ControlContext) -> APIRouter:
         # "result" key, so a 200-row list can no longer return multi-MB
         # screenshot payloads. Same tenant/device filtering as before.
         return dbmod.list_tasks_projected(conn, tenant=tenant, device_id=device_id, limit=200)
+
+    @router.get("/api/tasks/dead-letter")
+    def list_dead_letter_tasks(
+        include_replayed: bool = False,
+        limit: int = 100,
+        tenant: str | None = None,
+        x_admin_token: str | None = Header(default=None),
+        x_session_token: str | None = Header(default=None),
+    ):
+        require_role("viewer", x_admin_token, x_session_token)
+        eff_tenant = resolve_request_tenant(tenant, x_admin_token, x_session_token)
+        from .. import orchestration as orchmod
+
+        items = orchmod.list_dead_letters(conn, tenant=eff_tenant, limit=limit, include_replayed=include_replayed)
+        return {"items": items, "count": len(items)}
+
+    @router.post("/api/tasks/dead-letter/{dlq_id}/replay")
+    def replay_dead_letter_task(
+        dlq_id: str,
+        x_admin_token: str | None = Header(default=None),
+        x_session_token: str | None = Header(default=None),
+    ):
+        actor = require_role("operator", x_admin_token, x_session_token)
+        _actor, role, _tenant, _is_legacy = _auth_context_full(x_admin_token, x_session_token)
+        row = conn.execute("SELECT * FROM task_dead_letters WHERE id=?", (dlq_id,)).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Dead-letter entry not found.")
+        _require_row_tenant(row, x_admin_token, x_session_token)
+        if row["replayed_task_id"]:
+            raise HTTPException(status_code=409, detail=f"Dead-letter entry already replayed as task {row['replayed_task_id']}.")
+        try:
+            args = json.loads(row["args_json"] or "{}")
+            if not isinstance(args, dict):
+                args = {}
+        except Exception:
+            args = {}
+        created = task_service_mod.create_task(
+            conn,
+            actor=actor,
+            role=role,
+            tenant=row["tenant"],
+            device_id=row["device_id"],
+            tool=row["tool"],
+            args=args,
+            human_initiated=True,
+            get_effective_device_policy=get_effective_device_policy,
+            get_current_policy=get_current_policy,
+            notify=notify_tasks,
+            audit_fn=audit,
+        )
+        now_ts = dbmod.now()
+        conn.execute(
+            "UPDATE task_dead_letters SET replayed_task_id=?, replayed_at=? WHERE id=?",
+            (created["task_id"], now_ts, dlq_id),
+        )
+        conn.commit()
+        audit(actor, row["device_id"], "replay_dead_letter", {"dlq_id": dlq_id, "new_task_id": created["task_id"], "original_task_id": row["task_id"]}, "allowed", tenant=row["tenant"])
+        return {"dlq_id": dlq_id, "replayed": True, **created}
+
+    @router.delete("/api/tasks/dead-letter/{dlq_id}")
+    def purge_dead_letter_task(
+        dlq_id: str,
+        x_admin_token: str | None = Header(default=None),
+        x_session_token: str | None = Header(default=None),
+    ):
+        actor = require_role("admin", x_admin_token, x_session_token)
+        row = conn.execute("SELECT * FROM task_dead_letters WHERE id=?", (dlq_id,)).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Dead-letter entry not found.")
+        _require_row_tenant(row, x_admin_token, x_session_token)
+        conn.execute("DELETE FROM task_dead_letters WHERE id=?", (dlq_id,))
+        conn.commit()
+        audit(actor, row["device_id"], "purge_dead_letter", {"dlq_id": dlq_id, "task_id": row["task_id"]}, "allowed", tenant=row["tenant"])
+        return {"dlq_id": dlq_id, "deleted": True}
 
     @router.get("/api/tasks/{task_id}")
     async def get_task(task_id: str, wait: float = 0.0, x_admin_token: str | None = Header(default=None), x_session_token: str | None = Header(default=None)):
@@ -165,7 +240,32 @@ def create_tasks_router(ctx: ControlContext) -> APIRouter:
         _require_row_tenant(row, x_admin_token, x_session_token)
         if row["status"] in {"completed", "failed", "cancelled"}:
             return {"task_id": task_id, "status": row["status"]}
-        conn.execute("UPDATE tasks SET status='cancelled', updated_at=? WHERE id=?", (dbmod.now(), task_id))
+        now_ts = dbmod.now()
+        try:
+            conn.execute(
+                "UPDATE tasks SET status='cancelled', failure_class='cancelled', failure_reason='operator_cancelled', lease_expires_at=NULL, updated_at=? WHERE id=?",
+                (now_ts, task_id),
+            )
+        except Exception:
+            conn.execute("UPDATE tasks SET status='cancelled', updated_at=? WHERE id=?", (now_ts, task_id))
+        try:
+            from .. import task_events as task_eventsmod
+
+            trace_id = ""
+            try:
+                trace_id = str(row["trace_id"] or "")
+            except Exception:
+                pass
+            task_eventsmod.append_task_event(
+                conn,
+                task_id,
+                "cancelled",
+                {"failure_class": "cancelled", "failure_reason": "operator_cancelled"},
+                trace_id=trace_id,
+                commit=False,
+            )
+        except Exception:
+            pass
         conn.commit()
         notify_tasks(row["device_id"], task_id, cancel=True)
         audit("admin", row["device_id"], "cancel_task", {"task_id": task_id}, "allowed")
@@ -285,11 +385,14 @@ def create_tasks_router(ctx: ControlContext) -> APIRouter:
             expire_pending_approvals()
             raise HTTPException(status_code=409, detail="Approval has expired.")
         now = dbmod.now()
-        conn.execute("UPDATE approvals SET status=?, decided_by=?, decided_at=? WHERE id=? AND status='pending'", (body.decision, actor, now, approval_id))
+        cur = conn.execute("UPDATE approvals SET status=?, decided_by=?, decided_at=? WHERE id=? AND status='pending'", (body.decision, actor, now, approval_id))
+        if cur.rowcount != 1:
+            conn.commit()
+            raise HTTPException(status_code=409, detail="Approval was already decided or expired.")
         device_id = None
         if row["task_id"]:
             new_status = "queued" if body.decision == "approved" else "cancelled"
-            conn.execute("UPDATE tasks SET status=?, updated_at=? WHERE id=?", (new_status, now, row["task_id"]))
+            conn.execute("UPDATE tasks SET status=?, updated_at=? WHERE id=? AND status='needs_approval'", (new_status, now, row["task_id"]))
             trow = conn.execute("SELECT device_id FROM tasks WHERE id=?", (row["task_id"],)).fetchone()
             device_id = trow["device_id"] if trow else None
         conn.commit()
@@ -317,7 +420,10 @@ def create_tasks_router(ctx: ControlContext) -> APIRouter:
             raise HTTPException(status_code=409, detail=f"Approval is already {row['status']}.")
         feedback = (body.reason or "").strip() or "Operator requested re-plan with non-destructive parameters."
         now = dbmod.now()
-        conn.execute("UPDATE approvals SET status='denied', decided_by=?, decided_at=?, reason=? WHERE id=? AND status='pending'", (actor, now, feedback, approval_id))
+        cur = conn.execute("UPDATE approvals SET status='denied', decided_by=?, decided_at=?, reason=? WHERE id=? AND status='pending'", (actor, now, feedback, approval_id))
+        if cur.rowcount != 1:
+            conn.commit()
+            raise HTTPException(status_code=409, detail="Approval was already decided or expired.")
         if row["task_id"]:
             conn.execute("UPDATE tasks SET status='cancelled', updated_at=? WHERE id=? AND status='needs_approval'", (now, row["task_id"]))
         conn.commit()
@@ -327,9 +433,9 @@ def create_tasks_router(ctx: ControlContext) -> APIRouter:
 
     @router.get("/api/approvals/quick/{approval_id}", response_class=HTMLResponse)
     def quick_approval(approval_id: str, decision: str = "approved", sig: str = "", request: Request = None):
-        _rate_limit(f"quick_approval:{approval_id}", limit=10, window=60)
-        if request:
-            _rate_limit(f"quick_approval_ip:{request.client.host}", limit=30, window=60)
+        _rate_limit(f"quick_approval:{approval_id}", limit=10, window=60, conn=conn)
+        if request and request.client:
+            _rate_limit(f"quick_approval_ip:{request.client.host}", limit=30, window=60, conn=conn)
         expire_pending_approvals()
         decision = (decision or "").strip().lower()
         if decision not in {"approved", "denied"}:
@@ -429,10 +535,24 @@ def create_tasks_router(ctx: ControlContext) -> APIRouter:
                 status_code=410,
             )
 
-        conn.execute("UPDATE approvals SET status=?, decided_by=?, decided_at=? WHERE id=? AND status='pending'", (decision, "mobile_quick_approval", now, approval_id))
+        cur = conn.execute("UPDATE approvals SET status=?, decided_by=?, decided_at=? WHERE id=? AND status='pending'", (decision, "mobile_quick_approval", now, approval_id))
+        if cur.rowcount != 1:
+            conn.commit()
+            return HTMLResponse(
+                content=_render_quick_decision_html(
+                    title="Already Decided",
+                    badge_class="info",
+                    badge_icon="ℹ️",
+                    badge_text="ALREADY DECIDED",
+                    heading="Request Already Decided",
+                    message="This approval request was already decided concurrently.",
+                    details={"Approval ID": approval_id, "Task ID": row["task_id"] or "N/A"},
+                ),
+                status_code=200,
+            )
         if row["task_id"]:
             new_status = "queued" if decision == "approved" else "cancelled"
-            conn.execute("UPDATE tasks SET status=?, updated_at=? WHERE id=?", (new_status, now, row["task_id"]))
+            conn.execute("UPDATE tasks SET status=?, updated_at=? WHERE id=? AND status='needs_approval'", (new_status, now, row["task_id"]))
         conn.commit()
         notify_tasks()
         audit("mobile_quick_approval", "", "decide_approval", {"approval_id": approval_id, "decision": decision, "channel": "mobile_hmac"}, "allowed")

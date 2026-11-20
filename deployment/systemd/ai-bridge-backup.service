@@ -1,0 +1,17 @@
+[Unit]
+Description=AI Bridge Scheduled Database Backup & Restore Verification Drill
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=aibridge
+Group=aibridge
+EnvironmentFile=-/etc/ai-bridge/control.env
+WorkingDirectory=/opt/ai-bridge
+ExecStart=/opt/ai-bridge/scripts/backup_drill.sh
+Nice=10
+IOSchedulingClass=best-effort
+PrivateTmp=yes
+ProtectSystem=strict
+ReadWritePaths=/var/backups/ai-bridge /var/lib/ai-bridge /tmp

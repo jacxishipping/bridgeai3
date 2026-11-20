@@ -187,6 +187,8 @@ def create_task(
     task_id: str | None = None,
     approval_id: str | None = None,
     human_initiated: bool = False,
+    max_attempts: int | None = None,
+    trace_id: str | None = None,
     device_row: Any = None,
     get_effective_device_policy: Callable[[Any], dict[str, Any]] | None = None,
     get_current_policy: Callable[[], dict[str, Any]] | None = None,
@@ -309,6 +311,16 @@ def create_task(
     else:
         request_hash = ""
 
+    resolved_max_attempts = max(1, min(5, int(max_attempts or 1)))
+    if not trace_id:
+        try:
+            from ..logging_config import get_correlation_id
+
+            trace_id = get_correlation_id() or ""
+        except Exception:
+            trace_id = ""
+    resolved_trace_id = str(trace_id or "")[:128]
+
     with conn.transaction():
         if request_key:
             claim = conn.execute(
@@ -339,6 +351,7 @@ def create_task(
                     "status": task["status"],
                     "tier": task["tier"],
                     "approval_id": task["approval_id"],
+                    "trace_id": _row_get(task, "trace_id", ""),
                 }
         status = "queued"
         if needs_approval:
@@ -362,22 +375,55 @@ def create_task(
                 ),
             )
             status = "needs_approval"
-        conn.execute(
-            "INSERT INTO tasks (id, device_id, tenant, tool, args_json, tier, status, approval_id, created_at, updated_at)"
-            " VALUES (?,?,?,?,?,?,?,?,?,?)",
-            (
+        try:
+            conn.execute(
+                "INSERT INTO tasks (id, device_id, tenant, tool, args_json, tier, status, approval_id, created_at, updated_at, max_attempts, trace_id)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    task_id,
+                    device_id,
+                    tenant,
+                    tool_name,
+                    json.dumps(args),
+                    tier.value,
+                    status,
+                    approval_id,
+                    now_ts,
+                    now_ts,
+                    resolved_max_attempts,
+                    resolved_trace_id,
+                ),
+            )
+        except Exception:
+            conn.execute(
+                "INSERT INTO tasks (id, device_id, tenant, tool, args_json, tier, status, approval_id, created_at, updated_at)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?)",
+                (
+                    task_id,
+                    device_id,
+                    tenant,
+                    tool_name,
+                    json.dumps(args),
+                    tier.value,
+                    status,
+                    approval_id,
+                    now_ts,
+                    now_ts,
+                ),
+            )
+        try:
+            from .task_events import append_task_event
+
+            append_task_event(
+                conn,
                 task_id,
-                device_id,
-                tenant,
-                tool_name,
-                json.dumps(args),
-                tier.value,
-                status,
-                approval_id,
-                now_ts,
-                now_ts,
-            ),
-        )
+                "created" if status == "queued" else "needs_approval",
+                {"tool": tool_name, "device_id": device_id, "actor": actor, "max_attempts": resolved_max_attempts},
+                trace_id=resolved_trace_id,
+                commit=False,
+            )
+        except Exception:
+            pass
 
     if audit_fn is not None:
         try:
@@ -407,4 +453,4 @@ def create_task(
             notify(device_id, task_id)
         except Exception:
             pass
-    return {"task_id": task_id, "status": status, "tier": tier.value, "approval_id": approval_id}
+    return {"task_id": task_id, "status": status, "tier": tier.value, "approval_id": approval_id, "trace_id": resolved_trace_id}

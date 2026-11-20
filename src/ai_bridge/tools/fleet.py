@@ -215,3 +215,43 @@ def update_fleet_agent(
         "stderr": "",
         "timestamp": time.time(),
     }
+
+
+def rollback_fleet_agent(
+    *,
+    approval_granted: bool = False,
+    policy: Policy | None = None,
+    repo_dir: str | Path | None = None,
+    rollback_file: str | Path | None = None,
+) -> dict:
+    """Roll back the local agent checkout to the commit recorded in ``update-rollback.json``."""
+    import json
+    import re
+    import subprocess
+
+    eff_policy = policy or default_policy()
+    _check("rollback_fleet_agent", approval_granted=approval_granted, policy=eff_policy)
+    repo = _resolve_update_repo_dir(repo_dir)
+    rb_path = Path(rollback_file) if rollback_file is not None else (Path.home() / ".ai-bridge" / "update-rollback.json")
+    if not rb_path.is_file():
+        raise FileNotFoundError(f"No rollback metadata found at {rb_path}.")
+    meta = json.loads(rb_path.read_text(encoding="utf-8"))
+    prev_commit = str(meta.get("previous_commit") or meta.get("prev_commit") or "").strip()
+    if not re.fullmatch(r"[0-9a-fA-F]{7,40}", prev_commit):
+        raise ValueError(f"Invalid prev_commit in rollback metadata: {prev_commit!r}")
+    proc = subprocess.run(
+        ["git", "-C", str(repo), "checkout", "--force", prev_commit],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(f"git rollback checkout failed: {(proc.stderr or proc.stdout).strip()}")
+    return {
+        "ok": True,
+        "rolled_back_to": prev_commit,
+        "returncode": 0,
+        "stdout": prev_commit,
+        "stderr": "",
+        "timestamp": time.time(),
+    }

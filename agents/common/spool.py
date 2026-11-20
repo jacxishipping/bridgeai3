@@ -54,6 +54,7 @@ DEFAULT_MAX_ATTEMPTS = 10
 DLQ_REASON_CAPACITY = "spool_capacity_exceeded"
 DLQ_REASON_TTL = "ttl_expired"
 DLQ_REASON_MAX_ATTEMPTS = "max_attempts_exceeded"
+DLQ_REASON_PLANE_REJECTED = "plane_rejected_stale"
 
 
 class TaskSpooler:
@@ -96,7 +97,9 @@ class TaskSpooler:
                         result TEXT NOT NULL,
                         created_at REAL NOT NULL,
                         attempts INTEGER NOT NULL DEFAULT 0,
-                        last_attempt_at REAL NOT NULL DEFAULT 0
+                        last_attempt_at REAL NOT NULL DEFAULT 0,
+                        epoch INTEGER,
+                        trace_id TEXT NOT NULL DEFAULT ''
                     );
                 """)
                 conn.execute("""
@@ -108,9 +111,18 @@ class TaskSpooler:
                         attempts INTEGER NOT NULL DEFAULT 0,
                         last_attempt_at REAL NOT NULL DEFAULT 0,
                         dead_at REAL NOT NULL,
-                        reason TEXT NOT NULL
+                        reason TEXT NOT NULL,
+                        epoch INTEGER,
+                        trace_id TEXT NOT NULL DEFAULT ''
                     );
                 """)
+                # Safe additive upgrade for pre-Release-2 spool DBs
+                for tbl in ("spooled_results", "dead_letter_results"):
+                    cols = {r[1] for r in conn.execute(f"PRAGMA table_info({tbl})").fetchall()}
+                    if "epoch" not in cols:
+                        conn.execute(f"ALTER TABLE {tbl} ADD COLUMN epoch INTEGER")
+                    if "trace_id" not in cols:
+                        conn.execute(f"ALTER TABLE {tbl} ADD COLUMN trace_id TEXT NOT NULL DEFAULT ''")
                 conn.commit()
         except Exception as exc:
             logger.warning("Could not initialize local task spool at %s: %s", self.db_path, exc)
@@ -128,7 +140,7 @@ class TaskSpooler:
     ) -> bool:
         """Move one pending row to the DLQ. Returns True if a row moved."""
         row = conn.execute(
-            "SELECT task_id, status, result, created_at, attempts, last_attempt_at"
+            "SELECT task_id, status, result, created_at, attempts, last_attempt_at, epoch, trace_id"
             " FROM spooled_results WHERE task_id=?",
             (task_id,),
         ).fetchone()
@@ -136,13 +148,14 @@ class TaskSpooler:
             return False
         conn.execute(
             """INSERT INTO dead_letter_results
-                   (task_id, status, result, created_at, attempts, last_attempt_at, dead_at, reason)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                   (task_id, status, result, created_at, attempts, last_attempt_at, dead_at, reason, epoch, trace_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                    ON CONFLICT(task_id) DO UPDATE SET
                        status=excluded.status, result=excluded.result,
                        attempts=excluded.attempts, last_attempt_at=excluded.last_attempt_at,
-                       dead_at=excluded.dead_at, reason=excluded.reason""",
-            (row[0], row[1], row[2], row[3], row[4], row[5], time.time(), reason),
+                       dead_at=excluded.dead_at, reason=excluded.reason,
+                       epoch=excluded.epoch, trace_id=excluded.trace_id""",
+            (row[0], row[1], row[2], row[3], row[4], row[5], time.time(), reason, row[6], row[7]),
         )
         conn.execute("DELETE FROM spooled_results WHERE task_id=?", (task_id,))
         logger.warning(
@@ -233,7 +246,44 @@ class TaskSpooler:
                 logger.warning("Failed to query dead-lettered tasks: %s", exc)
                 return []
 
-    def spool(self, task_id: str, status: str, result: str) -> None:
+    def stats(self) -> dict:
+        """Return spool observability metrics for heartbeat/fleet health reporting."""
+        with self._lock:
+            try:
+                now_ts = time.time()
+                with sqlite3.connect(str(self.db_path), timeout=5.0) as conn:
+                    row = conn.execute(
+                        "SELECT COUNT(*), COALESCE(SUM(LENGTH(result)), 0), MIN(created_at) FROM spooled_results"
+                    ).fetchone()
+                    dlq = int(conn.execute("SELECT COUNT(*) FROM dead_letter_results").fetchone()[0])
+                    pending = int(row[0] or 0)
+                    total_bytes = int(row[1] or 0)
+                    oldest_at = row[2]
+                    oldest_age = round(max(0.0, now_ts - float(oldest_at)), 1) if oldest_at is not None else 0.0
+                    return {
+                        "pending_count": pending,
+                        "total_bytes": total_bytes,
+                        "oldest_pending_age_sec": oldest_age,
+                        "dead_letter_count": dlq,
+                    }
+            except Exception as exc:
+                logger.warning("Failed to compute spool stats: %s", exc)
+                return {
+                    "pending_count": 0,
+                    "total_bytes": 0,
+                    "oldest_pending_age_sec": 0.0,
+                    "dead_letter_count": 0,
+                }
+
+    def spool(
+        self,
+        task_id: str,
+        status: str,
+        result: str,
+        *,
+        epoch: int | None = None,
+        trace_id: str = "",
+    ) -> None:
         """Persist a task result locally to survive network cuts or process restarts.
 
         Bounded (F07-08): expired pending results are pruned to the DLQ
@@ -273,15 +323,17 @@ class TaskSpooler:
                                 break
                             count, total_bytes = self._pending_stats_locked(conn)
                     conn.execute("""
-                        INSERT INTO spooled_results (task_id, status, result, created_at, attempts, last_attempt_at)
-                        VALUES (?, ?, ?, ?, 0, ?)
+                        INSERT INTO spooled_results (task_id, status, result, created_at, attempts, last_attempt_at, epoch, trace_id)
+                        VALUES (?, ?, ?, ?, 0, ?, ?, ?)
                         ON CONFLICT(task_id) DO UPDATE SET
                             status=excluded.status,
                             result=excluded.result,
                             created_at=excluded.created_at,
                             attempts=0,
-                            last_attempt_at=excluded.last_attempt_at;
-                    """, (task_id, status, result, now_ts, now_ts))
+                            last_attempt_at=excluded.last_attempt_at,
+                            epoch=excluded.epoch,
+                            trace_id=excluded.trace_id;
+                    """, (task_id, status, result, now_ts, now_ts, epoch, str(trace_id or "")[:128]))
                     conn.commit()
                 logger.info("Persisted spooled result for task %s to %s", task_id, self.db_path.name)
             except Exception as exc:
@@ -311,7 +363,7 @@ class TaskSpooler:
                 with sqlite3.connect(str(self.db_path), timeout=5.0) as conn:
                     conn.row_factory = sqlite3.Row
                     rows = conn.execute(
-                        "SELECT task_id, status, result, created_at, attempts FROM spooled_results ORDER BY created_at ASC LIMIT ?",
+                        "SELECT task_id, status, result, created_at, attempts, epoch, trace_id FROM spooled_results ORDER BY created_at ASC LIMIT ?",
                         (max_items,),
                     ).fetchall()
                     return [dict(r) for r in rows]
@@ -319,33 +371,46 @@ class TaskSpooler:
                 logger.warning("Failed to query spooled tasks: %s", exc)
                 return []
 
-    def flush(self, sender_fn: Callable[[str, str, str], bool]) -> int:
+    def flush(self, sender_fn: Callable[..., bool | str]) -> int:
         """Attempt to deliver all spooled tasks to the Control Plane.
 
-        sender_fn(task_id, status, result) -> bool
-        Returns the count of successfully delivered tasks.
-
-        F07-08: no head-of-line blocking — a failed item is left pending
-        (with its attempt count bumped) and the flush continues with the
-        next item. An item that reaches ``max_attempts`` failed deliveries
-        is moved to the DLQ instead of being retried forever; a
-        TTL-expired item is dead-lettered instead of being delivered stale.
+        Supports both legacy 3-arg ``sender_fn(task_id, status, result) -> bool``
+        and Release-2 5-arg ``sender_fn(task_id, status, result, epoch, trace_id) -> bool | str``.
+        If ``sender_fn`` returns ``"terminal_rejected"`` (e.g., plane answered HTTP 404/409
+        for a stale/timed-out task), the item is moved to the DLQ immediately instead of
+        retrying ``max_attempts`` times.
         """
+        import inspect
+
         pending = self.get_pending()
         if not pending:
             return 0
+
+        try:
+            sig = inspect.signature(sender_fn)
+            params = list(sig.parameters.values())
+            accepts_extra = (
+                len(params) >= 5
+                or any(p.kind == inspect.Parameter.VAR_POSITIONAL for p in params)
+            )
+        except Exception:
+            accepts_extra = False
 
         flushed_count = 0
         for item in pending:
             tid = item["task_id"]
             st = item["status"]
             res = item["result"]
+            ep = item.get("epoch")
+            tr = item.get("trace_id") or ""
             try:
-                ok = sender_fn(tid, st, res)
+                outcome = sender_fn(tid, st, res, ep, tr) if accepts_extra else sender_fn(tid, st, res)
             except Exception as exc:
                 logger.debug("Failed to flush spooled task %s: %s", tid, exc)
-                ok = False
-            if ok:
+                outcome = False
+            if outcome == "terminal_rejected":
+                self.move_to_dlq(tid, DLQ_REASON_PLANE_REJECTED)
+            elif outcome:
                 self.mark_flushed(tid)
                 flushed_count += 1
                 logger.info("Successfully flushed spooled task %s to control plane", tid)

@@ -213,12 +213,11 @@ def create_devices_router(ctx: ControlContext) -> APIRouter:
         if row is None:
             raise HTTPException(status_code=404, detail="Device not found.")
         _require_row_tenant(row, x_admin_token, x_session_token)
-        cur = conn.execute("DELETE FROM devices WHERE id=?", (device_id,))
-        conn.commit()
-        if cur.rowcount == 0:
+        counts = dbmod.delete_device_cascade(conn, device_id)
+        if counts.get("devices", 0) == 0:
             raise HTTPException(status_code=404, detail="Device not found.")
-        audit(actor, device_id, "delete_device", {}, "allowed")
-        return {"device_id": device_id, "deleted": True}
+        audit(actor, device_id, "delete_device", {"cascade_counts": counts}, "allowed")
+        return {"device_id": device_id, "deleted": True, "cascade_counts": counts}
 
     @router.get("/api/devices/{device_id}/policy")
     def get_device_policy_api(device_id: str, x_admin_token: str | None = Header(default=None), x_session_token: str | None = Header(default=None)):
@@ -323,10 +322,23 @@ def create_devices_router(ctx: ControlContext) -> APIRouter:
         device_data["has_custom_policy"] = bool(device_data["policy"])
         device_data["effective_policy"] = eff_policy
 
-        # Find latest completed diagnostic tasks for this device
+        # Find latest completed diagnostic tasks for this device (bounded to diagnostic tools;
+        # never scan unbounded multi-MB screenshot payloads).
+        _OVERVIEW_TOOLS = (
+            "get_system_info",
+            "get_resource_usage",
+            "get_network_info",
+            "list_processes",
+            "list_docker_containers",
+            "get_disk_usage",
+            "get_memory_usage",
+            "get_desktop_status",
+        )
+        _t_placeholders = ",".join("?" for _ in _OVERVIEW_TOOLS)
         diag_rows = conn.execute(
-            "SELECT tool, result, updated_at FROM tasks WHERE device_id=? AND status='completed' ORDER BY updated_at DESC",
-            (device_id,),
+            f"SELECT tool, result, updated_at FROM tasks WHERE device_id=? AND status='completed' "
+            f"AND tool IN ({_t_placeholders}) ORDER BY updated_at DESC LIMIT 100",
+            (device_id, *_OVERVIEW_TOOLS),
         ).fetchall()
 
         latest_results: dict[str, dict] = {}
@@ -604,17 +616,41 @@ def create_devices_router(ctx: ControlContext) -> APIRouter:
         device_summaries = []
         cpu_vals, mem_vals, disk_vals = [], [], []
 
+        dev_ids = [d["id"] for d in dev_rows]
+        latest_tel_by_dev: dict[str, dict] = {}
+        live_meta_by_dev: dict[str, dict] = {}
+        if dev_ids:
+            placeholders = ",".join("?" for _ in dev_ids)
+            try:
+                tel_rows = conn.execute(
+                    "SELECT device_id, cpu_percent, memory_percent, disk_percent, recorded_at FROM ("
+                    "  SELECT device_id, cpu_percent, memory_percent, disk_percent, recorded_at, "
+                    "         ROW_NUMBER() OVER (PARTITION BY device_id ORDER BY recorded_at DESC) AS rn "
+                    f"  FROM telemetry WHERE device_id IN ({placeholders})"
+                    ") sub WHERE rn = 1",
+                    tuple(dev_ids),
+                ).fetchall()
+                for tr in tel_rows:
+                    td = dict(tr)
+                    did = td.pop("device_id")
+                    latest_tel_by_dev[did] = td
+            except Exception:
+                for did in dev_ids:
+                    tr = conn.execute(
+                        "SELECT cpu_percent, memory_percent, disk_percent, recorded_at FROM telemetry WHERE device_id=? ORDER BY recorded_at DESC LIMIT 1",
+                        (did,),
+                    ).fetchone()
+                    if tr:
+                        latest_tel_by_dev[did] = dict(tr)
+            live_meta_by_dev = _get_devices_live_meta(dev_ids)
+
         for d in dev_rows:
             latency = (now_ts - (d["last_seen"] or 0)) if d["last_seen"] else 9999
             is_online = (d["status"] == "online") and (latency < 90)
             if is_online:
                 online_count += 1
-            latest_tel = conn.execute(
-                "SELECT cpu_percent, memory_percent, disk_percent, recorded_at FROM telemetry WHERE device_id=? ORDER BY recorded_at DESC LIMIT 1",
-                (d["id"],),
-            ).fetchone()
-            tel_data = dict(latest_tel) if latest_tel else None
-            live_meta = _get_device_live_meta(d["id"])
+            tel_data = dict(latest_tel_by_dev[d["id"]]) if d["id"] in latest_tel_by_dev else None
+            live_meta = live_meta_by_dev.get(d["id"]) or {}
             if tel_data:
                 for k in ("memory_total_gb", "disk_total_gb", "uptime_hours"):
                     if live_meta.get(k) is not None:
@@ -700,8 +736,15 @@ def create_devices_router(ctx: ControlContext) -> APIRouter:
         except Exception:
             pass
 
+        try:
+            import importlib.metadata
+
+            cp_version = importlib.metadata.version("ai-bridge")
+        except Exception:
+            cp_version = "0.3.0"
+
         return {
-            "control_plane_version": "1.30.0",
+            "control_plane_version": cp_version,
             "git_commit": git_commit,
             "git_branch": git_branch,
             "system_time": time.time(),
@@ -771,5 +814,135 @@ def create_devices_router(ctx: ControlContext) -> APIRouter:
         device_mtls.set_device_fingerprint(conn, device_id, fp)
         audit(actor, device_id, "set_mtls_fingerprint", {"fingerprint": fp[:16] + "..."}, "allowed")
         return {"ok": True, "device_id": device_id, "mtls_fingerprint": fp}
+
+    @router.put("/api/devices/{device_id}/ring")
+    def set_device_update_ring(
+        device_id: str,
+        body: dict = Body(default={}),
+        x_admin_token: str | None = Header(default=None),
+        x_session_token: str | None = Header(default=None),
+    ):
+        actor = require_role("admin", x_admin_token, x_session_token)
+        _require_device_tenant(device_id, x_admin_token, x_session_token)
+        from .. import rollouts as rolloutsmod
+
+        res = rolloutsmod.set_device_ring(conn, device_id, str(body.get("ring") or body.get("update_ring") or ""))
+        audit(actor, device_id, "set_device_ring", res, "allowed")
+        return res
+
+    @router.get("/api/fleet/rollouts")
+    def list_fleet_rollouts(
+        tenant: str | None = None,
+        x_admin_token: str | None = Header(default=None),
+        x_session_token: str | None = Header(default=None),
+    ):
+        require_role("viewer", x_admin_token, x_session_token)
+        eff_tenant = resolve_request_tenant(tenant, x_admin_token, x_session_token)
+        from .. import rollouts as rolloutsmod
+
+        items = rolloutsmod.list_rollouts(conn, tenant=eff_tenant)
+        return {"rollouts": items, "count": len(items)}
+
+    @router.post("/api/fleet/rollouts")
+    def create_fleet_rollout(
+        body: dict = Body(default={}),
+        x_admin_token: str | None = Header(default=None),
+        x_session_token: str | None = Header(default=None),
+    ):
+        actor = require_role("admin", x_admin_token, x_session_token)
+        eff_tenant = resolve_request_tenant(body.get("tenant") if isinstance(body, dict) else None, x_admin_token, x_session_token)
+        from .. import rollouts as rolloutsmod
+
+        rollout = rolloutsmod.create_rollout(
+            conn,
+            name=str(body.get("name") or ""),
+            tenant=eff_tenant,
+            actor=actor,
+            target_version=str(body.get("target_version") or ""),
+            target_commit=str(body.get("target_commit") or ""),
+            manifest_url=str(body.get("manifest_url") or ""),
+            rings=body.get("rings") if isinstance(body.get("rings"), list) else None,
+            max_failure_rate=float(body.get("max_failure_rate", 0.25)),
+            get_effective_device_policy=get_effective_device_policy,
+            get_current_policy=get_current_policy,
+            notify=notify_tasks,
+            audit_fn=audit,
+        )
+        audit(actor, "", "create_rollout", {"rollout_id": rollout["id"], "target_version": rollout["target_version"]}, "allowed", tenant=eff_tenant)
+        return rollout
+
+    @router.post("/api/fleet/rollouts/{rollout_id}/advance")
+    def advance_fleet_rollout(
+        rollout_id: str,
+        x_admin_token: str | None = Header(default=None),
+        x_session_token: str | None = Header(default=None),
+    ):
+        actor = require_role("admin", x_admin_token, x_session_token)
+        eff_tenant = resolve_request_tenant(None, x_admin_token, x_session_token)
+        from .. import rollouts as rolloutsmod
+
+        res = rolloutsmod.advance_rollout(
+            conn,
+            rollout_id=rollout_id,
+            tenant=eff_tenant,
+            actor=actor,
+            get_effective_device_policy=get_effective_device_policy,
+            get_current_policy=get_current_policy,
+            notify=notify_tasks,
+            audit_fn=audit,
+        )
+        audit(actor, "", "advance_rollout", {"rollout_id": rollout_id, "status": res["status"], "current_ring": res["current_ring"]}, "allowed", tenant=eff_tenant)
+        return res
+
+    @router.post("/api/fleet/rollouts/{rollout_id}/pause")
+    def pause_fleet_rollout(
+        rollout_id: str,
+        x_admin_token: str | None = Header(default=None),
+        x_session_token: str | None = Header(default=None),
+    ):
+        actor = require_role("admin", x_admin_token, x_session_token)
+        eff_tenant = resolve_request_tenant(None, x_admin_token, x_session_token)
+        from .. import rollouts as rolloutsmod
+
+        res = rolloutsmod.pause_rollout(conn, rollout_id=rollout_id, tenant=eff_tenant)
+        audit(actor, "", "pause_rollout", {"rollout_id": rollout_id}, "allowed", tenant=eff_tenant)
+        return res
+
+    @router.post("/api/fleet/rollouts/{rollout_id}/resume")
+    def resume_fleet_rollout(
+        rollout_id: str,
+        x_admin_token: str | None = Header(default=None),
+        x_session_token: str | None = Header(default=None),
+    ):
+        actor = require_role("admin", x_admin_token, x_session_token)
+        eff_tenant = resolve_request_tenant(None, x_admin_token, x_session_token)
+        from .. import rollouts as rolloutsmod
+
+        res = rolloutsmod.resume_rollout(conn, rollout_id=rollout_id, tenant=eff_tenant)
+        audit(actor, "", "resume_rollout", {"rollout_id": rollout_id}, "allowed", tenant=eff_tenant)
+        return res
+
+    @router.post("/api/fleet/rollouts/{rollout_id}/rollback")
+    def rollback_fleet_rollout(
+        rollout_id: str,
+        x_admin_token: str | None = Header(default=None),
+        x_session_token: str | None = Header(default=None),
+    ):
+        actor = require_role("admin", x_admin_token, x_session_token)
+        eff_tenant = resolve_request_tenant(None, x_admin_token, x_session_token)
+        from .. import rollouts as rolloutsmod
+
+        res = rolloutsmod.rollback_rollout(
+            conn,
+            rollout_id=rollout_id,
+            tenant=eff_tenant,
+            actor=actor,
+            get_effective_device_policy=get_effective_device_policy,
+            get_current_policy=get_current_policy,
+            notify=notify_tasks,
+            audit_fn=audit,
+        )
+        audit(actor, "", "rollback_rollout", {"rollout_id": rollout_id}, "allowed", tenant=eff_tenant)
+        return res
 
     return router

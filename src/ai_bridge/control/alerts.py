@@ -202,3 +202,160 @@ def dispatch_alert(
         _worker()
         return results
 
+
+_LAST_ALERT_AT: dict[str, float] = {}
+_ALERT_EVAL_LOCK = threading.Lock()
+
+
+def evaluate_operational_alerts(
+    conn,
+    *,
+    cooldown_sec: float = 300.0,
+    config_override: dict[str, str] | None = None,
+    dispatch: bool = True,
+) -> list[dict]:
+    """Evaluate operational health & DB capacity conditions and dispatch deduplicated alerts.
+
+    Conditions checked:
+    - ``stale_running_tasks``: running tasks past lease window (> 0)
+    - ``stale_heartbeat_devices``: online devices with stale heartbeats (> 0)
+    - ``dead_letter_backlog``: unreplayed DLQ entries >= threshold (default 5)
+    - ``db_pool_exhaustion``: PostgreSQL pool waiting > 0 or utilization >= 85%
+    - ``agent_spool_backlog``: agent offline spool pending >= threshold (default 25) or age >= 3600s
+    - ``audit_chain_broken``: hash-chain verification failure
+    """
+    import json
+
+    from . import db as dbmod
+    from . import fleet_health as fhmod
+    from . import orchestration as orchmod
+
+    now_ts = dbmod.now()
+    findings: list[dict] = []
+
+    try:
+        cutoff = now_ts - orchmod.DEFAULT_RUNNING_LEASE_SEC
+        stale_tasks = conn.execute(
+            "SELECT COUNT(*) AS c FROM tasks WHERE status='running' AND updated_at < ?",
+            (cutoff,),
+        ).fetchone()["c"]
+        if int(stale_tasks or 0) > 0:
+            findings.append({
+                "event_type": "stale_running_tasks",
+                "severity": "warning",
+                "title": f"{stale_tasks} stale running task(s) past lease window",
+                "details": {"stale_running_tasks": int(stale_tasks), "runbook": "docs/runbooks.md#stale-running-tasks"},
+            })
+    except Exception:
+        pass
+
+    try:
+        health = fhmod.summarize_fleet_health(conn)
+        stale_devs = int(health.get("stale_device_count") or 0)
+        if stale_devs > 0:
+            findings.append({
+                "event_type": "stale_heartbeat_devices",
+                "severity": "warning",
+                "title": f"{stale_devs} fleet device(s) have stale heartbeats",
+                "details": {"stale_devices": stale_devs, "runbook": "docs/runbooks.md#stale-heartbeat-devices"},
+            })
+    except Exception:
+        pass
+
+    try:
+        dlq_thresh = max(1, int(os.environ.get("AI_BRIDGE_ALERT_DLQ_THRESHOLD", "5") or "5"))
+        dlq_cnt = conn.execute(
+            "SELECT COUNT(*) AS c FROM task_dead_letters WHERE replayed_task_id IS NULL"
+        ).fetchone()["c"]
+        if int(dlq_cnt or 0) >= dlq_thresh:
+            findings.append({
+                "event_type": "dead_letter_backlog",
+                "severity": "critical",
+                "title": f"Dead-letter queue backlog reached {dlq_cnt} task(s)",
+                "details": {"dead_letter_pending": int(dlq_cnt), "threshold": dlq_thresh, "runbook": "docs/runbooks.md#dead-letter-queue"},
+            })
+    except Exception:
+        pass
+
+    try:
+        if hasattr(conn, "get_db_stats"):
+            st = conn.get_db_stats()
+            waiting = int(st.get("pool_waiting") or 0)
+            util = float(st.get("pool_utilization") or 0.0)
+            if waiting > 0 or util >= 0.85:
+                findings.append({
+                    "event_type": "db_pool_exhaustion",
+                    "severity": "critical",
+                    "title": f"Database connection pool pressure (waiting={waiting}, util={util:.0%})",
+                    "details": {**st, "runbook": "docs/runbooks.md#database-pool-exhaustion"},
+                })
+    except Exception:
+        pass
+
+    try:
+        spool_thresh = max(1, int(os.environ.get("AI_BRIDGE_ALERT_SPOOL_THRESHOLD", "25") or "25"))
+        rows = conn.execute("SELECT id, name, spool_stats_json FROM devices WHERE revoked=0").fetchall()
+        for r in rows:
+            raw = r["spool_stats_json"] if hasattr(r, "keys") and "spool_stats_json" in r.keys() else ""
+            if not raw:
+                continue
+            sp = json.loads(raw)
+            if not isinstance(sp, dict):
+                continue
+            pending = int(sp.get("pending_count") or 0)
+            age_s = float(sp.get("oldest_pending_age_sec") or 0.0)
+            if pending >= spool_thresh or age_s >= 3600.0:
+                findings.append({
+                    "event_type": f"agent_spool_backlog:{r['id']}",
+                    "severity": "warning",
+                    "title": f"Agent spool backlog on {r['name']} (pending={pending}, oldest={int(age_s)}s)",
+                    "device_id": r["id"],
+                    "details": {"pending_count": pending, "oldest_pending_age_sec": round(age_s, 1), "runbook": "docs/runbooks.md#agent-spool-backlog"},
+                })
+    except Exception:
+        pass
+
+    try:
+        if os.environ.get("AI_BRIDGE_ALERT_VERIFY_AUDIT", "0").strip().lower() in ("1", "true", "yes"):
+            chain = dbmod.verify_audit_chain(conn)
+            if not chain.get("ok"):
+                findings.append({
+                    "event_type": "audit_chain_broken",
+                    "severity": "critical",
+                    "title": f"Audit hash chain integrity failure at row {chain.get('broken_at')}",
+                    "details": {**chain, "runbook": "docs/runbooks.md#audit-chain-failure"},
+                })
+    except Exception:
+        pass
+
+    fired: list[dict] = []
+    if dispatch and findings:
+        cfg = get_alert_config()
+        if config_override:
+            for k, v in config_override.items():
+                if isinstance(v, str) and v.strip():
+                    cfg[k] = v.strip()
+        has_channel = bool(cfg["slack_webhook"] or cfg["discord_webhook"] or (cfg["telegram_token"] and cfg["telegram_chat_id"]) or cfg["generic_webhook"])
+        with _ALERT_EVAL_LOCK:
+            for item in findings:
+                key = item["event_type"]
+                last_at = _LAST_ALERT_AT.get(key, 0.0)
+                if now_ts - last_at < cooldown_sec:
+                    continue
+                _LAST_ALERT_AT[key] = now_ts
+                fired.append(item)
+                if has_channel:
+                    dispatch_alert(
+                        event_type=key,
+                        severity=item["severity"],
+                        title=item["title"],
+                        details=item.get("details"),
+                        device_id=item.get("device_id"),
+                        async_dispatch=True,
+                        config_override=cfg,
+                    )
+    else:
+        fired = findings
+    return fired
+
+

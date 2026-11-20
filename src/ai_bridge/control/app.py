@@ -31,6 +31,7 @@ import socket
 import threading
 import time
 import uuid
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urljoin, urlparse
@@ -441,6 +442,7 @@ class TaskIn(BaseModel):
     tool: str
     args: dict = {}
     tenant: str | None = None
+    max_attempts: int = Field(default=1, ge=1, le=5)
 
 
 class ApprovalDecision(BaseModel):
@@ -820,11 +822,41 @@ def create_app(
     database_url: str | None = None,
     dashboard_dist_dir: str | Path | None = None,
 ) -> FastAPI:
+    # Release 2: enable structured JSON logging automatically outside pytest
+    # (so Gunicorn workers emit NDJSON logs with correlation IDs by default).
+    if "pytest" not in __import__("sys").modules and os.environ.get("AI_BRIDGE_CONFIGURE_LOGGING", "1").strip().lower() not in ("0", "false", "no"):
+        try:
+            from ..logging_config import configure_logging
+
+            configure_logging()
+        except Exception:
+            pass
+
     token = admin_token or get_secret("AI_BRIDGE_ADMIN_TOKEN") or os.environ.get("AI_BRIDGE_ADMIN_TOKEN")
     data_dir = Path(os.environ.get("AI_BRIDGE_DATA_DIR", str(Path.home() / ".ai-bridge")))
     db_path = db_path or (data_dir / "control.db")
     conn = dbmod.connect(db_path=db_path, database_url=database_url)
-    app = FastAPI(title="AI Bridge Control Plane", version="0.3.0")
+    from . import production_readiness as _prodready_boot
+
+    _prodready_boot.enforce_multi_worker_redis(conn)
+
+    @asynccontextmanager
+    async def _lifespan(_app: FastAPI):
+        try:
+            loop = asyncio.get_running_loop()
+            agent_channel.bind_event_loop(loop)
+            agent_channel.start_redis_fanout(loop)
+        except Exception:
+            pass
+        try:
+            yield
+        finally:
+            _app.state._running = False
+            task = getattr(agent_channel, "_fanout_task", None)
+            if task is not None and not task.done():
+                task.cancel()
+
+    app = FastAPI(title="AI Bridge Control Plane", version="0.3.0", lifespan=_lifespan)
     # F-05-05 (Wave 2A): the legacy shared admin token is OFF by default.
     # It is accepted as an auth credential only when explicitly passed as
     # the admin_token argument (explicit configuration, e.g. tests) or
@@ -847,6 +879,12 @@ def create_app(
         from . import oidc as _oidcmod
 
         _oidcmod.bind_oidc_store(conn)
+    except Exception:
+        pass
+    try:
+        from ..connectors import microsoft365 as _m365mod
+
+        _m365mod.bind_pending_store(conn)
     except Exception:
         pass
     os.environ.setdefault("AI_BRIDGE_MCP_AUDIT_DB", str(db_path))
@@ -893,7 +931,19 @@ def create_app(
         allow_origins=allowed_origins,
         allow_credentials=True,
         allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-        allow_headers=["Authorization", "Content-Type", "X-Admin-Token", "X-Session-Token", "X-Device-Token", "X-CSRF-Token", "X-Client-Cert-Fingerprint", "X-SSL-Client-Fingerprint"],
+        allow_headers=[
+            "Authorization",
+            "Content-Type",
+            "X-Admin-Token",
+            "X-Session-Token",
+            "X-Device-Token",
+            "X-CSRF-Token",
+            "X-Client-Cert-Fingerprint",
+            "X-SSL-Client-Fingerprint",
+            "X-Correlation-ID",
+            "X-Request-ID",
+        ],
+        expose_headers=["X-Correlation-ID"],
     )
     app.state.conn = conn
     app.state.admin_token = token
@@ -1735,8 +1785,15 @@ def create_app(
                     cooldown = max(10, int(trig["cooldown_seconds"]))
                     last_trig = trig["last_triggered_at"] or 0
                     if (now_ts - last_trig) >= cooldown:
-                        conn.execute("UPDATE triggers SET last_triggered_at=? WHERE id=?", (now_ts, trig["id"]))
+                        # Atomic multi-worker cooldown claim: only the worker
+                        # that wins the conditional UPDATE fires the trigger.
+                        claim = conn.execute(
+                            "UPDATE triggers SET last_triggered_at=? WHERE id=? AND enabled=1 AND (last_triggered_at IS NULL OR last_triggered_at <= ?)",
+                            (now_ts, trig["id"], now_ts - cooldown),
+                        )
                         conn.commit()
+                        if claim.rowcount != 1:
+                            continue
                         act_type = trig["action_type"]
                         act_target = trig["action_target"]
                         act_args = {}
@@ -1790,6 +1847,7 @@ def create_app(
         from . import orchestration as orchmod
 
         sweep_tick = 0
+        retention_tick = 0
         while getattr(app.state, "_running", True):
             try:
                 time.sleep(10)
@@ -1797,6 +1855,7 @@ def create_app(
                     break
                 plane_state.sync_emergency_stop_to_app(conn, app.state)
                 sweep_tick += 1
+                retention_tick += 1
                 if sweep_tick >= max(1, int(os.environ.get("AI_BRIDGE_TASK_SWEEP_EVERY", "3"))):
                     sweep_tick = 0
                     stats = orchmod.sweep_stale_running_tasks(conn)
@@ -1810,6 +1869,20 @@ def create_app(
                         from . import supervisor as _supmod
 
                         app.state.last_handoff_sweep = _supmod.sweep_stuck_handoffs(conn)
+                    except Exception:
+                        pass
+                if retention_tick >= max(6, int(os.environ.get("AI_BRIDGE_RETENTION_SWEEP_EVERY", "60"))):
+                    retention_tick = 0
+                    try:
+                        app.state.last_retention_sweep = dbmod.retention_sweep_from_env(conn)
+                    except Exception:
+                        pass
+                if sweep_tick == 0:
+                    try:
+                        app.state.last_alert_eval = alertsmod.evaluate_operational_alerts(
+                            conn,
+                            config_override=_load_alert_settings(),
+                        )
                     except Exception:
                         pass
                 now_ts = dbmod.now()
@@ -2050,6 +2123,13 @@ def create_app(
 
     @app.middleware("http")
     async def rate_limit_middleware(request: Request, call_next):
+        from ..logging_config import log_context
+
+        req_corr = (request.headers.get("x-correlation-id") or request.headers.get("x-request-id") or "").strip()
+        if not req_corr or len(req_corr) > 128 or not req_corr.isascii():
+            req_corr = "tr-" + uuid.uuid4().hex[:16]
+        request.state.correlation_id = req_corr
+
         client_ip = request.client.host if request.client else "anon"
         path = request.url.path
         if path in ("/api/auth/login", "/api/auth/oidc/login", "/api/auth/oidc/callback", "/api/auth/oidc/exchange", "/api/connectors/m365/callback", "/api/mcp/oauth/callback"):
@@ -2063,23 +2143,33 @@ def create_app(
             token_val = admin_hdr or dev_hdr or sess_hdr or auth_hdr
             key = f"tok:{dbmod.hash_token(token_val)[:16]}" if token_val else f"ip:{client_ip}"
             limit = 1200 if token_val else 300
+
+        t0 = time.perf_counter()
+        with log_context(correlation_id=req_corr):
+            try:
+                # DIST-07: async-native limiter — awaited, so the shared
+                # Redis limit is enforced under multiple workers.
+                await _rate_limit_async(key, limit=limit, conn=getattr(request.app.state, "conn", None))
+            except HTTPException as exc:
+                resp = JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+                resp.headers["X-Correlation-ID"] = req_corr
+                return resp
+            response = await call_next(request)
+        duration_s = time.perf_counter() - t0
         try:
-            # DIST-07: async-native limiter — awaited, so the shared
-            # Redis limit is enforced under multiple workers.
-            await _rate_limit_async(key, limit=limit, conn=getattr(request.app.state, "conn", None))
-        except HTTPException as exc:
-            return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
-        response = await call_next(request)
+            response.headers["X-Correlation-ID"] = req_corr
+        except Exception:
+            pass
         try:
             from . import metrics as metricsmod
 
             # Collapse IDs in path for low-cardinality labels.
             endpoint = path
-            for prefix in ("/api/tasks/", "/api/devices/", "/api/agents/", "/api/v1/sessions/", "/api/supervisor/handoffs/"):
+            for prefix in ("/api/tasks/", "/api/devices/", "/api/agents/", "/api/v1/sessions/", "/api/supervisor/handoffs/", "/api/traces/"):
                 if path.startswith(prefix) and len(path) > len(prefix):
                     endpoint = prefix + "{id}"
                     break
-            metricsmod.record_http_request(request.method, endpoint, int(getattr(response, "status_code", 200) or 200))
+            metricsmod.record_http_request(request.method, endpoint, int(getattr(response, "status_code", 200) or 200), duration=duration_s)
         except Exception:
             pass
         return response

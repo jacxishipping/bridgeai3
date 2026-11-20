@@ -50,12 +50,45 @@ def create_agent_router(ctx: ControlContext) -> APIRouter:
         now_ts = dbmod.now()
         hostname = (body.get("hostname") or "").strip() if isinstance(body, dict) else ""
         os_val = (body.get("os") or "").strip() if isinstance(body, dict) else ""
-        if hostname or os_val:
-            cur_h = hostname if hostname else (row["hostname"] or "")
-            cur_os = os_val if os_val else (row["os"] or "")
-            conn.execute("UPDATE devices SET status='online', last_seen=?, hostname=?, os=? WHERE id=?", (now_ts, cur_h, cur_os, row["id"]))
-        else:
-            conn.execute("UPDATE devices SET status='online', last_seen=? WHERE id=?", (now_ts, row["id"]))
+        agent_version = (str(body.get("agent_version") or "").strip()[:64]) if isinstance(body, dict) else ""
+        agent_commit = (str(body.get("agent_commit") or "").strip()[:64]) if isinstance(body, dict) else ""
+        policy_hash = (str(body.get("policy_hash") or "").strip()[:128]) if isinstance(body, dict) else ""
+        poll_state = body.get("poll_state") if isinstance(body, dict) and isinstance(body.get("poll_state"), dict) else None
+        spool_stats = body.get("spool_stats") if isinstance(body, dict) and isinstance(body.get("spool_stats"), dict) else None
+
+        set_parts = ["status='online'", "last_seen=?"]
+        set_params: list = [now_ts]
+        if hostname:
+            set_parts.append("hostname=?")
+            set_params.append(hostname)
+        if os_val:
+            set_parts.append("os=?")
+            set_params.append(os_val)
+        if agent_version:
+            set_parts.append("agent_version=?")
+            set_params.append(agent_version)
+        if agent_commit:
+            set_parts.append("agent_commit=?")
+            set_params.append(agent_commit)
+        if policy_hash:
+            set_parts.append("reported_policy_hash=?")
+            set_params.append(policy_hash)
+        if poll_state is not None:
+            set_parts.append("poll_state_json=?")
+            set_params.append(json.dumps(poll_state, default=str)[:4000])
+        if spool_stats is not None:
+            set_parts.append("spool_stats_json=?")
+            set_params.append(json.dumps(spool_stats, default=str)[:4000])
+        set_params.append(row["id"])
+        try:
+            conn.execute(f"UPDATE devices SET {', '.join(set_parts)} WHERE id=?", tuple(set_params))
+        except Exception:
+            if hostname or os_val:
+                cur_h = hostname if hostname else (row["hostname"] or "")
+                cur_os = os_val if os_val else (row["os"] or "")
+                conn.execute("UPDATE devices SET status='online', last_seen=?, hostname=?, os=? WHERE id=?", (now_ts, cur_h, cur_os, row["id"]))
+            else:
+                conn.execute("UPDATE devices SET status='online', last_seen=? WHERE id=?", (now_ts, row["id"]))
         conn.commit()
 
         metrics = body.get("metrics") if isinstance(body, dict) else None
@@ -83,11 +116,8 @@ def create_agent_router(ctx: ControlContext) -> APIRouter:
                 "INSERT INTO telemetry (device_id, tenant, cpu_percent, memory_percent, disk_percent, recorded_at) VALUES (?, ?, ?, ?, ?, ?)",
                 (row["id"], row["tenant"], cpu_p, mem_p, disk_p, now_ts),
             )
-            conn.execute(
-                "DELETE FROM telemetry WHERE device_id=? AND id NOT IN (SELECT id FROM telemetry WHERE device_id=? ORDER BY recorded_at DESC LIMIT 500)",
-                (row["id"], row["id"]),
-            )
             conn.commit()
+            dbmod.maybe_prune_telemetry(conn, row["id"], keep=500, slack=100)
             _evaluate_device_triggers(row, metrics, now_ts)
         app.state.device_live_meta[row["id"]] = meta_entry
 
@@ -274,51 +304,76 @@ def create_agent_router(ctx: ControlContext) -> APIRouter:
             plane_state.sync_emergency_stop_to_app(conn, app.state)
             if plane_state.is_emergency_stop(conn, app.state):
                 return {"task": None, "emergency_stop": True}
-            if orchmod.device_has_active_lease(conn, row["id"]):
+            lease_blocked = False
+            with conn.transaction():
+                if orchmod.device_has_active_lease(conn, row["id"]):
+                    lease_blocked = True
+                else:
+                    now_claim = dbmod.now()
+                    try:
+                        candidate = conn.execute(
+                            "SELECT * FROM tasks WHERE device_id=? AND status='queued' "
+                            "AND (next_attempt_at IS NULL OR next_attempt_at <= ?) "
+                            "ORDER BY created_at ASC LIMIT 1",
+                            (row["id"], now_claim),
+                        ).fetchone()
+                    except Exception:
+                        candidate = conn.execute(
+                            "SELECT * FROM tasks WHERE device_id=? AND status='queued' ORDER BY created_at ASC LIMIT 1",
+                            (row["id"],),
+                        ).fetchone()
+                    if candidate is not None:
+                        # SEC-08: while human takeover is active, only
+                        # human-initiated tasks may be claimed; autonomous
+                        # queued tasks stay queued until control is handed back.
+                        if plane_state.is_human_takeover_active(conn, row["id"]):
+                            try:
+                                _cargs = json.loads(candidate["args_json"] or "{}")
+                            except Exception:
+                                _cargs = {}
+                            if not _cargs.get("human_initiated"):
+                                takeover_blocked = True
+                                break
+                        lease_exp = now_claim + orchmod.DEFAULT_RUNNING_LEASE_SEC
+                        try:
+                            cur = conn.execute(
+                                "UPDATE tasks SET status='running', epoch=epoch+1, attempt=attempt+1, "
+                                "started_at=?, lease_expires_at=?, next_attempt_at=NULL, updated_at=? "
+                                "WHERE id=? AND status='queued'",
+                                (now_claim, lease_exp, now_claim, candidate["id"]),
+                            )
+                        except Exception:
+                            cur = conn.execute(
+                                "UPDATE tasks SET status='running', epoch=epoch+1, updated_at=? WHERE id=? AND status='queued'",
+                                (now_claim, candidate["id"]),
+                            )
+                        if cur.rowcount == 1:
+                            task = candidate
+                            try:
+                                from .. import task_events as task_eventsmod
+
+                                _tid_trace = ""
+                                try:
+                                    _tid_trace = str(candidate["trace_id"] or "")
+                                except Exception:
+                                    pass
+                                task_eventsmod.append_task_event(
+                                    conn,
+                                    candidate["id"],
+                                    "running",
+                                    {"device_id": row["id"], "tool": candidate["tool"]},
+                                    trace_id=_tid_trace,
+                                    commit=False,
+                                )
+                            except Exception:
+                                pass
+                            break
+            if lease_blocked:
                 rem = deadline - time.time()
                 if wait_sec <= 0 or rem <= 0:
                     return {"task": None}
-                # PERF-06: await a device notification instead of spinning;
-                # same 0.15 s ceiling, so behaviour is unchanged if no wake
-                # arrives, but a notify wakes the poll immediately.
                 await agent_channel.wait_for_device_notification(row["id"], min(0.15, rem))
                 continue
-            with conn.transaction():
-                candidate = conn.execute(
-                    "SELECT * FROM tasks WHERE device_id=? AND status='queued' ORDER BY created_at ASC LIMIT 1",
-                    (row["id"],),
-                ).fetchone()
-                if candidate is not None:
-                    # SEC-08: while human takeover is active, only
-                    # human-initiated tasks may be claimed; autonomous
-                    # queued tasks stay queued until control is handed back.
-                    if plane_state.is_human_takeover_active(conn, row["id"]):
-                        try:
-                            _cargs = json.loads(candidate["args_json"] or "{}")
-                        except Exception:
-                            _cargs = {}
-                        if not _cargs.get("human_initiated"):
-                            takeover_blocked = True
-                            break
-                    cur = conn.execute(
-                        "UPDATE tasks SET status='running', epoch=epoch+1, updated_at=? WHERE id=? AND status='queued'",
-                        (dbmod.now(), candidate["id"]),
-                    )
-                    if cur.rowcount == 1:
-                        task = candidate
-                        try:
-                            from .. import task_events as task_eventsmod
-
-                            task_eventsmod.append_task_event(
-                                conn,
-                                candidate["id"],
-                                "running",
-                                {"device_id": row["id"], "tool": candidate["tool"]},
-                                commit=False,
-                            )
-                        except Exception:
-                            pass
-                        break
             rem = deadline - time.time()
             if wait_sec <= 0 or rem <= 0:
                 return {"task": None}
@@ -356,9 +411,7 @@ def create_agent_router(ctx: ControlContext) -> APIRouter:
             raise HTTPException(status_code=404, detail="Task not found for this device.")
         if task["status"] == "running":
             try:
-                from .. import orchestration as _orchmod
-
-                _orchmod.record_task_progress(conn, task_id)
+                agent_channel.handle_agent_message(conn, row["id"], {"type": "progress", "task_id": task_id})
             except Exception:
                 pass
         plane_state.sync_emergency_stop_to_app(conn, app.state)
@@ -437,7 +490,16 @@ def create_agent_router(ctx: ControlContext) -> APIRouter:
             raise HTTPException(status_code=409, detail="Stale progress: the task epoch does not match (task was re-queued or re-claimed).")
         if task["status"] != "running":
             raise HTTPException(status_code=409, detail=f"Task is '{task['status']}'; progress is only accepted while it is running.")
-        ack = agent_channel.handle_agent_message(conn, row["id"], {"type": "progress", "task_id": task_id})
+        ack = agent_channel.handle_agent_message(
+            conn,
+            row["id"],
+            {
+                "type": "progress",
+                "task_id": task_id,
+                "progress_pct": progress_pct,
+                "status_message": (status_message or "")[:500] if status_message is not None else None,
+            },
+        )
         if ack is None or not ack.get("ok"):
             raise HTTPException(status_code=409, detail="Task is no longer running; stop work on it.")
         return {
@@ -472,24 +534,92 @@ def create_agent_router(ctx: ControlContext) -> APIRouter:
         # corrupt the image the model or dashboard receives.
         result_cap = 16_000_000 if task["tool"] in ("take_screenshot", "capture_desktop_screenshot", "capture_desktop_frame", "set_of_marks_screenshot") else MAX_RESULT_CHARS
         now_ts = dbmod.now()
-        if body.epoch is not None:
-            _cur = conn.execute("UPDATE tasks SET status=?, result=?, updated_at=? WHERE id=? AND status='running' AND epoch=?", (body.status, body.result[:result_cap], now_ts, task_id, body.epoch))
-        else:
-            _cur = conn.execute("UPDATE tasks SET status=?, result=?, updated_at=? WHERE id=? AND status='running'", (body.status, body.result[:result_cap], now_ts, task_id))
+        trimmed_result = body.result[:result_cap]
+        from ...policy import is_tool_idempotent
+        from .. import orchestration as orchmod
+
+        task_dict = dict(task)
+        attempt = int(task_dict.get("attempt") or task_dict.get("epoch") or 1)
+        max_attempts = max(1, int(task_dict.get("max_attempts") or 1))
+        trace_id = str(task_dict.get("trace_id") or "")
+
+        final_status = body.status
+        failure_class = ""
+        failure_reason = ""
+        next_attempt_at: float | None = None
+        should_dlq = False
+
+        if body.status != "completed":
+            failure_class, failure_reason = orchmod.classify_failure(body.status, trimmed_result)
+            if (
+                body.status == "failed"
+                and failure_class == "transient"
+                and attempt < max_attempts
+                and is_tool_idempotent(str(task_dict.get("tool") or ""))
+                and not plane_state.is_emergency_stop(conn, app.state)
+            ):
+                final_status = "queued"
+                next_attempt_at = now_ts + orchmod.retry_backoff_seconds(attempt)
+            elif body.status in ("failed", "timed_out") and max_attempts > 1 and attempt >= max_attempts:
+                should_dlq = True
+
+        epoch_clause = " AND epoch=?" if body.epoch is not None else ""
+        try:
+            params: list = [
+                final_status,
+                trimmed_result,
+                failure_class,
+                failure_reason,
+                next_attempt_at,
+                now_ts,
+                task_id,
+            ]
+            if body.epoch is not None:
+                params.append(body.epoch)
+            _cur = conn.execute(
+                "UPDATE tasks SET status=?, result=?, failure_class=?, failure_reason=?, "
+                f"next_attempt_at=?, lease_expires_at=NULL, updated_at=? WHERE id=? AND status='running'{epoch_clause}",
+                tuple(params),
+            )
+        except Exception:
+            if body.epoch is not None:
+                _cur = conn.execute("UPDATE tasks SET status=?, result=?, updated_at=? WHERE id=? AND status='running' AND epoch=?", (final_status, trimmed_result, now_ts, task_id, body.epoch))
+            else:
+                _cur = conn.execute("UPDATE tasks SET status=?, result=?, updated_at=? WHERE id=? AND status='running'", (final_status, trimmed_result, now_ts, task_id))
         if _cur.rowcount != 1:
             raise HTTPException(status_code=409, detail="Stale result: the task is no longer running or the execution epoch does not match (late result rejected).")
         try:
             from .. import task_events as task_eventsmod
 
+            ev_name = "retry_scheduled" if final_status == "queued" else final_status
+            ev_detail: dict = {"tool": task["tool"], "device_id": row["id"], "attempt": attempt}
+            if failure_class:
+                ev_detail["failure_class"] = failure_class
+                ev_detail["failure_reason"] = failure_reason[:200]
+            if next_attempt_at is not None:
+                ev_detail["next_attempt_at"] = next_attempt_at
             task_eventsmod.append_task_event(
                 conn,
                 task_id,
-                body.status,
-                {"tool": task["tool"], "device_id": row["id"]},
+                ev_name,
+                ev_detail,
+                trace_id=trace_id,
                 commit=False,
             )
         except Exception:
             pass
+        if should_dlq:
+            try:
+                orchmod.record_dead_letter(
+                    conn,
+                    task_dict,
+                    failure_reason=failure_reason,
+                    failure_class=failure_class,
+                    last_error=trimmed_result[:2000],
+                    commit=False,
+                )
+            except Exception:
+                pass
         conn.commit()
         try:
             created = float(task["created_at"] or now_ts)

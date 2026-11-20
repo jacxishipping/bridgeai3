@@ -323,9 +323,14 @@ class Poller:
         self._current_task_id: str | None = None
         self._current_task_epoch: int | None = None
         self._current_task_tool: str | None = None
+        self._current_task_trace_id: str = ""
         self._current_task_started_at: float | None = None
         self._last_progress_at = 0.0
         self.progress_interval = float(progress_interval)
+        # Release 2: poll state, drift reporting, and reconnect observability.
+        self._reconnect_count = 0
+        self._last_error: str = ""
+        self._last_policy_hash: str = ""
         # The progress endpoint does not exist on the plane yet (Wave 3A/4
         # follow-up): once it answers 404/501 we stop trying for this run.
         self._progress_endpoint_missing = False
@@ -379,17 +384,29 @@ class Poller:
                 file=sys.stderr, flush=True,
             )
 
-    def _req(self, method: str, path: str, payload: dict | None = None, timeout: int = 15) -> dict:
+    def _req(
+        self,
+        method: str,
+        path: str,
+        payload: dict | None = None,
+        timeout: int = 15,
+        *,
+        trace_id: str | None = None,
+    ) -> dict:
         data = json.dumps(payload).encode() if payload is not None else None
+        headers = {
+            "X-Device-Token": self.device_token,
+            "Content-Type": "application/json",
+            "User-Agent": "AI-Bridge-Agent/0.3",
+        }
+        cid = (trace_id if trace_id is not None else self._current_task_trace_id) or ""
+        if cid:
+            headers["X-Correlation-ID"] = str(cid)[:128]
         req = urllib.request.Request(
             self.control_url + path,
             data=data,
             method=method,
-            headers={
-                "X-Device-Token": self.device_token,
-                "Content-Type": "application/json",
-                "User-Agent": "AI-Bridge-Agent/0.3",
-            },
+            headers=headers,
         )
         try:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
@@ -573,11 +590,57 @@ class Poller:
         with self._heartbeat_lock:
             return self._heartbeat_once()
 
+    @staticmethod
+    def _policy_hash(policy: Policy) -> str:
+        import hashlib
+
+        canonical = {
+            "allow_writes": bool(getattr(policy, "allow_writes", True)),
+            "allow_tier3": bool(getattr(policy, "allow_tier3", False)),
+            "desktop_enabled": bool(getattr(policy, "desktop_enabled", False)),
+            "max_tier_unattended": int(getattr(policy, "max_tier_unattended", 2) or 0),
+            "unrestricted": bool(getattr(policy, "unrestricted", False)),
+            "allowed_tools": sorted(policy.allowed_tools) if getattr(policy, "allowed_tools", None) is not None else None,
+            "denied_tools": sorted(getattr(policy, "denied_tools", ()) or ()),
+        }
+        return hashlib.sha256(json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()[:16]
+
+    @staticmethod
+    def _agent_version_info() -> tuple[str, str]:
+        version = "0.3.0"
+        commit = os.environ.get("AI_BRIDGE_GIT_COMMIT", "").strip()[:40]
+        try:
+            import importlib.metadata
+
+            version = importlib.metadata.version("ai-bridge")
+        except Exception:
+            pass
+        return version, commit
+
+    def _poll_state_snapshot(self) -> dict:
+        ws_up = self._ws_connected.is_set()
+        return {
+            "ws_connected": ws_up,
+            "poll_mode": "websocket_plus_http" if ws_up else "http_fallback",
+            "backoff_attempts": int(self._backoff_attempts),
+            "reconnect_count": int(self._reconnect_count),
+            "active_task_id": self._current_task_id,
+            "shutdown_requested": self._shutdown_requested.is_set(),
+            "last_error": self._last_error[:300] if self._last_error else "",
+        }
+
     def _heartbeat_once(self) -> dict:
+        agent_ver, agent_commit = self._agent_version_info()
+        pol_hash = self._last_policy_hash or self._policy_hash(self.policy)
         hb_body = {
             "hostname": platform.node(),
             "os": f"{platform.system()} {platform.release()}".strip(),
             "metrics": _collect_metrics(),
+            "agent_version": agent_ver,
+            "agent_commit": agent_commit,
+            "policy_hash": pol_hash,
+            "poll_state": self._poll_state_snapshot(),
+            "spool_stats": self.spooler.stats(),
         }
         try:
             hb = self._req("POST", "/api/agent/heartbeat", hb_body)
@@ -825,12 +888,36 @@ class Poller:
             denied_tools=denied_tools,
         )
 
-    def _try_post_result(self, task_id: str, status: str, result: str) -> bool:
+    def _try_post_result(
+        self,
+        task_id: str,
+        status: str,
+        result: str,
+        epoch: int | None = None,
+        trace_id: str = "",
+    ) -> bool | str:
+        payload: dict = {"status": status, "result": result}
+        if epoch is not None:
+            payload["epoch"] = epoch
+        prev_trace = self._current_task_trace_id
+        if trace_id:
+            self._current_task_trace_id = trace_id
         try:
-            self._req("POST", f"/api/agent/tasks/{task_id}/result", {"status": status, "result": result})
+            self._req("POST", f"/api/agent/tasks/{task_id}/result", payload)
             return True
-        except Exception:
+        except ControlPlaneHTTPError as exc:
+            # Terminal rejection (stale epoch / already timed-out / task gone):
+            # do not retry 10 times — let the spooler move it to DLQ immediately.
+            if exc.status_code in (404, 409):
+                self._last_error = f"HTTP {exc.status_code} posting result for {task_id}: {exc.body[:120]}"
+                return "terminal_rejected"
+            self._last_error = f"HTTP {exc.status_code} posting result for {task_id}"
             return False
+        except Exception as exc:
+            self._last_error = f"{type(exc).__name__}: {exc}"[:300]
+            return False
+        finally:
+            self._current_task_trace_id = prev_trace
 
     def run_once(self, wait: int = 0) -> dict:
         # A revoked/expired device never claims again (F07-12).
@@ -947,33 +1034,50 @@ class Poller:
         # gets until drain_timeout to finish.
         args = json.loads(task.get("args_json") or "{}")
         eff_policy = self._effective_policy(task.get("policy"))
+        self._last_policy_hash = self._policy_hash(eff_policy)
         tool_name = task["tool"]
         approval = bool(task.get("approval_granted"))
+        task_trace_id = str(task.get("trace_id") or "")
         result_box: dict = {}
 
         def _run_task() -> None:
             try:
-                result = dispatch(tool_name, args, policy=eff_policy, approval_granted=approval)
-                result_box.update(
-                    status="completed",
-                    text=json.dumps(result, default=str)[:MAX_RESULT_CHARS],
+                from ai_bridge.logging_config import log_context
+
+                ctx_mgr = log_context(
+                    correlation_id=task_trace_id or None,
+                    task_id=task_id,
+                    device_id=str(task.get("device_id") or "") or None,
                 )
-            except TaskCancelled:
-                result_box.update(
-                    status="cancelled",
-                    text=json.dumps({"error": "Task cancelled or timed out."}),
-                )
-            except PermissionError as exc:
-                result_box.update(status="failed", text=f"denied: {exc}")
-            except Exception as exc:
-                result_box.update(status="failed", text=f"{type(exc).__name__}: {exc}")
+            except Exception:
+                import contextlib
+
+                ctx_mgr = contextlib.nullcontext()
+            with ctx_mgr:
+                try:
+                    result = dispatch(tool_name, args, policy=eff_policy, approval_granted=approval)
+                    result_box.update(
+                        status="completed",
+                        text=json.dumps(result, default=str)[:MAX_RESULT_CHARS],
+                    )
+                except TaskCancelled:
+                    result_box.update(
+                        status="cancelled",
+                        text=json.dumps({"error": "Task cancelled or timed out."}),
+                    )
+                except PermissionError as exc:
+                    result_box.update(status="failed", text=f"denied: {exc}")
+                except Exception as exc:
+                    result_box.update(status="failed", text=f"{type(exc).__name__}: {exc}")
 
         self._current_task_id = task_id
         try:
-            self._current_task_epoch = int(task["epoch"]) if task.get("epoch") is not None else None
+            task_epoch = int(task["epoch"]) if task.get("epoch") is not None else None
         except (TypeError, ValueError):
-            self._current_task_epoch = None
+            task_epoch = None
+        self._current_task_epoch = task_epoch
         self._current_task_tool = tool_name
+        self._current_task_trace_id = task_trace_id
         self._current_task_started_at = time.time()
         self._last_progress_at = time.time()
         worker = threading.Thread(target=_run_task, name=f"ai-bridge-task-{task_id}", daemon=True)
@@ -1016,6 +1120,7 @@ class Poller:
             self._current_task_id = None
             self._current_task_epoch = None
             self._current_task_tool = None
+            self._current_task_trace_id = ""
             self._current_task_started_at = None
         if drain_timed_out and worker.is_alive():
             # Bounded drain exceeded: do NOT spool or post a result. The
@@ -1029,9 +1134,14 @@ class Poller:
         status, text = result_box.get("status", "failed"), result_box.get(
             "text", "failed: worker thread ended without a result."
         )
-        # Persist locally in spool before transmission
-        self.spooler.spool(task_id, status, text)
-        if self._try_post_result(task_id, status, text):
+        # Persist locally in spool before transmission (preserving epoch + trace_id)
+        self.spooler.spool(task_id, status, text, epoch=task_epoch, trace_id=task_trace_id)
+        post_outcome = self._try_post_result(task_id, status, text, epoch=task_epoch, trace_id=task_trace_id)
+        if post_outcome == "terminal_rejected":
+            from agents.common.spool import DLQ_REASON_PLANE_REJECTED
+
+            self.spooler.move_to_dlq(task_id, DLQ_REASON_PLANE_REJECTED)
+        elif post_outcome:
             self.spooler.mark_flushed(task_id)
         else:
             print(f"[{time.strftime('%H:%M:%S')}] Task {task_id} result spooled offline (will flush upon reconnect).", flush=True)
@@ -1115,8 +1225,14 @@ class Poller:
                             self._handle_ws_message(msg)
             except Exception as exc:
                 self._ws_connected.clear()
-                if self._ws_stop.is_set():
+                if self._ws_stop.is_set() or self.revoked:
                     break
+                exc_code = getattr(exc, "code", None)
+                if exc_code == 4401 or "4401" in str(exc):
+                    self._last_error = "WS closed with 4401 (device token revoked/expired)"
+                    break
+                self._reconnect_count += 1
+                self._last_error = f"WS reconnect: {exc}"[:300]
                 print(f"[{time.strftime('%H:%M:%S')}] Agent WS reconnect in {backoff:.0f}s: {exc}", flush=True)
                 time.sleep(backoff)
                 backoff = min(backoff * 2, 60.0)

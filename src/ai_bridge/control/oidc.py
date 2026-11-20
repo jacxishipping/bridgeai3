@@ -50,6 +50,8 @@ import httpx
 log = logging.getLogger("ai_bridge.oidc")
 
 _DISCOVERY_CACHE: dict = {"at": 0.0, "doc": None}
+_JWKS_CACHE: dict = {"at": 0.0, "uri": "", "jwks": None}
+_JWKS_TTL_SEC = 300.0
 _PENDING: dict[str, dict] = {}
 
 # Durable OIDC pending-login store (Wave 2A / DIST-04, TST-15).
@@ -116,6 +118,9 @@ def _store_pending(state: str, record: dict) -> None:
             _PENDING.pop(key, None)
         return
     try:
+        payload = {"nonce": record["nonce"], "at": record["at"]}
+        if record.get("code_verifier"):
+            payload["code_verifier"] = record["code_verifier"]
         with _store_lock:
             _prune_store_locked(conn, time.time())
             conn.execute(
@@ -123,13 +128,26 @@ def _store_pending(state: str, record: dict) -> None:
                 "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                 (
                     _PENDING_KEY_PREFIX + state,
-                    json.dumps({"nonce": record["nonce"], "at": record["at"]}),
+                    json.dumps(payload),
                 ),
             )
             conn.commit()
     except Exception:
         log.warning("oidc: durable pending store failed; falling back to memory", exc_info=True)
         _PENDING[state] = record
+
+
+def _atomic_delete_setting(conn, key: str) -> str | None:
+    """Atomically delete ``key`` from settings and return its value (cross-worker safe).
+
+    Uses single-statement ``DELETE FROM settings WHERE key=? RETURNING value``
+    (supported on SQLite 3.35+ and PostgreSQL), ensuring two concurrent workers
+    cannot both redeem the same OIDC state or one-time exchange code.
+    """
+    row = conn.execute("DELETE FROM settings WHERE key=? RETURNING value", (key,)).fetchone()
+    if row is None:
+        return None
+    return str(row["value"] if hasattr(row, "keys") else row[0])
 
 
 def _pop_pending_store(state: str) -> dict | None:
@@ -139,22 +157,21 @@ def _pop_pending_store(state: str) -> dict | None:
         return _PENDING.pop(state, None)
     try:
         with _store_lock:
-            row = conn.execute(
-                "SELECT value FROM settings WHERE key=?", (_PENDING_KEY_PREFIX + state,)
-            ).fetchone()
-            if row is None:
-                return None
-            raw = row[0]
-            conn.execute("DELETE FROM settings WHERE key=?", (_PENDING_KEY_PREFIX + state,))
+            raw = _atomic_delete_setting(conn, _PENDING_KEY_PREFIX + state)
             _prune_store_locked(conn, time.time())
             conn.commit()
+        if raw is None:
+            return None
         try:
-            data = json.loads(str(raw))
+            data = json.loads(raw)
         except Exception:
             return None
         if not isinstance(data, dict) or "nonce" not in data or "at" not in data:
             return None
-        return {"nonce": data["nonce"], "at": float(data["at"])}
+        out: dict = {"nonce": data["nonce"], "at": float(data["at"])}
+        if data.get("code_verifier"):
+            out["code_verifier"] = str(data["code_verifier"])
+        return out
     except Exception:
         log.warning("oidc: durable pending pop failed; falling back to memory", exc_info=True)
         return _PENDING.pop(state, None)
@@ -193,13 +210,17 @@ def discovery() -> dict:
 
 
 def new_login() -> tuple[str, str, str]:
-    """Return (authorize_url, state, nonce) for a fresh login attempt."""
+    """Return (authorize_url, state, nonce) for a fresh PKCE-protected login attempt."""
+    import hashlib
+
     cfg = oidc_config()
     assert cfg is not None
     doc = discovery()
     state = secrets.token_urlsafe(24)
     nonce = secrets.token_urlsafe(24)
-    _store_pending(state, {"nonce": nonce, "at": time.time()})
+    code_verifier = secrets.token_urlsafe(48)
+    code_challenge = base64.urlsafe_b64encode(hashlib.sha256(code_verifier.encode("ascii")).digest()).rstrip(b"=").decode("ascii")
+    _store_pending(state, {"nonce": nonce, "at": time.time(), "code_verifier": code_verifier})
     params = {
         "client_id": cfg["client_id"],
         "redirect_uri": cfg["redirect_uri"],
@@ -207,10 +228,26 @@ def new_login() -> tuple[str, str, str]:
         "scope": "openid email profile",
         "state": state,
         "nonce": nonce,
+        "code_challenge": code_challenge,
+        "code_challenge_method": "S256",
     }
     from urllib.parse import urlencode
 
     return doc["authorization_endpoint"] + "?" + urlencode(params), state, nonce
+
+
+def _fetch_jwks(jwks_uri: str, *, force_refresh: bool = False) -> dict:
+    now = time.time()
+    if not force_refresh and _JWKS_CACHE["jwks"] and _JWKS_CACHE["uri"] == jwks_uri and (now - _JWKS_CACHE["at"] < _JWKS_TTL_SEC):
+        return _JWKS_CACHE["jwks"]
+    with httpx.Client(timeout=15) as client:
+        jwks_resp = client.get(jwks_uri)
+        jwks_resp.raise_for_status()
+        jwks = jwks_resp.json()
+    _JWKS_CACHE["at"] = now
+    _JWKS_CACHE["uri"] = jwks_uri
+    _JWKS_CACHE["jwks"] = jwks
+    return jwks
 
 
 def _b64url(data: bytes) -> bytes:
@@ -234,15 +271,19 @@ def verify_id_token(id_token: str, expected_nonce: str) -> dict:
     if header.get("alg") != "RS256":
         raise ValueError("unsupported ID token alg")
     doc = discovery()
-    with httpx.Client(timeout=15) as client:
-        jwks_resp = client.get(doc["jwks_uri"])
-        jwks_resp.raise_for_status()
-        jwks = jwks_resp.json()
+    jwks = _fetch_jwks(doc["jwks_uri"])
     key = None
     for candidate in jwks.get("keys", []):
         if candidate.get("kid") == header.get("kid") and candidate.get("kty") == "RSA":
             key = candidate
             break
+    if key is None:
+        # Provider may have rotated keys; refresh JWKS once on cache miss.
+        jwks = _fetch_jwks(doc["jwks_uri"], force_refresh=True)
+        for candidate in jwks.get("keys", []):
+            if candidate.get("kid") == header.get("kid") and candidate.get("kty") == "RSA":
+                key = candidate
+                break
     if key is None:
         raise ValueError("signing key not found")
     numbers = rsa.RSAPublicNumbers(
@@ -364,17 +405,11 @@ def redeem_oidc_exchange_code(code: str) -> str | None:
         return token
     try:
         with _store_lock:
-            row = conn.execute(
-                "SELECT value FROM settings WHERE key=?",
-                (_EXCHANGE_KEY_PREFIX + code_hash,),
-            ).fetchone()
-            if row is None:
-                return None
-            conn.execute(
-                "DELETE FROM settings WHERE key=?", (_EXCHANGE_KEY_PREFIX + code_hash,)
-            )
+            raw = _atomic_delete_setting(conn, _EXCHANGE_KEY_PREFIX + code_hash)
             conn.commit()
-        data = json.loads(str(row[0]))
+        if raw is None:
+            return None
+        data = json.loads(raw)
         if not isinstance(data, dict) or "token" not in data or "at" not in data:
             return None
         if now - float(data["at"]) > _EXCHANGE_TTL_SEC:

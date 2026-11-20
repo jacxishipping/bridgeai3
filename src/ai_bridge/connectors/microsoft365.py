@@ -41,9 +41,19 @@ DEFAULT_ACCOUNT = "default"
 MAX_TOP = 50
 
 _PENDING: dict[str, dict] = {}
+_PENDING_STORE_CONN: Any | None = None
+_PENDING_KEY_PREFIX = "m365.pending."
+_PENDING_TTL_SEC = 600.0
 _LOCK = threading.Lock()
 # Overridable in tests to inject httpx.MockTransport.
 _TRANSPORT: httpx.BaseTransport | None = None
+
+
+def bind_pending_store(conn: Any | None) -> None:
+    """Bind a shared DB connection for cross-worker M365 OAuth PKCE state."""
+    global _PENDING_STORE_CONN
+    with _LOCK:
+        _PENDING_STORE_CONN = conn
 
 
 class M365Error(RuntimeError):
@@ -147,6 +157,56 @@ def disconnect(account: str = DEFAULT_ACCOUNT) -> bool:
 
 
 # --------------------------------------------------------------------------- OAuth (PKCE)
+def _store_pending(state: str, record: dict) -> None:
+    conn = _PENDING_STORE_CONN
+    now = float(record.get("at") or time.time())
+    if conn is None:
+        with _LOCK:
+            _PENDING[state] = record
+            for k in [k for k, v in _PENDING.items() if now - v["at"] > _PENDING_TTL_SEC]:
+                _PENDING.pop(k, None)
+        return
+    try:
+        with _LOCK:
+            rows = conn.execute("SELECT key, value FROM settings WHERE key LIKE ?", (_PENDING_KEY_PREFIX + "%",)).fetchall()
+            for r in rows:
+                k = r["key"] if hasattr(r, "keys") else r[0]
+                v = r["value"] if hasattr(r, "keys") else r[1]
+                try:
+                    at = float(json.loads(str(v)).get("at") or 0)
+                except Exception:
+                    at = 0.0
+                if now - at > _PENDING_TTL_SEC:
+                    conn.execute("DELETE FROM settings WHERE key=?", (k,))
+            conn.execute(
+                "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (_PENDING_KEY_PREFIX + state, json.dumps(record)),
+            )
+            conn.commit()
+    except Exception:
+        with _LOCK:
+            _PENDING[state] = record
+
+
+def _pop_pending(state: str) -> dict | None:
+    conn = _PENDING_STORE_CONN
+    if conn is None:
+        with _LOCK:
+            return _PENDING.pop(state, None)
+    try:
+        with _LOCK:
+            row = conn.execute("DELETE FROM settings WHERE key=? RETURNING value", (_PENDING_KEY_PREFIX + state,)).fetchone()
+            conn.commit()
+        if row is None:
+            return None
+        raw = row["value"] if hasattr(row, "keys") else row[0]
+        data = json.loads(str(raw))
+        return data if isinstance(data, dict) else None
+    except Exception:
+        with _LOCK:
+            return _PENDING.pop(state, None)
+
+
 def new_login(account: str = DEFAULT_ACCOUNT) -> str:
     """Return the Microsoft authorize URL for a fresh PKCE login attempt."""
     cfg = _require_config()
@@ -154,10 +214,7 @@ def new_login(account: str = DEFAULT_ACCOUNT) -> str:
     verifier = secrets.token_urlsafe(64)
     challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
     now = time.time()
-    with _LOCK:
-        _PENDING[state] = {"verifier": verifier, "account": account, "at": now}
-        for k in [k for k, v in _PENDING.items() if now - v["at"] > 600]:
-            _PENDING.pop(k, None)
+    _store_pending(state, {"verifier": verifier, "account": account, "at": now})
     params = {
         "client_id": cfg["client_id"],
         "response_type": "code",
@@ -186,9 +243,8 @@ def _token_request(cfg: dict, data: dict) -> dict:
 def complete_login(code: str, state: str) -> str:
     """Exchange the authorization code. Returns the account name connected."""
     cfg = _require_config()
-    with _LOCK:
-        pending = _PENDING.pop(state, None)
-    if pending is None or time.time() - pending["at"] > 600 or not code:
+    pending = _pop_pending(state)
+    if pending is None or time.time() - float(pending.get("at", 0)) > _PENDING_TTL_SEC or not code:
         raise M365Error("Invalid or expired login attempt.")
     tok = _token_request(cfg, {
         "grant_type": "authorization_code",

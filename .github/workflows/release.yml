@@ -1,0 +1,90 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version label (e.g. 0.3.1)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  build-sign-and-bundle:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: apps/dashboard/package-lock.json
+
+      - name: Install package, build tools, and vulnerability scanner
+        run: |
+          pip install -e ".[dev]" build pip-audit
+
+      - name: Verify schema parity & unit tests
+        run: |
+          mkdir -p .run
+          ruff check .
+          python scripts/check_schema_parity.py
+          pytest -q --junitxml=.run/release-pytest.xml
+
+      - name: Dependency vulnerability scans (Python + npm)
+        run: |
+          pip-audit --format json --output .run/pip-audit.json || true
+          npm --prefix apps/dashboard ci
+          npm --prefix apps/dashboard audit --audit-level=high --json > .run/npm-audit.json || true
+
+      - name: Build Python sdist and wheel
+        run: |
+          python -m build --outdir .run/dist
+
+      - name: Generate signed release manifest (dry-run verified)
+        run: |
+          python scripts/release_manifest_dryrun.py --evidence-out .run/release_manifest_dryrun.json
+          VERSION="${GITHUB_REF_NAME#v}"
+          if [ -n "${{ inputs.version }}" ]; then VERSION="${{ inputs.version }}"; fi
+          if [ -z "$VERSION" ]; then VERSION="0.3.0"; fi
+          python scripts/generate_release_manifest.py \
+            --repo . \
+            --version "$VERSION" \
+            --base-url "https://github.com/${{ github.repository }}/releases/download/v${VERSION}" \
+            --out .run/release-manifest.json
+          if [ -n "${{ secrets.AI_BRIDGE_RELEASE_SIGNING_KEY }}" ]; then
+            printf '%s' "${{ secrets.AI_BRIDGE_RELEASE_SIGNING_KEY }}" > /tmp/release-ed25519.pem
+            chmod 600 /tmp/release-ed25519.pem
+            python -m ai_bridge.updates sign \
+              --private-key /tmp/release-ed25519.pem \
+              --manifest .run/release-manifest.json > .run/release-manifest.json.sig
+            rm -f /tmp/release-ed25519.pem
+          fi
+
+      - name: Assemble CycloneDX SBOM & checksummed release evidence bundle
+        run: |
+          python scripts/assemble_release_evidence.py \
+            --out-dir .run/release-evidence \
+            --evidence-dir .run
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-bundle-${{ github.ref_name }}
+          path: |
+            .run/dist/
+            .run/release-manifest.json
+            .run/release-manifest.json.sig
+            .run/release-evidence/
+          retention-days: 90

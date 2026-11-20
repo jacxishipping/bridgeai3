@@ -75,16 +75,17 @@ def set_device_human_takeover(
     _HUMAN_TAKEOVER_BY_DEVICE[device_id] = state
     if device_id in ("local", ""):
         _HUMAN_TAKEOVER_BY_DEVICE["local"] = state
-    if conn is not None:
+    target_conn = conn if conn is not None else _BOUND_CONN
+    if target_conn is not None:
         from . import plane_state
 
         try:
             if active:
-                plane_state.save_human_takeover(conn, device_id, state)
+                plane_state.save_human_takeover(target_conn, device_id, state)
             else:
-                plane_state.clear_human_takeover(conn, device_id)
+                plane_state.clear_human_takeover(target_conn, device_id)
         except Exception:
-            if conn is _BOUND_CONN:
+            if target_conn is _BOUND_CONN:
                 _BOUND_CONN = None
     if active:
         webrtc_stream.release_all_held_keys()
@@ -100,20 +101,28 @@ def hydrate_human_takeover_from_db(conn: Any) -> None:
 
 
 def is_device_human_takeover_active(device_id: str | None = None) -> bool:
-    """Return True if a human operator has taken over control and suppressed AI actions."""
+    """Return True if a human operator has taken over control and suppressed AI actions.
+
+    When a shared control-plane DB connection is bound, durable DB state is the
+    source of truth so clearing takeover on Worker B takes effect immediately on
+    Worker A instead of being masked by a stale process-local cache entry.
+    """
     global _BOUND_CONN
     key = (device_id or "local").strip() or "local"
-    entry = _HUMAN_TAKEOVER_BY_DEVICE.get(key) or _HUMAN_TAKEOVER_BY_DEVICE.get("local")
-    if entry and entry.get("human_takeover_active"):
-        return True
     if _BOUND_CONN is not None:
         from . import plane_state
 
         try:
-            return plane_state.is_human_takeover_active(_BOUND_CONN, key)
+            active = plane_state.is_human_takeover_active(_BOUND_CONN, key)
+            if not active:
+                _HUMAN_TAKEOVER_BY_DEVICE.pop(key, None)
+                if key == "local":
+                    _HUMAN_TAKEOVER_BY_DEVICE.pop("local", None)
+            return active
         except Exception:
             _BOUND_CONN = None
-    return False
+    entry = _HUMAN_TAKEOVER_BY_DEVICE.get(key) or _HUMAN_TAKEOVER_BY_DEVICE.get("local")
+    return bool(entry and entry.get("human_takeover_active"))
 
 
 def derive_session_permissions(mode: str, effective_policy: dict[str, Any]) -> dict[str, bool]:
@@ -269,15 +278,23 @@ def attach_v1_routes(
     require_row_tenant=None,
 ) -> None:
     """Attach `/api/v1/*` REST and WebSocket routes to the FastAPI application."""
+    from . import agent_channel
+
     ws_subscribers: dict[str, set[WebSocket]] = {}
 
-    async def _broadcast_ws(session_id: str, event: dict[str, Any]) -> None:
+    async def _deliver_local_ws(session_id: str, event: dict[str, Any]) -> None:
         peers = list(ws_subscribers.get(session_id) or [])
         for ws in peers:
             try:
                 await ws.send_json(event)
             except Exception:
                 ws_subscribers.get(session_id, set()).discard(ws)
+
+    agent_channel.register_webrtc_fanout_handler(_deliver_local_ws)
+
+    async def _broadcast_ws(session_id: str, event: dict[str, Any]) -> None:
+        await _deliver_local_ws(session_id, event)
+        agent_channel.publish_webrtc_event(session_id, event)
 
     def _sessions_store() -> dict[str, dict[str, Any]]:
         return app.state.__dict__.setdefault("webrtc_sessions", {})

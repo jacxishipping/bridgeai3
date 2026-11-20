@@ -129,15 +129,18 @@ def create_auth_router(ctx: ControlContext) -> APIRouter:
             raise HTTPException(status_code=400, detail="Invalid or expired login attempt.")
         try:
             doc = oidcmod.discovery()
+            token_form = {
+                "grant_type": "authorization_code",
+                "code": code,
+                "redirect_uri": cfg["redirect_uri"],
+                "client_id": cfg["client_id"],
+                "client_secret": cfg["client_secret"],
+            }
+            if pending.get("code_verifier"):
+                token_form["code_verifier"] = str(pending["code_verifier"])
             resp = httpx.post(
                 doc["token_endpoint"],
-                data={
-                    "grant_type": "authorization_code",
-                    "code": code,
-                    "redirect_uri": cfg["redirect_uri"],
-                    "client_id": cfg["client_id"],
-                    "client_secret": cfg["client_secret"],
-                },
+                data=token_form,
                 timeout=15,
             )
             if resp.status_code != 200:

@@ -129,7 +129,7 @@ def test_structural_snapshot_sqlite_contents(tmp_path):
     mod.build_migrations_db(db_b)
     snap = mod.snapshot_struct_sqlite(db_b)
     tables = [ln[:-1] for ln in snap["tables"] if ln.endswith(":")]
-    assert len(tables) == 24, tables  # 47 objects in the raw snapshot = 24 tables + 23 indexes
+    assert len(tables) == 26, tables  # 26 tables (including task_dead_letters + update_rollouts from migration 017)
     assert "tasks" in tables and "devices" in tables and "schema_migrations" in tables
     # The 5 enum CHECKs from migration 015 (names differ per dialect;
     # the comparison is by expression, so assert the expressions).

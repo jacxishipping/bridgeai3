@@ -1,0 +1,77 @@
+# Prometheus Alerting Rules for AI Bridge Control Plane (Release 2)
+groups:
+  - name: ai_bridge_slos_and_database
+    rules:
+      - alert: AIBridgeApiLatencyHigh
+        expr: histogram_quantile(0.95, sum(rate(aibridge_http_request_duration_seconds_bucket[5m])) by (le, endpoint)) > 1.0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "AI Bridge API p95 latency exceeded 1s on {{ $labels.endpoint }}"
+          runbook: "docs/runbooks.md#api-latency-slo"
+
+      - alert: AIBridgeDbPoolExhaustion
+        expr: aibridge_db_pool_waiting > 0 or (aibridge_db_pool_size > 0 and (aibridge_db_pool_size - aibridge_db_pool_available) / aibridge_db_pool_size > 0.85)
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "AI Bridge database connection pool nearing or at exhaustion"
+          runbook: "docs/runbooks.md#database-pool-exhaustion"
+
+      - alert: AIBridgeDbSlowQueries
+        expr: histogram_quantile(0.95, sum(rate(aibridge_db_query_duration_seconds_bucket[5m])) by (le, dialect, op)) > 0.25
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "AI Bridge DB p95 query latency exceeded 250ms ({{ $labels.dialect }} {{ $labels.op }})"
+          runbook: "docs/runbooks.md#database-pool-exhaustion"
+
+      - alert: AIBridgeDbQueryErrors
+        expr: sum(rate(aibridge_db_queries_total{status="error"}[5m])) > 0.1
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "AI Bridge experiencing sustained database query errors"
+          runbook: "docs/runbooks.md#database-pool-exhaustion"
+
+  - name: ai_bridge_fleet_and_tasks
+    rules:
+      - alert: AIBridgeStaleRunningTasks
+        expr: aibridge_stale_running_tasks > 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "AI Bridge has {{ $value }} stale running task(s) past lease"
+          runbook: "docs/runbooks.md#stale-running-tasks"
+
+      - alert: AIBridgeDeadLetterBacklog
+        expr: aibridge_dead_letter_tasks >= 5
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "AI Bridge dead-letter queue has {{ $value }} unreplayed tasks"
+          runbook: "docs/runbooks.md#dead-letter-queue"
+
+      - alert: AIBridgeStaleHeartbeatDevices
+        expr: aibridge_stale_heartbeat_devices > 0
+        for: 3m
+        labels:
+          severity: warning
+        annotations:
+          summary: "AI Bridge has {{ $value }} device(s) past heartbeat SLO"
+          runbook: "docs/runbooks.md#stale-heartbeat-devices"
+
+      - alert: AIBridgeAgentSpoolBacklog
+        expr: aibridge_agent_spool_pending >= 25 or aibridge_agent_spool_max_age_seconds >= 3600
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "AI Bridge fleet agents have offline spool backlog (pending={{ $value }})"
+          runbook: "docs/runbooks.md#agent-spool-backlog"

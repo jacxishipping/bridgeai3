@@ -169,11 +169,20 @@ def resolve_binding(verify_url: str, bearer_token: str, timeout: int = 10) -> st
 def _api(method: str, url: str, admin_token: str, payload: dict | None = None, timeout: int = 20) -> dict | list:
     try:
         client = get_http_client()
+        headers = {"X-Admin-Token": admin_token, "Content-Type": "application/json"}
+        try:
+            from .logging_config import get_correlation_id
+
+            cid = get_correlation_id()
+            if cid:
+                headers["X-Correlation-ID"] = cid
+        except Exception:
+            pass
         resp = client.request(
             method,
             url,
             json=payload,
-            headers={"X-Admin-Token": admin_token, "Content-Type": "application/json"},
+            headers=headers,
             timeout=timeout,
         )
         # F-04-10 (Wave 7): the shared client never follows redirects

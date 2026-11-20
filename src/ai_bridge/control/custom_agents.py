@@ -888,11 +888,17 @@ class AgentRunner:
                             continue
                         self._running.add(agent["id"])
                     interval = min(MAX_INTERVAL_S, max(MIN_INTERVAL_S, int(agent.get("interval_seconds") or DEFAULT_INTERVAL_S)))
-                    self._conn.execute(
-                        "UPDATE custom_agents SET status='running', next_run_at=?, updated_at=? WHERE id=?",
-                        (now + interval, now, agent["id"]),
+                    # Atomic multi-worker claim: only the first worker to advance
+                    # next_run_at owns this scheduled execution.
+                    cur = self._conn.execute(
+                        "UPDATE custom_agents SET status='running', next_run_at=?, updated_at=? WHERE id=? AND enabled=1 AND next_run_at<=?",
+                        (now + interval, now, agent["id"], now),
                     )
                     self._conn.commit()
+                    if cur.rowcount != 1:
+                        with self._lock:
+                            self._running.discard(agent["id"])
+                        continue
                     threading.Thread(target=self._run_one, args=(agent,), name=f"agent-run-{agent['id']}", daemon=True).start()
             except Exception:  # noqa: BLE001 - the runner must survive transient DB errors
                 time.sleep(1)

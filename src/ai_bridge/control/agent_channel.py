@@ -36,12 +36,14 @@ _loop: asyncio.AbstractEventLoop | None = None
 # --- Redis fan-out -------------------------------------------------------
 _CHANNEL_PREFIX = "aibridge:agent:"
 _BROADCAST_CHANNEL = _CHANNEL_PREFIX + "broadcast"
+_WEBRTC_CHANNEL_PREFIX = "aibridge:webrtc:"
 _WORKER_ID = uuid.uuid4().hex[:12]
 _sync_redis = None
 _sync_redis_failed_at = 0.0
 _SYNC_REDIS_FAILED_COOLDOWN_SEC = 10.0
 _fanout_task: asyncio.Task | None = None
 _REDIS_UNAVAILABLE_WARNED = False
+_webrtc_fanout_handlers: list[Any] = []
 
 # PERF-06: per-device wake events so the next_task long-poll can await a
 # notification instead of spinning every 0.15 s with a DB check per cycle.
@@ -137,6 +139,31 @@ def _channel_for(device_id: str) -> str:
     return _CHANNEL_PREFIX + device_id
 
 
+def register_webrtc_fanout_handler(handler: Any) -> None:
+    """Register an async callback ``handler(session_id, payload)`` for cross-worker WebRTC WS fan-out."""
+    with _lock:
+        if handler not in _webrtc_fanout_handlers:
+            _webrtc_fanout_handlers.append(handler)
+
+
+def publish_webrtc_event(session_id: str, payload: dict[str, Any]) -> bool:
+    """Publish a WebRTC signaling event to Redis pub/sub for other workers."""
+    global _sync_redis, _sync_redis_failed_at
+    try:
+        client = _get_sync_redis()
+        if client is None:
+            return False
+        envelope = json.dumps({"origin": _WORKER_ID, "payload": payload})
+        client.publish(_WEBRTC_CHANNEL_PREFIX + session_id, envelope)
+        return True
+    except Exception as exc:
+        _sync_redis = None
+        _sync_redis_failed_at = time.time()
+        _note_redis_unavailable(exc)
+        log.debug("agent_channel: Redis WebRTC publish failed (%s)", exc)
+        return False
+
+
 def publish_redis(device_id: str, payload: dict[str, Any]) -> bool:
     """Publish ``payload`` to the Redis fan-out channel for ``device_id``.
 
@@ -145,6 +172,7 @@ def publish_redis(device_id: str, payload: dict[str, Any]) -> bool:
     fan-out subscriber can skip messages this worker published itself
     (it already pushed those to local sockets directly).
     """
+    global _sync_redis, _sync_redis_failed_at
     try:
         client = _get_sync_redis()
         if client is None:
@@ -153,6 +181,8 @@ def publish_redis(device_id: str, payload: dict[str, Any]) -> bool:
         client.publish(_channel_for(device_id), envelope)
         return True
     except Exception as exc:
+        _sync_redis = None
+        _sync_redis_failed_at = time.time()
         _note_redis_unavailable(exc)
         log.debug("agent_channel: Redis publish failed (%s)", exc)
         return False
@@ -174,6 +204,20 @@ async def _handle_redis_message(channel: str, data: str) -> None:
         return
     if not isinstance(payload, dict):
         return
+    if channel.startswith(_WEBRTC_CHANNEL_PREFIX):
+        session_id = channel[len(_WEBRTC_CHANNEL_PREFIX):]
+        if not session_id:
+            return
+        with _lock:
+            handlers = list(_webrtc_fanout_handlers)
+        for handler in handlers:
+            try:
+                res = handler(session_id, payload)
+                if asyncio.iscoroutine(res):
+                    await res
+            except Exception:
+                pass
+        return
     device_id = channel[len(_CHANNEL_PREFIX):] if channel.startswith(_CHANNEL_PREFIX) else ""
     if not device_id:
         return
@@ -187,40 +231,52 @@ async def _handle_redis_message(channel: str, data: str) -> None:
 
 
 async def _fanout_main() -> None:
-    """Subscribe to aibridge:agent:* and forward to local subscribers.
+    """Subscribe to aibridge:agent:* and aibridge:webrtc:* and forward to local subscribers.
 
-    Runs until Redis drops the connection (or the task is cancelled),
-    then exits after logging. It never raises out of the task: an
-    unreachable Redis at startup just means this worker has no fan-out.
+    Reconnects with bounded exponential backoff if Redis drops the connection so
+    cross-worker fan-out recovers automatically after Redis restarts.
     """
     url = _redis_url()
-    try:
-        import redis.asyncio as aioredis
-
-        client = aioredis.from_url(url, decode_responses=True, socket_connect_timeout=2)
-        await client.ping()
-        pubsub = client.pubsub()
-        await pubsub.psubscribe(_CHANNEL_PREFIX + "*")
+    backoff = 1.0
+    max_backoff = 30.0
+    while True:
+        client = None
+        pubsub = None
         try:
+            import redis.asyncio as aioredis
+
+            client = aioredis.from_url(url, decode_responses=True, socket_connect_timeout=2)
+            await client.ping()
+            pubsub = client.pubsub()
+            await pubsub.psubscribe(_CHANNEL_PREFIX + "*")
+            await pubsub.psubscribe(_WEBRTC_CHANNEL_PREFIX + "*")
+            backoff = 1.0
             async for message in pubsub.listen():
                 if message.get("type") != "pmessage":
                     continue
                 await _handle_redis_message(
                     str(message.get("channel", "")), str(message.get("data", ""))
                 )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            _note_redis_unavailable(exc)
+            log.warning("agent_channel: Redis fan-out unavailable (%s); retrying in %.1fs", exc, backoff)
         finally:
-            try:
-                await pubsub.close()
-            except Exception:
-                pass
-            try:
-                await client.close()
-            except Exception:
-                pass
-    except asyncio.CancelledError:
-        raise
-    except Exception as exc:
-        log.warning("agent_channel: Redis fan-out unavailable (%s); WS push is per-worker only", exc)
+            if pubsub is not None:
+                try:
+                    await pubsub.close()
+                except Exception:
+                    pass
+            if client is not None:
+                try:
+                    await client.close()
+                except Exception:
+                    pass
+        if not _redis_url():
+            return
+        await asyncio.sleep(backoff)
+        backoff = min(max_backoff, backoff * 2.0)
 
 
 def start_redis_fanout(loop: asyncio.AbstractEventLoop | None = None) -> asyncio.Task | None:
@@ -414,7 +470,15 @@ def handle_agent_message(conn: Any, device_id: str, msg: Any) -> dict[str, Any] 
         return {"type": "progress_ack", "task_id": task_id, "ok": True, "throttled": True}
     from .orchestration import record_task_progress
 
-    ok = record_task_progress(conn, task_id, device_id=device_id)
+    progress_pct = msg.get("progress_pct")
+    status_message = msg.get("status_message")
+    ok = record_task_progress(
+        conn,
+        task_id,
+        device_id=device_id,
+        progress_pct=float(progress_pct) if progress_pct is not None else None,
+        status_message=str(status_message) if status_message is not None else None,
+    )
     if ok:
         _progress_last[key] = now_ts
     return {"type": "progress_ack", "task_id": task_id, "ok": bool(ok)}
@@ -423,6 +487,7 @@ def handle_agent_message(conn: Any, device_id: str, msg: Any) -> dict[str, Any] 
 def reset_for_tests() -> None:
     with _lock:
         _subscribers.clear()
+        _webrtc_fanout_handlers.clear()
     _events.clear()
     _progress_last.clear()
     global _sync_redis, _sync_redis_failed_at, _REDIS_UNAVAILABLE_WARNED

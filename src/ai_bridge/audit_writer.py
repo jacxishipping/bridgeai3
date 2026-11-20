@@ -141,6 +141,7 @@ def _write_db_conn(event: dict[str, Any], conn: Any) -> None:
         args=event.get("arguments") or event.get("details") or {},
         decision=event.get("decision", "recorded"),
         result=event.get("result", ""),
+        trace_id=event.get("trace_id") or None,
     )
 
 

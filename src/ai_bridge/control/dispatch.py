@@ -373,6 +373,7 @@ def dispatch(tool: str, args: dict, *, policy: Policy | None = None, approval_gr
             policy=policy,
         ),
         "update_fleet_agent": lambda a: tools.update_fleet_agent(approval_granted=approval_granted, policy=policy),
+        "rollback_fleet_agent": lambda a: tools.rollback_fleet_agent(approval_granted=approval_granted, policy=policy),
         "launch_approved_application": lambda a: tools.launch_approved_application(a["app_name"], approval_granted=approval_granted, url=a.get("url"), policy=policy),
         "perform_approved_ui_action": lambda a: tools.perform_approved_ui_action(
             a["action"],
