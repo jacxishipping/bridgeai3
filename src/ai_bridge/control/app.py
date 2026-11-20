@@ -813,7 +813,13 @@ def _render_quick_decision_html(
 """
 
 
-def create_app(*, admin_token: str | None = None, db_path: Path | None = None, database_url: str | None = None) -> FastAPI:
+def create_app(
+    *,
+    admin_token: str | None = None,
+    db_path: Path | None = None,
+    database_url: str | None = None,
+    dashboard_dist_dir: str | Path | None = None,
+) -> FastAPI:
     token = admin_token or get_secret("AI_BRIDGE_ADMIN_TOKEN") or os.environ.get("AI_BRIDGE_ADMIN_TOKEN")
     data_dir = Path(os.environ.get("AI_BRIDGE_DATA_DIR", str(Path.home() / ".ai-bridge")))
     db_path = db_path or (data_dir / "control.db")
@@ -2242,9 +2248,12 @@ def create_app(*, admin_token: str | None = None, db_path: Path | None = None, d
     # END WAVE3B ROUTERS (Track A) ---------------------------------------
 
     # Mount frontend SPA static files if dashboard build dist exists
-    dist_dir = Path("/app/apps/dashboard/dist")
-    if not dist_dir.exists():
-        dist_dir = Path(__file__).resolve().parent.parent.parent.parent / "apps" / "dashboard" / "dist"
+    if dashboard_dist_dir is not None:
+        dist_dir = Path(dashboard_dist_dir)
+    else:
+        dist_dir = Path("/app/apps/dashboard/dist")
+        if not dist_dir.exists():
+            dist_dir = Path(__file__).resolve().parent.parent.parent.parent / "apps" / "dashboard" / "dist"
     if dist_dir.exists():
         from fastapi.responses import FileResponse
         from fastapi.staticfiles import StaticFiles

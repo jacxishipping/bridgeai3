@@ -249,10 +249,10 @@ def test_policy_simulate_returns_decision_without_executing(app_client):
 def test_limiter_imports_come_from_control_limiter():
     # Static: no direct durable_ratelimit.allow import on the hot paths.
     repo = Path(__file__).resolve().parents[2]
-    webrtc_src = (repo / "src" / "ai_bridge" / "webrtc_stream.py").read_text()
+    webrtc_src = (repo / "src" / "ai_bridge" / "webrtc_stream.py").read_text(encoding="utf-8")
     assert "from ai_bridge.control.durable_ratelimit import allow" not in webrtc_src
     assert "control.limiter" in webrtc_src
-    app_src = (repo / "src" / "ai_bridge" / "control" / "app.py").read_text()
+    app_src = (repo / "src" / "ai_bridge" / "control" / "app.py").read_text(encoding="utf-8")
     assert "from .durable_ratelimit import allow" not in app_src
     assert "from .limiter import" in app_src
 

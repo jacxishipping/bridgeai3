@@ -187,7 +187,18 @@ def render_generated_block() -> str:
     from ai_bridge.control.app import create_app
 
     with tempfile.TemporaryDirectory(prefix="apiref-") as tmp:
-        app = create_app(admin_token="test", db_path=str(Path(tmp) / "control.db"))
+        # Provide a synthetic dashboard dist directory so the conditional SPA
+        # routes (/assets and /{full_path:path}) are always registered by
+        # create_app(), keeping route generation deterministic whether or not
+        # apps/dashboard/dist has been built locally.
+        fake_dist = Path(tmp) / "dashboard-dist"
+        (fake_dist / "assets").mkdir(parents=True)
+        (fake_dist / "index.html").write_text("", encoding="utf-8")
+        app = create_app(
+            admin_token="test",
+            db_path=str(Path(tmp) / "control.db"),
+            dashboard_dist_dir=fake_dist,
+        )
         try:
             routes = _collect_routes(app)
         finally:

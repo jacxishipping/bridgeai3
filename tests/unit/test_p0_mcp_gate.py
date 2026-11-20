@@ -62,7 +62,7 @@ def _grant_approval(tool_name: str, monkeypatch: pytest.MonkeyPatch):
 def test_every_mcp_tool_has_a_tier_entry():
     from ai_bridge.policy import TOOL_TIERS, normalize_tool_name
 
-    tree = ast.parse(SERVER_SRC.read_text())
+    tree = ast.parse(SERVER_SRC.read_text(encoding="utf-8"))
     tools = []
     for node in tree.body:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -77,7 +77,7 @@ def test_every_mcp_tool_has_a_tier_entry():
 
 
 def test_every_mcp_tool_wrapper_is_gated():
-    tree = ast.parse(SERVER_SRC.read_text())
+    tree = ast.parse(SERVER_SRC.read_text(encoding="utf-8"))
     ungated = []
     for node in tree.body:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):

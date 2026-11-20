@@ -53,6 +53,27 @@ def test_generated_table_is_current():
     )
 
 
+def test_generated_table_is_independent_of_local_dashboard_dist(tmp_path):
+    """create_app respects dashboard_dist_dir and the generator stays deterministic
+    whether or not apps/dashboard/dist is built on disk."""
+    from ai_bridge.control.app import create_app
+
+    app = create_app(
+        admin_token="test",
+        db_path=tmp_path / "control.db",
+        dashboard_dist_dir=tmp_path / "no-such-dist",
+    )
+    try:
+        paths = {getattr(r, "path", "") for r in app.routes}
+    finally:
+        app.state.conn.close()
+    assert "/assets" not in paths
+    assert "/{full_path:path}" not in paths
+
+    gen = _load_generator()
+    assert gen.read_doc_block() == gen.render_generated_block()
+
+
 def test_every_snapshot_route_is_documented():
     snap = _load_module(
         "test_architecture_phase4_routers",
