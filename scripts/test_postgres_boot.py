@@ -48,6 +48,7 @@ def main() -> int:
     from fastapi.testclient import TestClient
 
     from ai_bridge.control import db as dbmod
+    from ai_bridge.control import migrations as migmod
     from ai_bridge.control.app import create_app
 
     tmp = Path(tempfile.mkdtemp(prefix="aibridge-pg-boot-"))
@@ -67,7 +68,8 @@ def main() -> int:
             ).fetchall()]
         finally:
             conn.close()
-        assert len(versions) == 16, f"expected 16 migrations, got {versions}"
+        expected_versions = sorted(p.name.split("_", 1)[0] for p in migmod.MIGRATIONS_DIR.glob("[0-9][0-9][0-9]_*.sql"))
+        assert versions == expected_versions, f"expected migrations {expected_versions}, got {versions}"
         print(f"migrations applied on Postgres: {len(versions)}")
 
         app = create_app(admin_token="test", database_url=boot_dsn)
