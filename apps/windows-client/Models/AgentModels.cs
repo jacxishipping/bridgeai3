@@ -289,6 +289,9 @@ public sealed class DeviceAgentSettings
     [JsonPropertyName("confirm_mutating_functions")]
     public bool ConfirmMutatingFunctions { get; set; } = false;
 
+    [JsonPropertyName("enable_vision_in_loop")]
+    public bool EnableVisionInLoop { get; set; } = true;
+
     [JsonPropertyName("functions")]
     public AgentFunctionPermissions Functions { get; set; } = new();
 }

@@ -365,7 +365,23 @@ public sealed class DeviceAgentRuntimeService : IDisposable
 
             using var resp = await _http.SendAsync(req, ct);
             var body = await resp.Content.ReadAsStringAsync(ct);
-            if (!resp.IsSuccessStatusCode)
+            if (!resp.IsSuccessStatusCode && (int)resp.StatusCode == 400 && StripVisionMessagesInPlace(messages))
+            {
+                // Graceful fallback for text-only custom endpoints that reject image_url content arrays
+                using var retryReq = new HttpRequestMessage(HttpMethod.Post, $"{baseUrl}/chat/completions");
+                if (!string.IsNullOrWhiteSpace(apiKey))
+                {
+                    retryReq.Headers.TryAddWithoutValidation("Authorization", $"Bearer {apiKey.Trim()}");
+                }
+                retryReq.Content = new StringContent(JsonSerializer.Serialize(reqObj), Encoding.UTF8, "application/json");
+                using var retryResp = await _http.SendAsync(retryReq, ct);
+                body = await retryResp.Content.ReadAsStringAsync(ct);
+                if (!retryResp.IsSuccessStatusCode)
+                {
+                    return (false, "", "", latestScreenshot, $"HTTP {(int)retryResp.StatusCode}: {Truncate(body, 280)}");
+                }
+            }
+            else if (!resp.IsSuccessStatusCode)
             {
                 return (false, "", "", latestScreenshot, $"HTTP {(int)resp.StatusCode}: {Truncate(body, 280)}");
             }
@@ -394,6 +410,8 @@ public sealed class DeviceAgentRuntimeService : IDisposable
                     messages.Add(new { role = "assistant", content });
                     var obs = new StringBuilder();
                     obs.AppendLine("Tool execution results:");
+                    string? stepShot = null;
+                    string? stepShotTool = null;
                     foreach (var (tName, tArgsJson) in textCalls)
                     {
                         var toolResult = await ExecuteGuardedToolAsync(tName, tArgsJson, config, agent, confirmMutatingToolAsync, ct);
@@ -401,10 +419,29 @@ public sealed class DeviceAgentRuntimeService : IDisposable
                         if (toolResult.ScreenshotBase64 is not null)
                         {
                             latestScreenshot = toolResult.ScreenshotBase64;
+                            stepShot = toolResult.ScreenshotBase64;
+                            stepShotTool = tName;
                         }
                         obs.AppendLine($"[{tName}] => {StripBase64ForLlm(toolResult.ResultJson)}");
                     }
                     obs.AppendLine("Continue with the next <tool_call> if more steps are needed, or provide a brief final confirmation once finished.");
+                    if (agent.EnableVisionInLoop && stepShot is not null)
+                    {
+                        var jpegB64 = CompressBase64PngToJpegForVision(stepShot);
+                        if (!string.IsNullOrEmpty(jpegB64))
+                        {
+                            messages.Add(new
+                            {
+                                role = "user",
+                                content = new object[]
+                                {
+                                    new { type = "text", text = obs.ToString() + $"\n[Live screenshot attached from {stepShotTool}]" },
+                                    new { type = "image_url", image_url = new { url = $"data:image/jpeg;base64,{jpegB64}", detail = "auto" } },
+                                },
+                            });
+                            continue;
+                        }
+                    }
                     messages.Add(new { role = "user", content = obs.ToString() });
                     continue;
                 }
@@ -451,6 +488,8 @@ public sealed class DeviceAgentRuntimeService : IDisposable
 
             messages.Add(new { role = "assistant", content = string.IsNullOrEmpty(content) ? (string?)null : content, tool_calls = rawAssistantCalls });
 
+            string? nativeStepShot = null;
+            string? nativeStepShotTool = null;
             foreach (var (id, name, argsJson) in callItems)
             {
                 var toolResult = await ExecuteGuardedToolAsync(name, argsJson, config, agent, confirmMutatingToolAsync, ct);
@@ -458,6 +497,8 @@ public sealed class DeviceAgentRuntimeService : IDisposable
                 if (toolResult.ScreenshotBase64 is not null)
                 {
                     latestScreenshot = toolResult.ScreenshotBase64;
+                    nativeStepShot = toolResult.ScreenshotBase64;
+                    nativeStepShotTool = name;
                 }
                 messages.Add(new
                 {
@@ -465,6 +506,22 @@ public sealed class DeviceAgentRuntimeService : IDisposable
                     tool_call_id = id,
                     content = StripBase64ForLlm(toolResult.ResultJson),
                 });
+            }
+            if (agent.EnableVisionInLoop && nativeStepShot is not null)
+            {
+                var jpegB64 = CompressBase64PngToJpegForVision(nativeStepShot);
+                if (!string.IsNullOrEmpty(jpegB64))
+                {
+                    messages.Add(new
+                    {
+                        role = "user",
+                        content = new object[]
+                        {
+                            new { type = "text", text = $"[Vision-in-the-Loop] Live screenshot captured by '{nativeStepShotTool}'. Inspect the current screen visually to verify coordinates and continue." },
+                            new { type = "image_url", image_url = new { url = $"data:image/jpeg;base64,{jpegB64}", detail = "auto" } },
+                        },
+                    });
+                }
             }
         }
 
@@ -578,6 +635,18 @@ public sealed class DeviceAgentRuntimeService : IDisposable
                     tool_use_id = id,
                     content = StripBase64ForLlm(toolResult.ResultJson),
                 });
+                if (agent.EnableVisionInLoop && toolResult.ScreenshotBase64 is not null)
+                {
+                    var jpegB64 = CompressBase64PngToJpegForVision(toolResult.ScreenshotBase64);
+                    if (!string.IsNullOrEmpty(jpegB64))
+                    {
+                        toolResults.Add(new
+                        {
+                            type = "image",
+                            source = new { type = "base64", media_type = "image/jpeg", data = jpegB64 },
+                        });
+                    }
+                }
             }
             messages.Add(new { role = "user", content = toolResults });
         }
@@ -713,6 +782,64 @@ public sealed class DeviceAgentRuntimeService : IDisposable
             "move", "drag", "scroll", "press", "copy", "paste", "kill", "restart",
         };
         return verbs.Any(v => p.Contains(v, StringComparison.Ordinal));
+    }
+
+    public static string? CompressBase64PngToJpegForVision(string base64Image, int maxWidth = 1280, long jpegQuality = 75)
+    {
+        if (string.IsNullOrWhiteSpace(base64Image)) return null;
+        try
+        {
+            var clean = base64Image.Contains(',') ? base64Image[(base64Image.IndexOf(',') + 1)..] : base64Image;
+            var rawBytes = Convert.FromBase64String(clean);
+            using var inMs = new System.IO.MemoryStream(rawBytes);
+            using var src = new System.Drawing.Bitmap(inMs);
+            int targetW = src.Width > maxWidth ? maxWidth : src.Width;
+            int targetH = src.Width > maxWidth ? Math.Max(1, (int)Math.Round(src.Height * (double)maxWidth / src.Width)) : src.Height;
+
+            using var resized = new System.Drawing.Bitmap(targetW, targetH);
+            using (var g = System.Drawing.Graphics.FromImage(resized))
+            {
+                g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+                g.DrawImage(src, 0, 0, targetW, targetH);
+            }
+
+            var jpegCodec = System.Drawing.Imaging.ImageCodecInfo
+                .GetImageEncoders()
+                .FirstOrDefault(c => c.FormatID == System.Drawing.Imaging.ImageFormat.Jpeg.Guid);
+            using var outMs = new System.IO.MemoryStream();
+            if (jpegCodec is not null)
+            {
+                using var encParams = new System.Drawing.Imaging.EncoderParameters(1);
+                encParams.Param[0] = new System.Drawing.Imaging.EncoderParameter(
+                    System.Drawing.Imaging.Encoder.Quality,
+                    Math.Clamp(jpegQuality, 30L, 95L));
+                resized.Save(outMs, jpegCodec, encParams);
+            }
+            else
+            {
+                resized.Save(outMs, System.Drawing.Imaging.ImageFormat.Jpeg);
+            }
+            return Convert.ToBase64String(outMs.ToArray());
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static bool StripVisionMessagesInPlace(List<object> messages)
+    {
+        bool changed = false;
+        for (int i = 0; i < messages.Count; i++)
+        {
+            var json = JsonSerializer.Serialize(messages[i]);
+            if (json.Contains("\"image_url\"", StringComparison.Ordinal))
+            {
+                messages[i] = new { role = "user", content = "[Screenshot omitted — text-only model fallback]" };
+                changed = true;
+            }
+        }
+        return changed;
     }
 
     public void Dispose() => _http.Dispose();

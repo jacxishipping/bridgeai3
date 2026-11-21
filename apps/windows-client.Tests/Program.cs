@@ -603,5 +603,28 @@ await RunTest("DeviceAgentRuntimeService: text <tool_call> fallback & drawing to
     return Task.CompletedTask;
 });
 
+// 19. Vision-in-the-Loop JPEG compression & multimodal toggle
+await RunTest("DeviceAgentRuntimeService: Vision-in-the-Loop compresses PNG screenshots to compact JPEG", () =>
+{
+    var cfg = new AgentGuiConfig();
+    Assert(cfg.DeviceAgent.EnableVisionInLoop, "EnableVisionInLoop should default to true");
+
+    using var bmp = new System.Drawing.Bitmap(1600, 900);
+    using (var g = System.Drawing.Graphics.FromImage(bmp))
+    {
+        g.Clear(System.Drawing.Color.CornflowerBlue);
+        g.FillEllipse(System.Drawing.Brushes.Yellow, 200, 200, 300, 300);
+    }
+    using var ms = new MemoryStream();
+    bmp.Save(ms, System.Drawing.Imaging.ImageFormat.Png);
+    var pngB64 = Convert.ToBase64String(ms.ToArray());
+
+    var jpegB64 = DeviceAgentRuntimeService.CompressBase64PngToJpegForVision(pngB64, maxWidth: 1280, jpegQuality: 75);
+    Assert(!string.IsNullOrEmpty(jpegB64), "Expected non-empty JPEG base64");
+    var jpegBytes = Convert.FromBase64String(jpegB64!);
+    Assert(jpegBytes.Length > 100 && jpegBytes[0] == 0xFF && jpegBytes[1] == 0xD8, "Expected valid JPEG magic bytes (FF D8)");
+    return Task.CompletedTask;
+});
+
 Console.WriteLine($"\nSummary: {passed} passed, {failed} failed ({passed + failed} total)");
 return failed > 0 ? 1 : 0;
