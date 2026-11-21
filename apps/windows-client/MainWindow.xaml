@@ -154,8 +154,13 @@
                                 <TextBlock x:Name="BreadcrumbPageText" Text="Overview" FontSize="12" FontWeight="Medium" Foreground="{DynamicResource TextPrimary}" VerticalAlignment="Center"/>
                             </StackPanel>
 
-                            <!-- Right Controls: Connection Pill, Search Ctrl K, Theme Toggle, WI Avatar, Window Captions -->
+                            <!-- Right Controls: Take Over Button, Connection Pill, Search Ctrl K, Theme Toggle, WI Avatar, Window Captions -->
                             <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                <Button x:Name="TopTakeoverBtn" Content="⚡ Take Over Screen" Style="{StaticResource DangerBtnStyle}"
+                                        Padding="11,4.5" FontSize="11.5" FontWeight="SemiBold" Visibility="Collapsed"
+                                        WindowChrome.IsHitTestVisibleInChrome="True" Click="OnTopTakeoverClick"
+                                        Margin="0,0,8,0" ToolTip="Reclaim mouse &amp; keyboard control from the AI agent (Ctrl+Alt+T)"/>
+
                                 <Border Background="{DynamicResource BgCard}" BorderBrush="{DynamicResource BorderHairline}" BorderThickness="1"
                                         CornerRadius="14" Padding="10,4.5" Margin="0,0,8,0" VerticalAlignment="Center"
                                         Cursor="Hand" MouseLeftButtonUp="OnOpenNodeDrawerClick" ToolTip="Open Node Inspector Drawer">

@@ -146,6 +146,9 @@ public partial class MainWindow : Window
         _monitorTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(Math.Clamp(_config.MonitorIntervalMs, 500, 5000)) };
         _monitorTimer.Tick += (_, _) => RefreshSystemMonitor();
 
+        AgentTakeoverService.StateChanged += OnTakeoverStateChanged;
+        AgentTakeoverService.ExtraAllowedRegions = GetTakeoverAllowedRegions;
+
         _toastTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2.5) };
         _toastTimer.Tick += (_, _) => { ToastBanner.Visibility = Visibility.Collapsed; _toastTimer.Stop(); };
 
@@ -361,6 +364,7 @@ public partial class MainWindow : Window
             new PaletteCommand("Action: Expand / Collapse Console", () => { SelectTab(0); OnToggleExpandConsoleClick(this, new RoutedEventArgs()); }),
             new PaletteCommand("Action: Copy Diagnostics Report", () => OnCopyDiagnosticsClick(this, new RoutedEventArgs())),
             new PaletteCommand("Action: Toggle Light / Dark Theme", () => OnToggleThemeClick(this, new RoutedEventArgs())),
+            new PaletteCommand("Action: Test Agent Takeover Border Glow", () => AgentTakeoverService.StartAgentTakeover()),
         });
     }
 
@@ -538,6 +542,60 @@ public partial class MainWindow : Window
         WindowState = WindowState == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized;
     private void OnCloseToTrayClick(object sender, RoutedEventArgs e) => Close();
 
+    private IEnumerable<Rect> GetTakeoverAllowedRegions()
+    {
+        if (TopTakeoverBtn is null || !TopTakeoverBtn.IsVisible || !IsVisible)
+        {
+            yield break;
+        }
+        Rect? rect = null;
+        try
+        {
+            var dpi = VisualTreeHelper.GetDpi(TopTakeoverBtn);
+            var tl = TopTakeoverBtn.PointToScreen(new System.Windows.Point(0, 0));
+            rect = new Rect(tl.X, tl.Y, TopTakeoverBtn.ActualWidth * dpi.DpiScaleX, TopTakeoverBtn.ActualHeight * dpi.DpiScaleY);
+        }
+        catch { }
+        if (rect.HasValue) yield return rect.Value;
+    }
+
+    private void OnTakeoverStateChanged(TakeoverState state)
+    {
+        if (TopTakeoverBtn is null) return;
+        if (state == TakeoverState.AgentControlling)
+        {
+            TopTakeoverBtn.Content = "⚡ Take Over Screen";
+            TopTakeoverBtn.Style = (Style)FindResource("DangerBtnStyle");
+            TopTakeoverBtn.Visibility = Visibility.Visible;
+            AppendLog("info", "AI Agent took over screen (physical input locked; border glow active). Click 'Take Over' or press Ctrl+Alt+T to reclaim.");
+        }
+        else if (state == TakeoverState.UserControl)
+        {
+            TopTakeoverBtn.Content = "Return Control to Agent";
+            TopTakeoverBtn.Style = (Style)FindResource("PrimaryBtnStyle");
+            TopTakeoverBtn.Visibility = Visibility.Visible;
+            AppendLog("warn", "User reclaimed screen control — agent desktop input paused.");
+            ShowToast("You have screen control (agent input paused)");
+        }
+        else
+        {
+            TopTakeoverBtn.Visibility = Visibility.Collapsed;
+        }
+    }
+
+    private void OnTopTakeoverClick(object sender, RoutedEventArgs e)
+    {
+        if (AgentTakeoverService.State == TakeoverState.AgentControlling)
+        {
+            AgentTakeoverService.TakeOver();
+        }
+        else if (AgentTakeoverService.State == TakeoverState.UserControl)
+        {
+            AgentTakeoverService.ReturnControlToAgent();
+            ShowToast("Returned screen control to AI Agent");
+        }
+    }
+
     private void SetupSystemTray()
     {
         var menu = new ContextMenuStrip();
@@ -613,6 +671,7 @@ public partial class MainWindow : Window
         _monitorTimer.Stop();
         await _client.StopAsync();
         _client.Dispose();
+        AgentTakeoverService.Shutdown();
         NamedPipeBridge.StopManagedCppSupervisor();
         if (_trayIcon is not null)
         {

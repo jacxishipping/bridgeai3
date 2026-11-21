@@ -888,6 +888,11 @@ public sealed class NativeToolExecutor
         {
             throw new UnauthorizedAccessException("Policy denied: interactive desktop control is disabled.");
         }
+        if (AgentTakeoverService.IsUserInControl)
+        {
+            throw new UnauthorizedAccessException("Human takeover is active: click 'Return Control to Agent' to resume agent desktop input.");
+        }
+        AgentTakeoverService.NotifyAgentActivity();
     }
 
     private static object MouseMove(AgentGuiConfig config, JsonElement args)
@@ -1070,6 +1075,10 @@ public sealed class NativeToolExecutor
         if (!config.Policy.AllowTier3)
         {
             throw new UnauthorizedAccessException("Policy denied: Tier 3 sensitive operations are disabled.");
+        }
+        if (string.Equals(msgType, "START_WEBRTC_SESSION", StringComparison.OrdinalIgnoreCase))
+        {
+            AgentTakeoverService.NotifyAgentActivity();
         }
         var (ok, reply) = await NamedPipeBridge.SendCommandAsync(msgType, args, ct: ct);
         if (!ok)
