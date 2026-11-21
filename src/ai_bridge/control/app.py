@@ -495,8 +495,13 @@ class DevicePolicyIn(BaseModel):
     allow_shell: bool | None = None
     allow_package_install: bool | None = None
     allow_file_deletion: bool | None = None
+    allow_clipboard: bool | None = None
+    require_local_approval: bool | None = None
+    allow_full_pc_access: bool | None = None
+    allow_unrestricted_apps: bool | None = None
     max_tier_unattended: int | None = None
     allowed_apps: list[str] | None = None
+    allowed_commands: list[str] | None = None
     allowed_services: list[str] | None = None
     allowed_tools: list[str] | None = None
     denied_tools: list[str] | None = None
@@ -1121,11 +1126,13 @@ def create_app(
         custom: dict = {}
         if raw_p:
             try:
-                custom = json.loads(raw_p) if isinstance(raw_p, str) else raw_p
+                parsed_custom = json.loads(raw_p) if isinstance(raw_p, str) else raw_p
+                if isinstance(parsed_custom, dict):
+                    custom = {k: v for k, v in parsed_custom.items() if v is not None}
             except Exception:
                 custom = {}
 
-        is_unrestricted = bool(custom.get("unrestricted", False))
+        is_unrestricted = bool(custom.get("unrestricted", False) or custom.get("allow_full_pc_access", False))
         if is_unrestricted:
             return {
                 "inherit_global": False,
@@ -1137,8 +1144,13 @@ def create_app(
                 "allow_shell": True,
                 "allow_package_install": True,
                 "allow_file_deletion": True,
-                "max_tier_unattended": 4,
+                "allow_clipboard": bool(custom.get("allow_clipboard", True)),
+                "require_local_approval": bool(custom.get("require_local_approval", False)),
+                "allow_full_pc_access": True,
+                "allow_unrestricted_apps": True,
+                "max_tier_unattended": int(custom.get("max_tier_unattended") or 4),
                 "allowed_apps": custom.get("allowed_apps") or ["*"],
+                "allowed_commands": custom.get("allowed_commands") or [],
                 "allowed_services": custom.get("allowed_services") or ["*"],
                 "allowed_test_commands": ["*"],
                 "denied_tools": custom.get("denied_tools") or [],
@@ -1150,7 +1162,20 @@ def create_app(
             }
 
         if not custom:
-            return {**global_p, "has_custom_policy": False, "_source": "global", "denied_tools": []}
+            return {
+                **global_p,
+                "allow_shell": bool(global_p.get("allow_shell", False)),
+                "allow_package_install": bool(global_p.get("allow_package_install", False)),
+                "allow_file_deletion": bool(global_p.get("allow_file_deletion", False)),
+                "allow_clipboard": bool(global_p.get("allow_clipboard", True)),
+                "require_local_approval": bool(global_p.get("require_local_approval", False)),
+                "allow_full_pc_access": False,
+                "allow_unrestricted_apps": False,
+                "allowed_commands": list(global_p.get("allowed_commands") or []),
+                "has_custom_policy": False,
+                "_source": "global",
+                "denied_tools": [],
+            }
 
         inherit = bool(custom.get("inherit_global", True))
         merged = (
@@ -1160,18 +1185,48 @@ def create_app(
                 "allow_writes": True,
                 "allow_tier3": False,
                 "desktop_enabled": False,
+                "allow_shell": False,
+                "allow_package_install": False,
+                "allow_file_deletion": False,
+                "allow_clipboard": True,
+                "require_local_approval": False,
+                "allow_full_pc_access": False,
+                "allow_unrestricted_apps": False,
                 "allowed_apps": [],
+                "allowed_commands": [],
                 "allowed_services": [],
                 "allowed_test_commands": ["pytest", "npm test", "go test"],
                 "max_tier_unattended": 2,
             }
         )
-        for k in ["allow_writes", "allow_tier3", "desktop_enabled", "max_tier_unattended", "allow_file_deletion", "allow_shell", "allow_package_install"]:
+        merged.setdefault("allow_shell", bool(global_p.get("allow_shell", False)))
+        merged.setdefault("allow_package_install", bool(global_p.get("allow_package_install", False)))
+        merged.setdefault("allow_file_deletion", bool(global_p.get("allow_file_deletion", False)))
+        merged.setdefault("allow_clipboard", True)
+        merged.setdefault("require_local_approval", False)
+        merged.setdefault("allow_full_pc_access", False)
+        merged.setdefault("allow_unrestricted_apps", False)
+        merged.setdefault("allowed_commands", [])
+        for k in [
+            "allow_writes",
+            "allow_tier3",
+            "desktop_enabled",
+            "max_tier_unattended",
+            "allow_file_deletion",
+            "allow_shell",
+            "allow_package_install",
+            "allow_clipboard",
+            "require_local_approval",
+            "allow_full_pc_access",
+            "allow_unrestricted_apps",
+        ]:
             if k in custom and custom[k] is not None:
                 merged[k] = custom[k]
 
         if custom.get("allowed_apps") is not None:
             merged["allowed_apps"] = custom["allowed_apps"]
+        if custom.get("allowed_commands") is not None:
+            merged["allowed_commands"] = custom["allowed_commands"]
         if custom.get("allowed_services") is not None:
             merged["allowed_services"] = custom["allowed_services"]
 

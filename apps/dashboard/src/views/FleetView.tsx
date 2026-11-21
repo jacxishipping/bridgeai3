@@ -104,8 +104,15 @@ export function FleetView({
   const [localTags, setLocalTags] = useState<string[]>([]);
   const [polWrites, setPolWrites] = useState(true);
   const [polTier3, setPolTier3] = useState(false);
+  const [polTier4, setPolTier4] = useState(false);
   const [polDesktop, setPolDesktop] = useState(false);
   const [polShell, setPolShell] = useState(false);
+  const [polPackageInstall, setPolPackageInstall] = useState(false);
+  const [polClipboard, setPolClipboard] = useState(true);
+  const [polFullPc, setPolFullPc] = useState(false);
+  const [polRequireLocalApproval, setPolRequireLocalApproval] = useState(false);
+  const [polMaxTier, setPolMaxTier] = useState<number>(2);
+  const [polAllowedApps, setPolAllowedApps] = useState<string[]>([]);
   const [savingPolicy, setSavingPolicy] = useState(false);
 
   const availableGroups = useMemo(() => {
@@ -167,32 +174,59 @@ export function FleetView({
   const totalCount = pagedDevices ? totalDevices : filtered.length;
   const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
 
-  async function openInspector(dev: DeviceRecord) {
+  function applyPolicyToForm(
+    customPol: Record<string, unknown> | undefined,
+    effectivePol: Record<string, unknown> | undefined,
+    globalPol: PolicyState | null,
+    hasCustom: boolean,
+  ) {
+    const src = (hasCustom ? { ...(effectivePol || {}), ...(customPol || {}) } : (effectivePol || globalPol || {})) as Record<
+      string,
+      unknown
+    >;
+    setPolWrites(Boolean(src.allow_writes ?? true));
+    setPolTier3(Boolean(src.allow_tier3 ?? false));
+    setPolTier4(Boolean(src.allow_file_deletion ?? false));
+    setPolDesktop(Boolean(src.desktop_enabled ?? false));
+    setPolShell(Boolean(src.allow_shell ?? false));
+    setPolPackageInstall(Boolean(src.allow_package_install ?? false));
+    setPolClipboard(Boolean(src.allow_clipboard ?? true));
+    setPolFullPc(Boolean(src.allow_full_pc_access ?? src.unrestricted ?? false));
+    setPolRequireLocalApproval(Boolean(src.require_local_approval ?? false));
+    const rawTier = Number(src.max_tier_unattended ?? (src.allow_tier3 ? 3 : 2));
+    setPolMaxTier(Number.isFinite(rawTier) ? Math.min(4, Math.max(1, rawTier)) : 2);
+    setPolAllowedApps(Array.isArray(src.allowed_apps) ? (src.allowed_apps as string[]).map(String) : []);
+  }
+
+  async function openInspector(dev: DeviceRecord, keepTab = false) {
     onSelectDevice(dev);
-    setDrawerTab("overview");
+    if (!keepTab) setDrawerTab("overview");
     setLocalGroup(dev.group || "");
     // Release 3 truthfulness: show actual tags (never invent default placeholder tags)
     setLocalTags(dev.tags ?? []);
-    const p = dev.policy || {};
-    setPolWrites(Boolean(p.allow_writes ?? true));
-    setPolTier3(Boolean(p.allow_tier3 ?? false));
-    setPolDesktop(Boolean(p.desktop_enabled ?? false));
-    setPolShell(Boolean(p.allow_shell ?? false));
+    applyPolicyToForm(dev.policy, dev.effective_policy, globalPolicy, Boolean(dev.has_custom_policy));
     setOverview(null);
     const [ov, gp] = await Promise.all([
       api.getDeviceOverview(dev.id).catch(() => null),
       api.getPolicy().catch(() => null),
     ]);
-    if (ov) setOverview(ov);
-    if (gp?.policy) {
-      setGlobalPolicy(gp.policy);
-      if (!dev.has_custom_policy) {
-        setPolWrites(Boolean(gp.policy.allow_writes));
-        setPolTier3(Boolean(gp.policy.allow_tier3));
-        setPolDesktop(Boolean(gp.policy.desktop_enabled));
-        setPolShell(Boolean(gp.policy.allow_shell));
+    if (ov) {
+      setOverview(ov);
+      if (ov.device) {
+        onSelectDevice({ ...dev, ...ov.device });
       }
     }
+    const resolvedGlobal = gp?.policy ?? globalPolicy;
+    if (gp?.policy) {
+      setGlobalPolicy(gp.policy);
+    }
+    const resolvedDev = ov?.device ?? dev;
+    applyPolicyToForm(
+      resolvedDev.policy,
+      resolvedDev.effective_policy,
+      resolvedGlobal,
+      Boolean(resolvedDev.has_custom_policy),
+    );
   }
 
   function handleSaveCurrentFilter() {
@@ -298,14 +332,23 @@ export function FleetView({
     try {
       await api.setDevicePolicy(selectedDevice.id, {
         inherit_global: false,
+        unrestricted: polFullPc,
+        allow_full_pc_access: polFullPc,
+        allow_unrestricted_apps: polFullPc,
         allow_writes: polWrites,
         allow_tier3: polTier3,
+        allow_file_deletion: polTier4,
         desktop_enabled: polDesktop,
         allow_shell: polShell,
-        max_tier_unattended: polTier3 ? 3 : 2,
+        allow_package_install: polPackageInstall,
+        allow_clipboard: polClipboard,
+        require_local_approval: polRequireLocalApproval,
+        max_tier_unattended: polMaxTier,
+        allowed_apps: polAllowedApps,
       });
       onToast(`Updated policy for ${selectedDevice.name}`);
-      await onRefresh();
+      await Promise.all([onRefresh(), fetchServerPage()]);
+      await openInspector(selectedDevice, true);
     } catch (err) {
       onToast(err instanceof Error ? err.message : "Failed to save device policy");
     } finally {
@@ -1035,24 +1078,44 @@ export function FleetView({
                     <tbody>
                       {(
                         [
-                          ["Tier 2 Writes", "allow_writes", polWrites],
-                          ["Tier 3 Actions", "allow_tier3", polTier3],
+                          ["Tier 2 File Writes", "allow_writes", polWrites],
+                          ["Tier 3 System Actions", "allow_tier3", polTier3],
+                          ["Tier 4 File Deletion", "allow_file_deletion", polTier4],
                           ["Shell (run_shell)", "allow_shell", polShell],
                           ["Desktop Control", "desktop_enabled", polDesktop],
+                          ["Package Install", "allow_package_install", polPackageInstall],
+                          ["Clipboard Sync", "allow_clipboard", polClipboard],
+                          ["Full PC / Unrestricted", "allow_full_pc_access", polFullPc],
+                          ["Local Approval Popup", "require_local_approval", polRequireLocalApproval],
                         ] as const
                       ).map(([label, key, draftVal]) => {
-                        const globalVal = globalPolicy ? Boolean(globalPolicy[key]) : undefined;
-                        const hasOverride = Boolean(
-                          selectedDevice.has_custom_policy &&
-                            selectedDevice.policy &&
-                            key in selectedDevice.policy,
-                        );
-                        const overrideVal = hasOverride ? Boolean(selectedDevice.policy?.[key]) : null;
-                        const effectiveVal = hasOverride ? Boolean(overrideVal) : Boolean(globalVal ?? draftVal);
+                        const gMap = (globalPolicy || {}) as unknown as Record<string, unknown>;
+                        const globalVal =
+                          key in gMap && gMap[key] !== undefined && gMap[key] !== null
+                            ? Boolean(gMap[key])
+                            : key === "allow_clipboard"
+                              ? true
+                              : false;
+                        const rawOverride =
+                          selectedDevice.has_custom_policy && selectedDevice.policy
+                            ? selectedDevice.policy[key] ??
+                              (key === "allow_full_pc_access" ? selectedDevice.policy.unrestricted : undefined)
+                            : undefined;
+                        const hasOverride = rawOverride !== undefined && rawOverride !== null;
+                        const overrideVal = hasOverride ? Boolean(rawOverride) : null;
+                        const effMap = (overview?.device?.effective_policy ??
+                          selectedDevice.effective_policy ??
+                          {}) as Record<string, unknown>;
+                        const effectiveVal =
+                          key in effMap && effMap[key] !== undefined && effMap[key] !== null
+                            ? Boolean(effMap[key])
+                            : hasOverride
+                              ? Boolean(overrideVal)
+                              : Boolean(globalVal ?? draftVal);
                         return (
                           <tr key={key}>
                             <td>{label}</td>
-                            <td className="mono">{globalVal === undefined ? "—" : globalVal ? "ON" : "OFF"}</td>
+                            <td className="mono">{globalVal ? "ON" : "OFF"}</td>
                             <td className="mono" style={{ color: hasOverride ? "var(--amber)" : "var(--text-muted)" }}>
                               {hasOverride ? (overrideVal ? "ON" : "OFF") : "inherit"}
                             </td>
@@ -1062,14 +1125,70 @@ export function FleetView({
                           </tr>
                         );
                       })}
+                      <tr>
+                        <td>Max Unattended Tier</td>
+                        <td className="mono">Tier {globalPolicy?.max_tier_unattended ?? 2}</td>
+                        <td
+                          className="mono"
+                          style={{
+                            color:
+                              selectedDevice.has_custom_policy &&
+                              selectedDevice.policy?.max_tier_unattended !== undefined &&
+                              selectedDevice.policy?.max_tier_unattended !== null
+                                ? "var(--amber)"
+                                : "var(--text-muted)",
+                          }}
+                        >
+                          {selectedDevice.has_custom_policy &&
+                          selectedDevice.policy?.max_tier_unattended !== undefined &&
+                          selectedDevice.policy?.max_tier_unattended !== null
+                            ? `Tier ${String(selectedDevice.policy.max_tier_unattended)}`
+                            : "inherit"}
+                        </td>
+                        <td className="mono" style={{ fontWeight: 600 }}>
+                          Tier{" "}
+                          {String(
+                            (overview?.device?.effective_policy ?? selectedDevice.effective_policy)
+                              ?.max_tier_unattended ?? polMaxTier,
+                          )}
+                        </td>
+                      </tr>
                     </tbody>
                   </table>
                 </SurfaceCard>
 
                 <Toggle checked={polWrites} onChange={setPolWrites} label="Allow Tier 2 File Writes" />
-                <Toggle checked={polTier3} onChange={setPolTier3} label="Allow Tier 3 Unattended" />
+                <Toggle checked={polTier3} onChange={setPolTier3} label="Allow Tier 3 System Actions" />
+                <Toggle checked={polTier4} onChange={setPolTier4} label="Allow Tier 4 File Deletion" />
                 <Toggle checked={polShell} onChange={setPolShell} label="Allow Shell Execution (run_shell)" />
-                <Toggle checked={polDesktop} onChange={setPolDesktop} label="Allow Desktop Control" />
+                <Toggle checked={polDesktop} onChange={setPolDesktop} label="Allow Interactive Desktop Control" />
+                <Toggle checked={polPackageInstall} onChange={setPolPackageInstall} label="Allow Package Installation (install_package)" />
+                <Toggle checked={polClipboard} onChange={setPolClipboard} label="Allow Clipboard Sync (get/set_clipboard)" />
+                <Toggle checked={polFullPc} onChange={setPolFullPc} label="Allow Full PC / Unrestricted Access" />
+                <Toggle checked={polRequireLocalApproval} onChange={setPolRequireLocalApproval} label="Require Local User Approval Popup on Device" />
+
+                <div>
+                  <label style={{ display: "block", fontSize: 12, fontWeight: 500, marginBottom: 4 }}>
+                    Max Unattended Tier (1–4)
+                  </label>
+                  <select
+                    className="field"
+                    value={polMaxTier}
+                    onChange={(e) => setPolMaxTier(Number(e.target.value))}
+                  >
+                    <option value={1}>Tier 1 — Read-Only Only</option>
+                    <option value={2}>Tier 2 — Safe Workspace Writes</option>
+                    <option value={3}>Tier 3 — Shell &amp; Desktop Automation</option>
+                    <option value={4}>Tier 4 — Full Autonomous Ceiling</option>
+                  </select>
+                </div>
+
+                <div>
+                  <div style={{ fontSize: 12, color: "var(--text-secondary)", marginBottom: 6 }}>
+                    Allowed Desktop Applications (press Enter to add):
+                  </div>
+                  <TagInput tags={polAllowedApps} onChange={setPolAllowedApps} />
+                </div>
 
                 <div style={{ display: "flex", gap: 8, paddingTop: 10 }}>
                   <Button
@@ -1085,7 +1204,8 @@ export function FleetView({
                     onClick={async () => {
                       await api.resetDevicePolicy(selectedDevice.id);
                       onToast("Reset to global policy");
-                      await onRefresh();
+                      await Promise.all([onRefresh(), fetchServerPage()]);
+                      await openInspector(selectedDevice, true);
                     }}
                   >
                     Reset to Global

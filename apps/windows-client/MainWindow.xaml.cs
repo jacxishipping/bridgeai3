@@ -140,6 +140,7 @@ public partial class MainWindow : Window
                 _trayIcon?.ShowBalloonTip(3000, "AI Bridge — Emergency All-Stop", "Remote task execution halted by Control Plane.", ToolTipIcon.Warning);
             }
         });
+        _client.ServerPolicyReceived += serverPol => Dispatcher.Invoke(() => ApplyServerSyncedPolicy(serverPol));
         _client.LocalApprovalRequested = RequestLocalApprovalAsync;
 
         _monitorTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(Math.Clamp(_config.MonitorIntervalMs, 500, 5000)) };
@@ -1898,12 +1899,69 @@ public partial class MainWindow : Window
         _pendingApprovalTcs?.TrySetResult(false);
     }
 
+    private void ApplyServerSyncedPolicy(AgentPolicyConfig serverPol)
+    {
+        var cur = _config.Policy;
+        bool changed =
+            cur.AllowWrites != serverPol.AllowWrites ||
+            cur.AllowTier3 != serverPol.AllowTier3 ||
+            cur.AllowTier4 != serverPol.AllowTier4 ||
+            cur.AllowShell != serverPol.AllowShell ||
+            cur.AllowDesktopControl != serverPol.AllowDesktopControl ||
+            cur.AllowPackageInstall != serverPol.AllowPackageInstall ||
+            cur.AllowClipboard != serverPol.AllowClipboard ||
+            cur.AllowFullPcAccess != serverPol.AllowFullPcAccess ||
+            cur.AllowUnrestrictedApps != serverPol.AllowUnrestrictedApps ||
+            cur.RequireLocalApproval != serverPol.RequireLocalApproval ||
+            cur.MaxTierUnattended != serverPol.MaxTierUnattended;
+        if (!changed) return;
+
+        _config.Policy = serverPol;
+        _configService.SaveConfig(_config);
+        LoadPolicyIntoUi();
+        UpdateSecurityPostureSummary();
+        RefreshLocalAgentsSummary();
+        if (NamedPipeBridge.IsDesktopAgentAvailable())
+        {
+            _ = Task.Run(() => NamedPipeBridge.UpdateSessionPermissionsAsync(_config.Policy));
+        }
+        RecordPolicyAudit("Synced policy update from Online Control Plane");
+        AppendLog("info", "Applied device policy update pushed from Control Plane.");
+    }
+
+    private void SyncPolicyInBackgroundIfConnected()
+    {
+        if (string.IsNullOrWhiteSpace(_deviceToken) || string.IsNullOrWhiteSpace(_config.ControlUrl))
+        {
+            return;
+        }
+        var url = _config.ControlUrl;
+        var tok = _deviceToken;
+        var pol = _config.Policy;
+        _ = Task.Run(async () =>
+        {
+            var (ok, detail) = await _client.SyncPolicyAsync(url, tok, pol);
+            Dispatcher.Invoke(() =>
+            {
+                if (ok)
+                {
+                    RecordPolicyAudit("Auto-synced policy to Control Plane");
+                }
+                else
+                {
+                    AppendLog("warn", $"Background policy sync: {detail}");
+                }
+            });
+        });
+    }
+
     private void OnSavePolicyClick(object sender, RoutedEventArgs e)
     {
         SavePolicyFromUi();
         RecordPolicyAudit("Saved local policy");
         AppendLog("ok", "Local security policy saved.");
         ShowToast("Local policy saved");
+        SyncPolicyInBackgroundIfConnected();
     }
 
     private async void OnSyncPolicyClick(object sender, RoutedEventArgs e)
@@ -2351,6 +2409,7 @@ public partial class MainWindow : Window
         RecordPolicyAudit("User allowed Full PC Access");
         AppendLog("ok", "Full PC Access ALLOWED by user (all drives, PowerShell/CMD, processes, unrestricted apps & Windows UI).");
         ShowToast("Full PC access allowed");
+        SyncPolicyInBackgroundIfConnected();
         return true;
     }
 
@@ -2379,6 +2438,7 @@ public partial class MainWindow : Window
         RecordPolicyAudit("User revoked Full PC Access");
         AppendLog("warn", "Full PC Access REVOKED by user (returned to confined workspace mode).");
         ShowToast("Full PC access revoked");
+        SyncPolicyInBackgroundIfConnected();
     }
 
     private void OnAgToggleFullUiClick(object sender, RoutedEventArgs e)
@@ -2410,6 +2470,7 @@ public partial class MainWindow : Window
             ? "Full Windows UI control ENABLED (mouse, keyboard, UI Automation, window manager & app launching)."
             : "Full Windows UI control DISABLED (read-only UI inspection only).");
         ShowToast(enable ? "Full Windows UI access enabled" : "Full Windows UI access disabled");
+        SyncPolicyInBackgroundIfConnected();
     }
 
     private void SyncChatStreamVisibility()

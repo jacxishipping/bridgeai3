@@ -41,6 +41,7 @@ public sealed class ControlPlaneClient : IDisposable
     public event Action<string, string>? StatusChanged;
     public event Action<TaskHistoryRecord>? TaskRecorded;
     public event Action<bool>? EmergencyStopChanged;
+    public event Action<AgentPolicyConfig>? ServerPolicyReceived;
     public Func<string, string, string, Task<bool>>? LocalApprovalRequested;
 
     public ControlPlaneClient(SystemMonitorService monitor, NativeToolExecutor executor)
@@ -305,18 +306,24 @@ public sealed class ControlPlaneClient : IDisposable
         var baseUrl = NormalizeUrl(controlUrl);
         try
         {
-            // Match Control Plane DevicePolicyIn schema (desktop_enabled, allow_file_deletion, inherit_global, etc.)
+            // Match Control Plane DevicePolicyIn schema across all device & online panel fields
             var serverPayload = new
             {
                 inherit_global = false,
+                unrestricted = policy.AllowFullPcAccess,
+                allow_full_pc_access = policy.AllowFullPcAccess,
+                allow_unrestricted_apps = policy.AllowUnrestrictedApps || policy.AllowFullPcAccess,
                 allow_writes = policy.AllowWrites,
                 allow_tier3 = policy.AllowTier3,
                 desktop_enabled = policy.AllowDesktopControl,
                 allow_shell = policy.AllowShell,
                 allow_package_install = policy.AllowPackageInstall,
                 allow_file_deletion = policy.AllowTier4,
+                allow_clipboard = policy.AllowClipboard,
+                require_local_approval = policy.RequireLocalApproval,
                 max_tier_unattended = Math.Clamp(policy.MaxTierUnattended, 1, 4),
                 allowed_apps = policy.AllowedApps,
+                allowed_commands = policy.AllowedCommands,
             };
             using var req = new HttpRequestMessage(HttpMethod.Put, $"{baseUrl}/api/agent/policy");
             req.Headers.Add("X-Device-Token", token);
@@ -329,6 +336,51 @@ public sealed class ControlPlaneClient : IDisposable
         {
             return (false, ex.Message);
         }
+    }
+
+    public static AgentPolicyConfig ParsePolicyFromJsonElement(JsonElement polEl, AgentPolicyConfig? basePolicy = null)
+    {
+        bool fullPc = GetBoolOrDefault(polEl, "allow_full_pc_access", GetBoolOrDefault(polEl, "unrestricted", basePolicy?.AllowFullPcAccess ?? false));
+        var parsed = new AgentPolicyConfig
+        {
+            AllowWrites = GetBoolOrDefault(polEl, "allow_writes", basePolicy?.AllowWrites ?? true),
+            AllowTier3 = GetBoolOrDefault(polEl, "allow_tier3", basePolicy?.AllowTier3 ?? false),
+            AllowTier4 = GetBoolOrDefault(polEl, "allow_file_deletion", GetBoolOrDefault(polEl, "allow_tier4", basePolicy?.AllowTier4 ?? false)),
+            AllowShell = GetBoolOrDefault(polEl, "allow_shell", basePolicy?.AllowShell ?? false),
+            AllowDesktopControl = GetBoolOrDefault(polEl, "desktop_enabled", GetBoolOrDefault(polEl, "allow_desktop_control", basePolicy?.AllowDesktopControl ?? false)),
+            AllowPackageInstall = GetBoolOrDefault(polEl, "allow_package_install", basePolicy?.AllowPackageInstall ?? false),
+            AllowClipboard = GetBoolOrDefault(polEl, "allow_clipboard", basePolicy?.AllowClipboard ?? true),
+            RequireLocalApproval = GetBoolOrDefault(polEl, "require_local_approval", basePolicy?.RequireLocalApproval ?? false),
+            AllowFullPcAccess = fullPc,
+            AllowUnrestrictedApps = GetBoolOrDefault(polEl, "allow_unrestricted_apps", fullPc || (basePolicy?.AllowUnrestrictedApps ?? false)),
+            MaxTierUnattended = polEl.TryGetProperty("max_tier_unattended", out var mtEl) && mtEl.TryGetInt32(out var mt)
+                ? Math.Clamp(mt, 1, 4)
+                : (basePolicy?.MaxTierUnattended ?? 2),
+            AllowedApps = basePolicy?.AllowedApps is not null ? new(basePolicy.AllowedApps) : new(),
+            AllowedCommands = basePolicy?.AllowedCommands is not null ? new(basePolicy.AllowedCommands) : new(),
+        };
+
+        if (polEl.TryGetProperty("allowed_apps", out var appsEl) && appsEl.ValueKind == JsonValueKind.Array)
+        {
+            var apps = new System.Collections.Generic.List<string>();
+            foreach (var a in appsEl.EnumerateArray())
+            {
+                if (a.GetString() is { Length: > 0 } s && s != "*") apps.Add(s);
+            }
+            if (apps.Count > 0) parsed.AllowedApps = apps;
+        }
+
+        if (polEl.TryGetProperty("allowed_commands", out var cmdsEl) && cmdsEl.ValueKind == JsonValueKind.Array)
+        {
+            var cmds = new System.Collections.Generic.List<string>();
+            foreach (var c in cmdsEl.EnumerateArray())
+            {
+                if (c.GetString() is { Length: > 0 } s && s != "*") cmds.Add(s);
+            }
+            if (cmds.Count > 0) parsed.AllowedCommands = cmds;
+        }
+
+        return parsed;
     }
 
     public async Task<(bool Ok, AgentPolicyConfig? Policy, string Detail)> FetchPolicyAsync(
@@ -356,33 +408,7 @@ public sealed class ControlPlaneClient : IDisposable
                 ? effEl
                 : (root.TryGetProperty("custom_policy", out var custEl) && custEl.ValueKind == JsonValueKind.Object ? custEl : root);
 
-            var parsed = new AgentPolicyConfig
-            {
-                AllowWrites = GetBoolOrDefault(polEl, "allow_writes", basePolicy?.AllowWrites ?? true),
-                AllowTier3 = GetBoolOrDefault(polEl, "allow_tier3", basePolicy?.AllowTier3 ?? true),
-                AllowTier4 = GetBoolOrDefault(polEl, "allow_file_deletion", GetBoolOrDefault(polEl, "allow_tier4", basePolicy?.AllowTier4 ?? false)),
-                AllowShell = GetBoolOrDefault(polEl, "allow_shell", basePolicy?.AllowShell ?? false),
-                AllowDesktopControl = GetBoolOrDefault(polEl, "desktop_enabled", GetBoolOrDefault(polEl, "allow_desktop_control", basePolicy?.AllowDesktopControl ?? false)),
-                AllowPackageInstall = GetBoolOrDefault(polEl, "allow_package_install", basePolicy?.AllowPackageInstall ?? false),
-                AllowClipboard = GetBoolOrDefault(polEl, "allow_clipboard", basePolicy?.AllowClipboard ?? true),
-                RequireLocalApproval = GetBoolOrDefault(polEl, "require_local_approval", basePolicy?.RequireLocalApproval ?? false),
-                MaxTierUnattended = polEl.TryGetProperty("max_tier_unattended", out var mtEl) && mtEl.TryGetInt32(out var mt)
-                    ? Math.Clamp(mt, 1, 4)
-                    : (basePolicy?.MaxTierUnattended ?? 3),
-                AllowedApps = basePolicy?.AllowedApps is not null ? new(basePolicy.AllowedApps) : new(),
-                AllowedCommands = basePolicy?.AllowedCommands is not null ? new(basePolicy.AllowedCommands) : new(),
-            };
-
-            if (polEl.TryGetProperty("allowed_apps", out var appsEl) && appsEl.ValueKind == JsonValueKind.Array)
-            {
-                var apps = new System.Collections.Generic.List<string>();
-                foreach (var a in appsEl.EnumerateArray())
-                {
-                    if (a.GetString() is { Length: > 0 } s) apps.Add(s);
-                }
-                if (apps.Count > 0) parsed.AllowedApps = apps;
-            }
-
+            var parsed = ParsePolicyFromJsonElement(polEl, basePolicy);
             return (true, parsed, "Fetched policy from Control Plane");
         }
         catch (Exception ex)
@@ -523,6 +549,25 @@ public sealed class ControlPlaneClient : IDisposable
                     LogMessage?.Invoke("err", $"Heartbeat auth rejected (HTTP {(int)resp.StatusCode}). Stopping agent.");
                     _cts?.Cancel();
                     return;
+                }
+                if (resp.IsSuccessStatusCode)
+                {
+                    var hbBody = await resp.Content.ReadAsStringAsync(timeoutCts.Token);
+                    using var hbDoc = JsonDocument.Parse(hbBody);
+                    var hbRoot = hbDoc.RootElement;
+                    if (hbRoot.TryGetProperty("emergency_stop", out var esEl) &&
+                        (esEl.ValueKind == JsonValueKind.True || esEl.ValueKind == JsonValueKind.False))
+                    {
+                        UpdateEmergencyStop(esEl.GetBoolean());
+                    }
+                    if (hbRoot.TryGetProperty("has_custom_policy", out var hcpEl) &&
+                        hcpEl.ValueKind == JsonValueKind.True &&
+                        hbRoot.TryGetProperty("effective_policy", out var effEl) &&
+                        effEl.ValueKind == JsonValueKind.Object)
+                    {
+                        var serverPolicy = ParsePolicyFromJsonElement(effEl, config.Policy);
+                        ServerPolicyReceived?.Invoke(serverPolicy);
+                    }
                 }
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { return; }

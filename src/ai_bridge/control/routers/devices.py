@@ -140,11 +140,20 @@ def create_devices_router(ctx: ControlContext) -> APIRouter:
         status_q = (status or "").strip().lower()
         search_q = (q or "").strip().lower()
 
+        now_ts = dbmod.now()
         filtered_rows = []
         for r in rows:
             d = dict(r)
             d["group"] = d.pop("group_name", None) or ""
             d["tags"] = json.loads(d.pop("tags_json", None) or "[]")
+            if d.get("revoked"):
+                d["status"] = "revoked"
+            elif d.get("status") == "online" and d.get("last_seen") is not None:
+                try:
+                    if (now_ts - float(d["last_seen"])) >= 90:
+                        d["status"] = "offline"
+                except (TypeError, ValueError):
+                    pass
             if group_q and d["group"].lower() != group_q:
                 continue
             if os_q and os_q not in (d.get("os") or "").lower():
@@ -182,11 +191,13 @@ def create_devices_router(ctx: ControlContext) -> APIRouter:
         for d in page_rows:
             raw_p = d.get("policy_json") or "{}"
             try:
-                parsed_p = json.loads(raw_p) if isinstance(raw_p, str) else (raw_p or {})
+                loaded_p = json.loads(raw_p) if isinstance(raw_p, str) else (raw_p or {})
+                parsed_p = {k: v for k, v in loaded_p.items() if v is not None} if isinstance(loaded_p, dict) else {}
             except Exception:
                 parsed_p = {}
             d["has_custom_policy"] = bool(parsed_p)
             d["policy"] = parsed_p
+            d["effective_policy"] = get_effective_device_policy(d)
             live_meta = live_metas.get(d["id"]) or {}
             if live_meta.get("ip_address"):
                 d["ip_address"] = live_meta["ip_address"]
@@ -286,7 +297,8 @@ def create_devices_router(ctx: ControlContext) -> APIRouter:
         except Exception:
             pass
         try:
-            custom = json.loads(raw_p) if isinstance(raw_p, str) else (raw_p or {})
+            loaded_custom = json.loads(raw_p) if isinstance(raw_p, str) else (raw_p or {})
+            custom = {k: v for k, v in loaded_custom.items() if v is not None} if isinstance(loaded_custom, dict) else {}
         except Exception:
             custom = {}
         all_tools = []
@@ -328,7 +340,23 @@ def create_devices_router(ctx: ControlContext) -> APIRouter:
         if row is None:
             raise HTTPException(status_code=404, detail="Device not found.")
         _require_row_tenant(row, x_admin_token, x_session_token)
-        policy_data = body.model_dump()
+        existing_custom: dict = {}
+        try:
+            raw_existing = row["policy_json"]
+            if raw_existing:
+                parsed_existing = json.loads(raw_existing) if isinstance(raw_existing, str) else raw_existing
+                if isinstance(parsed_existing, dict):
+                    existing_custom = {k: v for k, v in parsed_existing.items() if v is not None}
+        except Exception:
+            existing_custom = {}
+        incoming = body.model_dump(exclude_none=True)
+        policy_data = {**existing_custom, **incoming}
+        if incoming.get("allow_full_pc_access") is True or incoming.get("unrestricted") is True:
+            policy_data["unrestricted"] = True
+            policy_data["allow_full_pc_access"] = True
+        elif incoming.get("allow_full_pc_access") is False or incoming.get("unrestricted") is False:
+            policy_data["unrestricted"] = False
+            policy_data["allow_full_pc_access"] = False
         if not x_device_token and policy_data.get("unrestricted"):
             policy_data["unrestricted_granted_by"] = actor
             try:
@@ -369,7 +397,8 @@ def create_devices_router(ctx: ControlContext) -> APIRouter:
         eff_policy = get_effective_device_policy(row)
         device_data = dict(row)
         try:
-            device_data["policy"] = json.loads(device_data.get("policy_json") or "{}")
+            loaded_p = json.loads(device_data.get("policy_json") or "{}")
+            device_data["policy"] = {k: v for k, v in loaded_p.items() if v is not None} if isinstance(loaded_p, dict) else {}
         except Exception:
             device_data["policy"] = {}
         device_data["has_custom_policy"] = bool(device_data["policy"])
@@ -511,6 +540,7 @@ def create_devices_router(ctx: ControlContext) -> APIRouter:
         last_seen = row["last_seen"] or 0
         latency = max(0.0, now_ts - last_seen) if last_seen else None
         is_online = (row["status"] == "online") and (latency is not None and latency < 90)
+        device_data["status"] = "revoked" if row["revoked"] else ("online" if is_online else "offline")
 
         # Service statuses probe results (if any service queried)
         service_statuses = {}

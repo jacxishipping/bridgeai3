@@ -54,6 +54,7 @@ export interface DeviceRecord {
   tags: string[];
   has_custom_policy?: boolean;
   policy?: Record<string, unknown>;
+  effective_policy?: Record<string, unknown>;
   ip_address?: string;
 }
 

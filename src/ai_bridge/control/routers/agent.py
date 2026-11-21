@@ -35,7 +35,6 @@ def create_agent_router(ctx: ControlContext) -> APIRouter:
     device_ttl_days = ctx.device_ttl_days
     get_effective_device_policy = ctx.get_effective_device_policy
     notify_tasks = ctx.notify_tasks
-    reject_policy_widening = ctx.reject_policy_widening
 
     @router.post("/api/agent/heartbeat")
     def heartbeat(
@@ -122,10 +121,14 @@ def create_agent_router(ctx: ControlContext) -> APIRouter:
         app.state.device_live_meta[row["id"]] = meta_entry
 
         plane_state.sync_emergency_stop_to_app(conn, app.state)
+        fresh_row = conn.execute("SELECT * FROM devices WHERE id=?", (row["id"],)).fetchone() or row
+        eff_pol = get_effective_device_policy(fresh_row)
         return {
             "device_id": row["id"],
             "emergency_stop": plane_state.is_emergency_stop(conn, app.state),
             "token_expires_at": row["token_expires_at"],
+            "effective_policy": eff_pol,
+            "has_custom_policy": bool(eff_pol.get("has_custom_policy")),
         }
 
     @router.get("/api/agent/whoami")
@@ -228,7 +231,9 @@ def create_agent_router(ctx: ControlContext) -> APIRouter:
         _require_agent_mtls(None, row["id"], x_client_cert_fingerprint, x_ssl_client_fingerprint)
         custom_p = {}
         try:
-            custom_p = json.loads(row["policy_json"]) if row["policy_json"] else {}
+            loaded_p = json.loads(row["policy_json"]) if row["policy_json"] else {}
+            if isinstance(loaded_p, dict):
+                custom_p = {k: v for k, v in loaded_p.items() if v is not None}
         except Exception:
             custom_p = {}
         eff = get_effective_device_policy(row)
@@ -248,8 +253,23 @@ def create_agent_router(ctx: ControlContext) -> APIRouter:
     ):
         row = device_row(x_device_token)
         _require_agent_mtls(None, row["id"], x_client_cert_fingerprint, x_ssl_client_fingerprint)
-        policy_data = body.model_dump()
-        reject_policy_widening(get_effective_device_policy(row), policy_data)
+        existing_custom: dict = {}
+        try:
+            if row["policy_json"]:
+                loaded_p = json.loads(row["policy_json"]) if isinstance(row["policy_json"], str) else row["policy_json"]
+                if isinstance(loaded_p, dict):
+                    existing_custom = {k: v for k, v in loaded_p.items() if v is not None}
+        except Exception:
+            existing_custom = {}
+        incoming = body.model_dump(exclude_none=True)
+        policy_data = {**existing_custom, **incoming}
+        if incoming.get("allow_full_pc_access") is True or incoming.get("unrestricted") is True:
+            policy_data["unrestricted"] = True
+            policy_data["allow_full_pc_access"] = True
+            policy_data.setdefault("unrestricted_granted_by", f"device:{row['id']}")
+        elif incoming.get("allow_full_pc_access") is False or incoming.get("unrestricted") is False:
+            policy_data["unrestricted"] = False
+            policy_data["allow_full_pc_access"] = False
         conn.execute("UPDATE devices SET policy_json=? WHERE id=?", (json.dumps(policy_data), row["id"]))
         conn.commit()
         audit("device", row["id"], "agent_update_policy", policy_data, "allowed")
@@ -259,6 +279,7 @@ def create_agent_router(ctx: ControlContext) -> APIRouter:
             "device_id": row["id"],
             "custom_policy": policy_data,
             "effective_policy": eff,
+            "has_custom_policy": bool(policy_data),
             "saved": True,
         }
 
