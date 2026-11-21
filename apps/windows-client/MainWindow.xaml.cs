@@ -2807,6 +2807,22 @@ public partial class MainWindow : Window
         ApplyResponsiveLayout(ActualWidth > 0 ? ActualWidth : Width);
     }
 
+    private void OnAgShowTimelineClick(object sender, RoutedEventArgs e)
+    {
+        var items = AgentActionTimelineService.GetRecent(40);
+        var body = items.Count == 0
+            ? "No mutating agent actions recorded in this session yet."
+            : string.Join("\n", items.Select(x => $"[{x.Timestamp}] ({x.Kind.ToUpperInvariant()}) {x.Summary}"));
+        OpenDrawer("Agent Action Timeline", $"{items.Count} recorded step(s)", body);
+    }
+
+    private void OnAgUndoLastClick(object sender, RoutedEventArgs e)
+    {
+        var (ok, detail) = AgentActionTimelineService.UndoLastAction();
+        AppendLog(ok ? "ok" : "warn", detail);
+        ShowToast(detail);
+    }
+
     private void OnAgDrawerTabClick(object sender, RoutedEventArgs e)
     {
         if (sender is System.Windows.Controls.Button btn && btn.Tag is string tag)

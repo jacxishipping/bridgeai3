@@ -709,5 +709,37 @@ await RunTest("DesktopInputService: Speed profiles and Catmull-Rom spline smooth
     return Task.CompletedTask;
 });
 
+// 25. Action Timeline & One-Click Undo for workspace file edits
+await RunTest("AgentActionTimelineService: records file edit and restores previous content on Undo", async () =>
+{
+    var tempWs = Path.Combine(Path.GetTempPath(), $"aib-test-undo-{Guid.NewGuid():N}");
+    Directory.CreateDirectory(tempWs);
+    try
+    {
+        AgentActionTimelineService.Clear();
+        var filePath = Path.Combine(tempWs, "notes.txt");
+        File.WriteAllText(filePath, "original content");
+
+        var cfg = new AgentGuiConfig
+        {
+            Workspace = tempWs,
+            Policy = new AgentPolicyConfig { AllowWrites = true, AllowTier3 = true, MaxTierUnattended = 3 },
+        };
+        var exec = new NativeToolExecutor(new SystemMonitorService(), Path.Combine(tempWs, "shots"));
+        var (okEdit, _) = await exec.ExecuteAsync("edit_workspace_file", "{\"path\":\"notes.txt\",\"old_text\":\"original\",\"new_text\":\"modified\"}", cfg, CancellationToken.None);
+        Assert(okEdit && File.ReadAllText(filePath) == "modified content", "Expected edit_workspace_file to modify file");
+
+        var recent = AgentActionTimelineService.GetRecent(10);
+        Assert(recent.Count >= 1 && recent[0].ToolName == "edit_workspace_file", "Expected edit_workspace_file in action timeline");
+
+        var (okUndo, undoMsg) = AgentActionTimelineService.UndoLastAction();
+        Assert(okUndo && File.ReadAllText(filePath) == "original content", $"Expected Undo to restore original content ({undoMsg})");
+    }
+    finally
+    {
+        Directory.Delete(tempWs, recursive: true);
+    }
+});
+
 Console.WriteLine($"\nSummary: {passed} passed, {failed} failed ({passed + failed} total)");
 return failed > 0 ? 1 : 0;

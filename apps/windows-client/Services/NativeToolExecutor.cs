@@ -462,6 +462,7 @@ public sealed class NativeToolExecutor
         var target = ResolveAccessiblePath(config, requested, requireFullPcFlag: true);
         var dir = Path.GetDirectoryName(target);
         if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+        AgentActionTimelineService.RecordFileBackupBeforeWrite("create_workspace_file", target);
         File.WriteAllText(target, content);
         return new { path = target, bytes_written = content.Length, status = "written" };
     }
@@ -595,6 +596,7 @@ public sealed class NativeToolExecutor
         EnsureNotSecretFile(target);
         var dir = Path.GetDirectoryName(target);
         if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+        AgentActionTimelineService.RecordFileBackupBeforeWrite("create_workspace_file", target);
         File.WriteAllText(target, content);
         return new { path = rel, bytes_written = content.Length, status = "created" };
     }
@@ -622,11 +624,13 @@ public sealed class NativeToolExecutor
                 throw new InvalidOperationException("Target old_text was not found in file.");
             }
             var updated = existing.Replace(oldText, newText, StringComparison.Ordinal);
+            AgentActionTimelineService.RecordFileBackupBeforeWrite("edit_workspace_file", target);
             File.WriteAllText(target, updated);
             return new { path = rel, bytes_written = updated.Length, status = "edited" };
         }
         if (newText is not null)
         {
+            AgentActionTimelineService.RecordFileBackupBeforeWrite("edit_workspace_file", target);
             File.WriteAllText(target, newText);
             return new { path = rel, bytes_written = newText.Length, status = "replaced" };
         }
@@ -1112,6 +1116,7 @@ public sealed class NativeToolExecutor
         }
 
         int segments = DesktopInputService.DrawPath(strokes, button, stepDelay);
+        AgentActionTimelineService.RecordUiAction("mouse_draw_path", $"Drew {strokes.Count} stroke(s) ({segments} segments)");
         return new { status = "ok", strokes_drawn = strokes.Count, segments_drawn = segments };
     }
 
