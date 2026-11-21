@@ -247,6 +247,20 @@ public static class NamedPipeBridge
         return Convert.ToHexStringLower(hmac.ComputeHash(Encoding.UTF8.GetBytes(message)));
     }
 
+    public static string SignEnvelope(string messageType, object payload, string? hmacSecret = null)
+    {
+        var wire = BuildCppWireMessage(messageType, payload, hmacSecret);
+        var parts = wire.Split('\n', 5);
+        return JsonSerializer.Serialize(new
+        {
+            body = $"{parts[0]}|{parts[4]}",
+            nonce = parts[1],
+            timestamp = parts[2],
+            hmac = parts[3],
+            wire,
+        });
+    }
+
     public static string BuildCppWireMessage(string messageType, object payload, string? hmacSecret = null)
     {
         var secret = string.IsNullOrWhiteSpace(hmacSecret)

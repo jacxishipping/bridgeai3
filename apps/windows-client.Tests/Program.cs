@@ -523,5 +523,24 @@ await RunTest("DeviceAgentRuntimeService: system prompt, instruction name & func
     return Task.CompletedTask;
 });
 
+// 16. C++20 Native Agent Wire Protocol, CppAgentSettings & NativeToolExecutor C++ tools
+await RunTest("C++20 Native Agent: 5-line HMAC wire round-trip, CppAgentSettings & tool integration", async () =>
+{
+    var wire = NamedPipeBridge.BuildCppWireMessage("HEARTBEAT_PING", new { client = "test" }, "test-hmac-secret");
+    Assert(NamedPipeBridge.TryParseCppWireMessage(wire, "test-hmac-secret", out var msgType, out var payloadJson), "Expected C++ 5-line wire message to verify");
+    Assert(msgType == "HEARTBEAT_PING" && payloadJson.Contains("test"), "Parsed wire message mismatch");
+    Assert(!NamedPipeBridge.TryParseCppWireMessage(wire, "wrong-secret", out _, out _), "Expected tampered secret to fail verification");
+
+    var cfg = new AgentGuiConfig();
+    Assert(cfg.CppAgent.AutoStartSupervisor && cfg.CppAgent.PreferDxgiCapture && cfg.CppAgent.H264TargetFps == 30 && cfg.CppAgent.H264BitrateKbps == 4500, "Expected default CppAgentSettings values");
+
+    var exec = new NativeToolExecutor(new SystemMonitorService(), Path.GetTempPath());
+    var (okStatus, statusJson) = await exec.ExecuteAsync("get_desktop_status", "{}", cfg, CancellationToken.None);
+    Assert(okStatus && statusJson.Contains("cpp_native_dll_loaded") && statusJson.Contains("cpp_capture_metrics"), "Expected get_desktop_status to include C++ metrics");
+
+    var (okBr, brJson) = await exec.ExecuteAsync("set_h264_bitrate", "{\"bitrate_kbps\":6000}", cfg, CancellationToken.None);
+    Assert(okBr && brJson.Contains("6000") && cfg.CppAgent.H264BitrateKbps == 6000, "Expected set_h264_bitrate to update target bitrate");
+});
+
 Console.WriteLine($"\nSummary: {passed} passed, {failed} failed ({passed + failed} total)");
 return failed > 0 ? 1 : 0;

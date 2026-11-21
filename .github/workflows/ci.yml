@@ -177,6 +177,10 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: "9.0.x"
+      - name: Build native C++20 Windows agent (DXGI + Media Foundation + Pipe Server)
+        run: |
+          cmake -S windows-agent -B windows-agent/build
+          cmake --build windows-agent/build --config Release
       - name: Build native C# Windows client
         run: dotnet build apps/windows-client/AIBridgeClient.csproj -c Release
       - name: Build native C# Windows GUI installer
