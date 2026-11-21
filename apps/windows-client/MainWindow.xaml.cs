@@ -208,7 +208,18 @@ public partial class MainWindow : Window
             ? NamedPipeBridge.PipeName
             : _config.DesktopPipeName.Trim();
         var hmac = _configService.LoadPipeHmacSecret();
-        NamedPipeBridge.ActiveHmacSecret = string.IsNullOrWhiteSpace(hmac) ? null : hmac;
+        if (string.IsNullOrWhiteSpace(hmac))
+        {
+            hmac = Convert.ToHexStringLower(System.Security.Cryptography.RandomNumberGenerator.GetBytes(24));
+            _configService.SavePipeHmacSecret(hmac);
+        }
+        NamedPipeBridge.ActiveHmacSecret = hmac;
+        CppNativeBridge.SyncInputPermissions(_config.Policy.AllowDesktopControl, _config.Policy.AllowClipboard);
+        _ = Task.Run(() => NamedPipeBridge.EnsureCppSupervisorRunning(
+            NamedPipeBridge.ActivePipeName,
+            NamedPipeBridge.ActiveHmacSecret,
+            _config.ControlUrl,
+            _deviceToken));
 
         _monitorTimer.Interval = TimeSpan.FromMilliseconds(Math.Clamp(_config.MonitorIntervalMs, 500, 5000));
         if (_config.AutoRefreshMonitor)
@@ -591,6 +602,7 @@ public partial class MainWindow : Window
         _monitorTimer.Stop();
         await _client.StopAsync();
         _client.Dispose();
+        NamedPipeBridge.StopManagedCppSupervisor();
         if (_trayIcon is not null)
         {
             _trayIcon.Visible = false;
@@ -2301,13 +2313,16 @@ public partial class MainWindow : Window
 
         var pipeName = string.IsNullOrWhiteSpace(_config.DesktopPipeName) ? NamedPipeBridge.PipeName : _config.DesktopPipeName;
         bool pipeUp = NamedPipeBridge.IsDesktopAgentAvailable(pipeName);
-        AgPipeStateText.Text = $"Desktop Pipe: {(pipeUp ? "Available" : "Not Running")}";
-        AgPipeStateText.Foreground = (System.Windows.Media.Brush)FindResource(pipeUp ? "SuccessText" : "WarningText");
+        bool dllUp = CppNativeBridge.IsAvailable();
+        AgPipeStateText.Text = pipeUp && dllUp
+            ? "C++ Agent: Pipe & DXGI DLL Active"
+            : (pipeUp ? "Desktop Pipe: Available" : (dllUp ? "C++ DLL: Loaded (Starting Pipe)" : "Desktop Pipe: Not Running"));
+        AgPipeStateText.Foreground = (System.Windows.Media.Brush)FindResource((pipeUp || dllUp) ? "SuccessText" : "WarningText");
 
         var hasHmac = !string.IsNullOrWhiteSpace(NamedPipeBridge.ActiveHmacSecret);
         var devLabel = string.IsNullOrWhiteSpace(_config.DeviceId) ? "Unenrolled" : _config.DeviceId;
         AgPollerMetaText.Text = $"{devLabel} · Poll {_config.PollIntervalSeconds}s";
-        AgPipeMetaText.Text = $@"\\.\pipe\{pipeName} · {(hasHmac ? "HMAC Sealed" : "Open")}";
+        AgPipeMetaText.Text = $@"\\.\pipe\{pipeName} · {(hasHmac ? "HMAC Sealed" : "Open")} · {(dllUp ? "DXGI+MF H.264" : "GDI")}";
 
         if (AgScopedDeviceBadgeText is not null)
         {
@@ -3350,7 +3365,10 @@ public partial class MainWindow : Window
     private async void OnAgentPipeStatusClick(object sender, RoutedEventArgs e)
     {
         var (ok, resp) = await NamedPipeBridge.RequestDesktopStatusAsync();
-        AgPipeConsoleBox.Text = $"[DESKTOP_STATUS_REPORT -> {(ok ? "OK" : "UNAVAILABLE")}]\n{resp}";
+        var (_, probeResp) = await NamedPipeBridge.RunCppDesktopProbeAsync(0);
+        AgPipeConsoleBox.Text =
+            $"[DESKTOP_STATUS_REPORT -> {(ok ? "OK" : "UNAVAILABLE")}]\n{resp}\n\n" +
+            $"[C++20 DXGI + MEDIA FOUNDATION H.264 PROBE]\n{probeResp}";
         RefreshLocalAgentsSummary();
     }
 

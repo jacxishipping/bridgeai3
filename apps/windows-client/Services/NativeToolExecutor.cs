@@ -63,6 +63,18 @@ public sealed class NativeToolExecutor
                 {
                     pipe_available = NamedPipeBridge.IsDesktopAgentAvailable(config.DesktopPipeName),
                     pipe_name = string.IsNullOrWhiteSpace(config.DesktopPipeName) ? NamedPipeBridge.PipeName : config.DesktopPipeName,
+                    cpp_native_dll_loaded = CppNativeBridge.IsAvailable(),
+                    cpp_capture_metrics = new
+                    {
+                        valid = CppNativeBridge.LastMetrics.Valid != 0,
+                        from_dxgi = CppNativeBridge.LastMetrics.FromDxgi != 0,
+                        width = CppNativeBridge.LastMetrics.Width,
+                        height = CppNativeBridge.LastMetrics.Height,
+                        capture_time_ms = Math.Round(CppNativeBridge.LastMetrics.CaptureTimeMs, 2),
+                        encode_time_ms = Math.Round(CppNativeBridge.LastMetrics.EncodeTimeMs, 2),
+                        encoder_name = CppNativeBridge.LastMetrics.EncoderName ?? "",
+                        held_keys = CppNativeBridge.GetHeldKeyCount(),
+                    },
                     desktop_control_enabled = config.Policy.AllowDesktopControl,
                     unrestricted_apps_enabled = config.Policy.AllowUnrestrictedApps,
                     clipboard_enabled = config.Policy.AllowClipboard,
@@ -70,6 +82,8 @@ public sealed class NativeToolExecutor
                     allowed_apps = config.Policy.AllowedApps,
                     active_window = WindowManagementService.GetActiveWindowInfo(),
                 },
+                "get_native_encode_status" or "probe_cpp_agent" or "cpp_agent_status" => JsonSerializer.Deserialize<JsonElement>(
+                    (await NamedPipeBridge.RunCppDesktopProbeAsync(0, ct)).Response),
                 "list_desktop_windows" or "desktop_get_windows" => ListDesktopWindows(args),
                 "get_active_window" => new { window = WindowManagementService.GetActiveWindowInfo() },
                 "focus_window" => FocusDesktopWindow(config, args),

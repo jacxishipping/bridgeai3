@@ -28,6 +28,8 @@
 
 #include "../monitoring/system_monitor.hpp"
 #include "../security/local_security.hpp"
+#include "../input/sendinput_controller.hpp"
+#include "../mcp/mcp_executor.hpp"
 
 #include <winhttp.h>
 #include <wtsapi32.h>
@@ -59,6 +61,20 @@ std::string g_control_url;
 std::string g_device_token;
 std::string g_desktop_agent_path;
 std::string g_config_path;
+aibridge::input::WindowsInputController g_input_controller;
+
+bool ExtractJsonBoolField(const std::string& json, const std::string& key, bool fallback = false) {
+    std::string needle = "\"" + key + "\"";
+    size_t pos = json.find(needle);
+    if (pos == std::string::npos) return fallback;
+    pos = json.find(':', pos + needle.size());
+    if (pos == std::string::npos) return fallback;
+    ++pos;
+    while (pos < json.size() && (json[pos] == ' ' || json[pos] == '\t')) ++pos;
+    if (json.compare(pos, 4, "true") == 0) return true;
+    if (json.compare(pos, 5, "false") == 0) return false;
+    return fallback;
+}
 
 // F08-02: liveness tracking. Initialised to process start so a freshly
 // started service gives the desktop agent a full grace period before
@@ -357,12 +373,22 @@ void DoPeriodicWork(aibridge::monitoring::WindowsSystemMonitor& monitor) {
 
 std::string SupervisorStatusJson(aibridge::monitoring::WindowsSystemMonitor& monitor) {
     auto snap = monitor.CollectSnapshot();
+    auto perms = g_input_controller.GetPermissions();
+    auto wins = aibridge::mcp::DesktopMcpExecutor::GetVisibleWindows();
     std::ostringstream ss;
-    ss << "{\"status\":\"ok\",\"hostname\":\"" << JsonEscape(snap.hostname)
+    ss << "{\"status\":\"ok\",\"engine\":\"cpp_native_v1\",\"hostname\":\"" << JsonEscape(snap.hostname)
        << "\",\"active_user\":\"" << JsonEscape(snap.active_user)
        << "\",\"active_session_id\":" << snap.active_session_id
        << ",\"cpu_percent\":" << snap.cpu_percent
-       << ",\"memory_percent\":" << snap.memory_percent << "}";
+       << ",\"memory_percent\":" << snap.memory_percent
+       << ",\"disk_percent\":" << snap.disk_percent
+       << ",\"visible_windows\":" << wins.size()
+       << ",\"held_keys\":" << g_input_controller.GetHeldKeyCount()
+       << ",\"held_mouse_buttons\":" << g_input_controller.GetHeldMouseButtonCount()
+       << ",\"permissions\":{\"allow_mouse\":" << (perms.allow_mouse ? "true" : "false")
+       << ",\"allow_keyboard\":" << (perms.allow_keyboard ? "true" : "false")
+       << ",\"allow_clipboard\":" << (perms.allow_clipboard ? "true" : "false")
+       << ",\"session_active\":" << (perms.session_active ? "true" : "false") << "}}";
     return ss.str();
 }
 
@@ -383,15 +409,38 @@ void HandleDesktopClient(HANDLE hPipe, aibridge::monitoring::WindowsSystemMonito
             aibridge::security::SecureNamedPipe::SendAuthenticatedMessage(hPipe, "REGISTERED", reply, pipe_secret);
         } else if (msg_type == "HEARTBEAT_PING") {
             auto snap = monitor.CollectSnapshot();
-            std::string reply = "{\"status\":\"ok\",\"active_session_id\":" +
-                                std::to_string(snap.active_session_id) + ",\"hostname\":\"" + JsonEscape(snap.hostname) + "\"}";
+            std::string reply = "{\"status\":\"ok\",\"engine\":\"cpp_native_v1\",\"active_session_id\":" +
+                                std::to_string(snap.active_session_id) + ",\"hostname\":\"" + JsonEscape(snap.hostname) +
+                                "\",\"cpu_percent\":" + std::to_string(snap.cpu_percent) +
+                                ",\"memory_percent\":" + std::to_string(snap.memory_percent) + "}";
             aibridge::security::SecureNamedPipe::SendAuthenticatedMessage(hPipe, "HEARTBEAT_PONG", reply, pipe_secret);
-        } else if (msg_type == "STATUS_QUERY") {
+        } else if (msg_type == "STATUS_QUERY" || msg_type == "DESKTOP_STATUS_REPORT") {
             aibridge::security::SecureNamedPipe::SendAuthenticatedMessage(
                 hPipe, "STATUS_RESPONSE", SupervisorStatusJson(monitor), pipe_secret);
+        } else if (msg_type == "UPDATE_SESSION_PERMISSIONS") {
+            bool allow_desktop = ExtractJsonBoolField(payload, "allow_desktop_control", false);
+            bool allow_clip = ExtractJsonBoolField(payload, "allow_clipboard", false);
+            aibridge::input::SessionInputPermissions perms{};
+            perms.allow_mouse = allow_desktop;
+            perms.allow_keyboard = allow_desktop;
+            perms.allow_clipboard = allow_clip;
+            perms.session_active = allow_desktop || allow_clip;
+            g_input_controller.SetPermissions(perms);
+            std::ostringstream reply;
+            reply << "{\"status\":\"permissions_updated\",\"allow_mouse\":" << (perms.allow_mouse ? "true" : "false")
+                  << ",\"allow_keyboard\":" << (perms.allow_keyboard ? "true" : "false")
+                  << ",\"allow_clipboard\":" << (perms.allow_clipboard ? "true" : "false")
+                  << ",\"session_active\":" << (perms.session_active ? "true" : "false") << "}";
+            aibridge::security::SecureNamedPipe::SendAuthenticatedMessage(
+                hPipe, "PERMISSIONS_UPDATED", reply.str(), pipe_secret);
+        } else if (msg_type == "RELEASE_ALL_INPUT") {
+            int released = g_input_controller.ReleaseAllHeldKeys();
+            std::string reply = "{\"status\":\"released\",\"released_count\":" + std::to_string(released) + "}";
+            aibridge::security::SecureNamedPipe::SendAuthenticatedMessage(
+                hPipe, "INPUT_RELEASED", reply, pipe_secret);
         } else {
             aibridge::security::SecureNamedPipe::SendAuthenticatedMessage(
-                hPipe, "ERROR", "{\"error\":\"unknown_msg_type\"}", pipe_secret
+                hPipe, "ERROR", "{\"error\":\"unknown_msg_type\",\"type\":\"" + JsonEscape(msg_type) + "\"}", pipe_secret
             );
         }
     }
@@ -524,13 +573,20 @@ void WINAPI ServiceMain(DWORD /*argc*/, LPWSTR* /*argv*/) {
 
 int main(int argc, char* argv[]) {
     bool console_once = false;
+    bool pipe_server_mode = false;
     std::string config_path;
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
         if (arg == "--once" || arg == "--console" || arg == "--console-once" || arg == "--status") {
             console_once = true;
+        } else if (arg == "--pipe-server" || arg == "--daemon") {
+            pipe_server_mode = true;
         } else if (arg == "--config" && i + 1 < argc) {
             config_path = argv[++i];
+        } else if (arg == "--pipe-name" && i + 1 < argc) {
+            std::string pn = argv[++i];
+            if (pn.rfind("\\\\.\\pipe\\", 0) != 0) pn = "\\\\.\\pipe\\" + pn;
+            g_pipe_name_w = ToWide(pn);
         } else if (arg == "--service-name" && i + 1 < argc) {
             g_service_name_w = ToWide(argv[++i]);
         }
@@ -554,12 +610,7 @@ int main(int argc, char* argv[]) {
         return 0;
     }
 
-    // F08-12: single-instance guard for the service process. The
-    // Service Control Manager normally guarantees one instance, but a
-    // second interactive/console launch must not run a duplicate
-    // supervisor (duplicate pipe server, duplicate heartbeats). The
-    // mutex is held for the life of the process (g_service_mutex is
-    // never closed before exit).
+    // F08-12: single-instance guard for the service process.
     {
         HANDLE mutex_handle = CreateMutexW(nullptr, FALSE, L"Global\\AIBridgeAgentService");
         if (mutex_handle && GetLastError() == ERROR_ALREADY_EXISTS) {
@@ -571,6 +622,18 @@ int main(int argc, char* argv[]) {
             static HANDLE g_service_mutex = mutex_handle;
             (void)g_service_mutex;
         }
+    }
+
+    if (pipe_server_mode) {
+        if (g_pipe_secret.empty()) {
+            g_pipe_secret = "aibridge-local-pipe-hmac-v1";
+        }
+        if (g_stop_event == INVALID_HANDLE_VALUE) {
+            g_stop_event = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+        }
+        aibridge::monitoring::WindowsSystemMonitor mon;
+        RunSupervisorLoop(mon, g_pipe_secret);
+        return 0;
     }
 
     std::wstring svc_buf = g_service_name_w;

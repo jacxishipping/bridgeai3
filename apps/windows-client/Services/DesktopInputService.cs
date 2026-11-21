@@ -72,6 +72,10 @@ public static class DesktopInputService
 
     public static void MoveMouse(int x, int y)
     {
+        if (CppNativeBridge.TryMoveMouse(x, y))
+        {
+            return;
+        }
         var (nx, ny) = NormalizeCoordinates(x, y);
         var inputs = new[]
         {
@@ -119,6 +123,20 @@ public static class DesktopInputService
 
     public static void ClickMouse(int x, int y, string button = "left", bool doubleClick = false)
     {
+        if (CppNativeBridge.IsAvailable())
+        {
+            int countNative = doubleClick ? 2 : 1;
+            bool allOk = true;
+            for (int i = 0; i < countNative; i++)
+            {
+                if (!CppNativeBridge.TryMouseButton(button, "click", x, y))
+                {
+                    allOk = false;
+                    break;
+                }
+            }
+            if (allOk) return;
+        }
         MoveMouse(x, y);
         var (down, up) = ResolveMouseButtons(button);
 
@@ -139,6 +157,10 @@ public static class DesktopInputService
         if (x.HasValue && y.HasValue)
         {
             MoveMouse(x.Value, y.Value);
+        }
+        if (CppNativeBridge.TryScrollMouse(horizontal ? 0 : delta, horizontal ? delta : 0))
+        {
+            return;
         }
         var inputs = new[]
         {

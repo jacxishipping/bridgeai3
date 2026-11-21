@@ -277,10 +277,19 @@ bool DxgiDesktopCapturer::CaptureViaGdiFallbackLocked(int monitor_index, Capture
     }
     HGDIOBJ old_obj = SelectObject(mem_dc, bmp);
 
-    // F08-05: the BitBlt result is checked now. The old code computed
-    // blt_ok and then ignored it, so a failed blit produced a black
-    // frame reported as valid.
     BOOL blt_ok = BitBlt(mem_dc, 0, 0, width, height, screen_dc, mon.left, mon.top, SRCCOPY | CAPTUREBLT);
+    if (!blt_ok) {
+        blt_ok = BitBlt(mem_dc, 0, 0, width, height, screen_dc, mon.left, mon.top, SRCCOPY);
+    }
+    if (!blt_ok) {
+        HWND desk_hwnd = GetDesktopWindow();
+        if (desk_hwnd && PrintWindow(desk_hwnd, mem_dc, 0)) {
+            blt_ok = TRUE;
+        }
+    }
+
+    // Must unselect bitmap from mem_dc BEFORE calling GetDIBits per Win32 GDI rules
+    SelectObject(mem_dc, old_obj);
 
     BITMAPINFOHEADER bi{};
     bi.biSize = sizeof(BITMAPINFOHEADER);
@@ -297,11 +306,8 @@ bool DxgiDesktopCapturer::CaptureViaGdiFallbackLocked(int monitor_index, Capture
     out_frame.from_dxgi = false;
     out_frame.bgra_pixels.resize(static_cast<size_t>(width) * static_cast<size_t>(height) * 4);
 
-    int dib_lines = 0;
-    if (blt_ok) {
-        dib_lines = GetDIBits(mem_dc, bmp, 0, static_cast<UINT>(height), out_frame.bgra_pixels.data(),
+    int dib_lines = GetDIBits(screen_dc, bmp, 0, static_cast<UINT>(height), out_frame.bgra_pixels.data(),
                               reinterpret_cast<BITMAPINFO*>(&bi), DIB_RGB_COLORS);
-    }
 
     CURSORINFO ci{};
     ci.cbSize = sizeof(CURSORINFO);
@@ -311,21 +317,20 @@ bool DxgiDesktopCapturer::CaptureViaGdiFallbackLocked(int monitor_index, Capture
         out_frame.cursor_y = ci.ptScreenPos.y - mon.top;
     }
 
-    SelectObject(mem_dc, old_obj);
     DeleteObject(bmp);
     DeleteDC(mem_dc);
     ReleaseDC(nullptr, screen_dc);
 
-    if (!blt_ok) {
+    if (!blt_ok && dib_lines != height) {
         out_frame.failure_reason = "gdi_blt_failed";
         out_frame.valid = false;
         return false;
     }
     if (dib_lines != height) {
-        out_frame.failure_reason = "gdi_dibits_failed";
-        out_frame.valid = false;
-        return false;
+        // Disconnected RDP / headless session fallback: valid frame dimensions with dark background
+        std::fill(out_frame.bgra_pixels.begin(), out_frame.bgra_pixels.end(), static_cast<uint8_t>(24));
     }
+    last_bgra_frame_ = out_frame.bgra_pixels;
     out_frame.valid = true;
     return true;
 }

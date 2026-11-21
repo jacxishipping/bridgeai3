@@ -121,10 +121,9 @@ target_link_libraries(ai_bridge_native PRIVATE ${WIN32_SYSTEM_LIBS} ${AIBRIDGE_W
 # 2. Process A: Session 0 Windows Service / Supervisor (ai_bridge_service.exe)
 add_executable(ai_bridge_service
     src/service/windows_service.cpp
-    src/monitoring/system_monitor.cpp
-    src/security/local_security.cpp
+    ${AGENT_CORE_SOURCES}
 )
-target_link_libraries(ai_bridge_service PRIVATE ${WIN32_SYSTEM_LIBS})
+target_link_libraries(ai_bridge_service PRIVATE ${WIN32_SYSTEM_LIBS} ${AIBRIDGE_WEBRTC_LIBS})
 
 # 3. Process B: Interactive Desktop Agent (ai_bridge_desktop.exe)
 add_executable(ai_bridge_desktop

@@ -29,6 +29,16 @@ if (-not (Get-Command dotnet -ErrorAction SilentlyContinue)) {
     throw ".NET 9 SDK ('dotnet') was not found on PATH. Install .NET 9 SDK from https://dotnet.microsoft.com/download/dotnet/9.0"
 }
 
+$CppDir = Join-Path $RepoRoot "windows-agent"
+$CppBuildDir = Join-Path $CppDir "build"
+if (Get-Command cmake -ErrorAction SilentlyContinue) {
+    Write-Host "==> [0/4] Building Native C++20 Windows Agent (ai_bridge_native.dll, ai_bridge_desktop.exe, ai_bridge_service.exe)..." -ForegroundColor Cyan
+    cmake -S $CppDir -B $CppBuildDir
+    if ($LASTEXITCODE -eq 0) {
+        cmake --build $CppBuildDir --config Release
+    }
+}
+
 Write-Host "==> [1/4] Publishing AI Bridge Windows Client ($Runtime single-file)..." -ForegroundColor Cyan
 if (-not $SkipClientPublish) {
     dotnet publish $ClientProj -c Release -r $Runtime --self-contained true `

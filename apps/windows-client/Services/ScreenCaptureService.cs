@@ -28,6 +28,12 @@ public static class ScreenCaptureService
 {
     public static List<MonitorDescriptor> GetMonitors()
     {
+        var nativeMonitors = CppNativeBridge.TryEnumerateMonitors();
+        if (nativeMonitors is { Count: > 0 })
+        {
+            return nativeMonitors;
+        }
+
         var screens = Screen.AllScreens;
         var list = new List<MonitorDescriptor>(screens.Length);
         for (int i = 0; i < screens.Length; i++)
@@ -41,6 +47,11 @@ public static class ScreenCaptureService
     public static ScreenshotResult CapturePrimaryScreen(string outputDir, int monitorIndex = 0)
     {
         Directory.CreateDirectory(outputDir);
+        if (CppNativeBridge.TryCaptureMonitor(outputDir, monitorIndex, out var nativeResult, out _) && nativeResult is not null)
+        {
+            return nativeResult;
+        }
+
         var screens = Screen.AllScreens;
         var screen = (monitorIndex >= 0 && monitorIndex < screens.Length)
             ? screens[monitorIndex]
@@ -64,6 +75,11 @@ public static class ScreenCaptureService
         DesktopWindowInfo win = (string.IsNullOrWhiteSpace(titleQuery) && (handle is null || handle <= 0))
             ? WindowManagementService.ResolveWindow(null, WindowManagementService.GetActiveWindowHandle().ToInt64())
             : WindowManagementService.FocusWindow(titleQuery, handle);
+
+        if (CppNativeBridge.TryCaptureWindow(outputDir, win.Handle, win.Pid, out var nativeWinResult, out _) && nativeWinResult is not null)
+        {
+            return nativeWinResult;
+        }
 
         var rect = new Rectangle(win.X, win.Y, Math.Max(1, win.Width), Math.Max(1, win.Height));
         try

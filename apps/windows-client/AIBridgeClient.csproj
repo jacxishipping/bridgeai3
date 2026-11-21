@@ -15,4 +15,25 @@
     <Description>Native C# WPF Windows Client for AI Bridge</Description>
   </PropertyGroup>
 
+  <ItemGroup>
+    <None Include="..\..\windows-agent\build\Release\ai_bridge_native.dll"
+          Condition="Exists('..\..\windows-agent\build\Release\ai_bridge_native.dll')"
+          Link="ai_bridge_native.dll"
+          CopyToOutputDirectory="PreserveNewest"
+          CopyToPublishDirectory="PreserveNewest"
+          ExcludeFromSingleFile="true" />
+    <None Include="..\..\windows-agent\build\Release\ai_bridge_desktop.exe"
+          Condition="Exists('..\..\windows-agent\build\Release\ai_bridge_desktop.exe')"
+          Link="ai_bridge_desktop.exe"
+          CopyToOutputDirectory="PreserveNewest"
+          CopyToPublishDirectory="PreserveNewest"
+          ExcludeFromSingleFile="true" />
+    <None Include="..\..\windows-agent\build\Release\ai_bridge_service.exe"
+          Condition="Exists('..\..\windows-agent\build\Release\ai_bridge_service.exe')"
+          Link="ai_bridge_service.exe"
+          CopyToOutputDirectory="PreserveNewest"
+          CopyToPublishDirectory="PreserveNewest"
+          ExcludeFromSingleFile="true" />
+  </ItemGroup>
+
 </Project>
