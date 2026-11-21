@@ -510,6 +510,15 @@ public sealed class ControlPlaneClient : IDisposable
         var baseUrl = NormalizeUrl(config.ControlUrl);
         int intervalSec = Math.Clamp(config.HeartbeatIntervalSeconds, 5, 120);
         int reqTimeoutSec = Math.Clamp(config.HttpTimeoutSeconds, 5, 120);
+        // Push local device policy on initial connect so the online panel immediately reflects all 11 device controls
+        try
+        {
+            await SyncPolicyAsync(config.ControlUrl, token, config.Policy, ct);
+        }
+        catch
+        {
+            // Non-fatal; subsequent heartbeats and manual sync remain active
+        }
         while (!ct.IsCancellationRequested)
         {
             try
