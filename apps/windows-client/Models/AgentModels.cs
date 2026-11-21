@@ -180,6 +180,42 @@ public sealed class AgentGuiConfig
 
     [JsonPropertyName("device_agent")]
     public DeviceAgentSettings DeviceAgent { get; set; } = new();
+
+    [JsonPropertyName("cpp_agent")]
+    public CppAgentSettings CppAgent { get; set; } = new();
+}
+
+public sealed class CppAgentSettings
+{
+    [JsonPropertyName("auto_start_supervisor")]
+    public bool AutoStartSupervisor { get; set; } = true;
+
+    [JsonPropertyName("prefer_dxgi_capture")]
+    public bool PreferDxgiCapture { get; set; } = true;
+
+    [JsonPropertyName("h264_target_fps")]
+    public int H264TargetFps { get; set; } = 30;
+
+    [JsonPropertyName("h264_bitrate_kbps")]
+    public int H264BitrateKbps { get; set; } = 4500;
+
+    [JsonPropertyName("h264_keyframe_interval_sec")]
+    public int H264KeyframeIntervalSec { get; set; } = 2;
+
+    [JsonPropertyName("h264_prefer_hardware")]
+    public bool H264PreferHardware { get; set; } = true;
+
+    [JsonPropertyName("h264_adaptive_bitrate")]
+    public bool H264AdaptiveBitrate { get; set; } = true;
+
+    [JsonPropertyName("turn_url")]
+    public string TurnUrl { get; set; } = "";
+
+    [JsonPropertyName("turn_username")]
+    public string TurnUsername { get; set; } = "";
+
+    [JsonPropertyName("turn_credential")]
+    public string TurnCredential { get; set; } = "";
 }
 
 public sealed class AgentFunctionPermissions

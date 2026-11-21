@@ -34,6 +34,12 @@
           CopyToOutputDirectory="PreserveNewest"
           CopyToPublishDirectory="PreserveNewest"
           ExcludeFromSingleFile="true" />
+    <None Include="..\..\windows-agent\build\Release\ai_bridge_tests.exe"
+          Condition="Exists('..\..\windows-agent\build\Release\ai_bridge_tests.exe')"
+          Link="ai_bridge_tests.exe"
+          CopyToOutputDirectory="PreserveNewest"
+          CopyToPublishDirectory="PreserveNewest"
+          ExcludeFromSingleFile="true" />
   </ItemGroup>
 
 </Project>

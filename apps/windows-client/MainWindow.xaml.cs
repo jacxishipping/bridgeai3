@@ -82,10 +82,10 @@ public partial class MainWindow : Window
         ("Overview", "Agent status, connection, and live activity"),
         ("Task Explorer", "Every task this device received, with full payloads"),
         ("System Monitor", "Live hardware telemetry, GPU & process manager"),
-        ("Desktop Vision", "Multi-monitor Windows GDI+ desktop screenshot capture"),
+        ("Desktop Vision", "Multi-monitor C++20 DXGI Desktop Duplication, Media Foundation H.264 & GDI+ capture"),
         ("Security & Policy", "4-tier guardrails, allowlist matrix & policy audit"),
-        ("Settings", "Control Plane endpoint, DPAPI token, updates & appearance"),
-        ("Agents", "Local runtimes, Named-Pipe bridge & agents scoped exclusively to this device"),
+        ("Settings", "Control Plane endpoint, C++20 DXGI/H.264 engine, DPAPI token, updates & appearance"),
+        ("Agents", "Local runtimes, C++ Named-Pipe bridge & agents scoped exclusively to this device"),
     };
 
     public MainWindow(int initialTab = 0, bool suppressAutoSignIn = false)
@@ -204,6 +204,15 @@ public partial class MainWindow : Window
 
     private void ApplyRuntimeSettings()
     {
+        _config.CppAgent ??= new CppAgentSettings();
+        CppNativeBridge.PreferDxgiCapture = _config.CppAgent.PreferDxgiCapture;
+        CppNativeBridge.DefaultH264Fps = Math.Clamp(_config.CppAgent.H264TargetFps, 1, 60);
+        CppNativeBridge.DefaultH264BitrateKbps = Math.Clamp(_config.CppAgent.H264BitrateKbps, 250, 50_000);
+        if (CppNativeBridge.IsAvailable())
+        {
+            CppNativeBridge.TrySetEncoderBitrate(CppNativeBridge.DefaultH264BitrateKbps);
+        }
+
         NamedPipeBridge.ActivePipeName = string.IsNullOrWhiteSpace(_config.DesktopPipeName)
             ? NamedPipeBridge.PipeName
             : _config.DesktopPipeName.Trim();
@@ -215,11 +224,13 @@ public partial class MainWindow : Window
         }
         NamedPipeBridge.ActiveHmacSecret = hmac;
         CppNativeBridge.SyncInputPermissions(_config.Policy.AllowDesktopControl, _config.Policy.AllowClipboard);
+        var cppCfg = _config.CppAgent;
         _ = Task.Run(() => NamedPipeBridge.EnsureCppSupervisorRunning(
             NamedPipeBridge.ActivePipeName,
             NamedPipeBridge.ActiveHmacSecret,
             _config.ControlUrl,
-            _deviceToken));
+            _deviceToken,
+            cppCfg));
 
         _monitorTimer.Interval = TimeSpan.FromMilliseconds(Math.Clamp(_config.MonitorIntervalMs, 500, 5000));
         if (_config.AutoRefreshMonitor)
@@ -727,6 +738,20 @@ public partial class MainWindow : Window
         SetMaxListEntriesBox.Text = _config.MaxListEntries.ToString();
         SetTaskHistoryLimitBox.Text = _config.TaskHistoryLimit.ToString();
         SetAutoRefreshMonChk.IsChecked = _config.AutoRefreshMonitor;
+
+        // C++20 Native Agent, DXGI Capture, Media Foundation H.264 & WebRTC Engine
+        _config.CppAgent ??= new CppAgentSettings();
+        SetCppAutoStartChk.IsChecked = _config.CppAgent.AutoStartSupervisor;
+        SetCppPreferDxgiChk.IsChecked = _config.CppAgent.PreferDxgiCapture;
+        SetCppPreferHwH264Chk.IsChecked = _config.CppAgent.H264PreferHardware;
+        SetCppAdaptiveBitrateChk.IsChecked = _config.CppAgent.H264AdaptiveBitrate;
+        SetCppFpsBox.Text = Math.Clamp(_config.CppAgent.H264TargetFps, 1, 60).ToString();
+        SetCppBitrateBox.Text = Math.Clamp(_config.CppAgent.H264BitrateKbps, 250, 50_000).ToString();
+        SetCppKeyframeBox.Text = Math.Clamp(_config.CppAgent.H264KeyframeIntervalSec, 1, 15).ToString();
+        SetCppTurnUrlBox.Text = _config.CppAgent.TurnUrl ?? "";
+        SetCppTurnUserBox.Text = _config.CppAgent.TurnUsername ?? "";
+        SetCppTurnCredBox.Password = _config.CppAgent.TurnCredential ?? "";
+        RefreshCppEngineStatusUi();
 
         // Logging
         SelectComboByTag(SetLogLevelCombo, _config.LogLevel, 1);
@@ -1653,7 +1678,12 @@ public partial class MainWindow : Window
     private void RecordCaptureResult(ScreenshotResult shot, string label)
     {
         LoadScreenshotPreview(shot.FilePath);
-        VisionMetaText.Text = $"Captured {DateTimeOffset.Now:HH:mm:ss} · {shot.Width}x{shot.Height} ({Math.Max(1, shot.SizeBytes / 1024)} KB)";
+        var m = CppNativeBridge.LastMetrics;
+        var backendLabel = (m.Valid != 0 && _config.CppAgent.PreferDxgiCapture)
+            ? (m.FromDxgi != 0 ? $"C++ DXGI ({m.CaptureTimeMs:F1} ms)" : $"C++ GDI ({m.CaptureTimeMs:F1} ms)")
+            : "GDI+";
+        VisionMetaText.Text = $"Captured {DateTimeOffset.Now:HH:mm:ss} · {shot.Width}x{shot.Height} ({Math.Max(1, shot.SizeBytes / 1024)} KB) · {backendLabel}";
+        RefreshVisionCppMetricsUi();
 
         _captureHistory.Insert(0, new CaptureHistoryItem(
             shot.FilePath,
@@ -1662,6 +1692,64 @@ public partial class MainWindow : Window
             $"{Math.Max(1, shot.SizeBytes / 1024)} KB",
             DateTimeOffset.Now.ToString("HH:mm:ss")));
         CaptureHistoryEmptyText.Visibility = Visibility.Collapsed;
+    }
+
+    private void RefreshVisionCppMetricsUi()
+    {
+        if (VisionCppMetricsText is null) return;
+        bool dllOk = CppNativeBridge.IsAvailable();
+        var m = CppNativeBridge.LastMetrics;
+        if (!dllOk)
+        {
+            VisionCppMetricsText.Text = "C++ DLL: Unavailable (using C# GDI+ fallback)";
+            return;
+        }
+        if (m.Valid == 0)
+        {
+            VisionCppMetricsText.Text =
+                $"DLL: ai_bridge_native.dll loaded\n" +
+                $"Mode: {(_config.CppAgent.PreferDxgiCapture ? "DXGI Preferred" : "C# GDI+ Forced")}\n" +
+                $"Target H.264: {_config.CppAgent.H264TargetFps} FPS @ {_config.CppAgent.H264BitrateKbps} kbps\n" +
+                $"Held Keys: {CppNativeBridge.GetHeldKeyCount()}";
+            return;
+        }
+        var enc = !string.IsNullOrWhiteSpace(m.EncoderName)
+            ? $"{m.EncoderName} ({(m.IsHardwareEncoder != 0 ? "HW" : "SW")}, {m.EncodeTimeMs:F1} ms, {m.EncodedBytes} B)"
+            : $"Ready ({_config.CppAgent.H264TargetFps} FPS @ {_config.CppAgent.H264BitrateKbps} kbps)";
+        VisionCppMetricsText.Text =
+            $"Backend: {(m.FromDxgi != 0 ? "DXGI Desktop Duplication" : "C++ GDI Fallback")}{(m.SecureDesktop != 0 ? " [Secure Desktop]" : "")}\n" +
+            $"Frame:   {m.Width}x{m.Height} · {m.CaptureTimeMs:F2} ms · Dirty: {m.DirtyRectCount}\n" +
+            $"Cursor:  ({m.CursorX}, {m.CursorY}) {(m.CursorVisible != 0 ? "Visible" : "Hidden")}\n" +
+            $"H.264:   {enc}\n" +
+            $"Input:   {CppNativeBridge.GetHeldKeyCount()} held keys";
+    }
+
+    private async void OnVisionCppProbeClick(object sender, RoutedEventArgs e)
+    {
+        int monIdx = VisionMonitorCombo.SelectedItem is MonitorDescriptor m ? m.Index : 0;
+        int fps = Math.Clamp(_config.CppAgent.H264TargetFps, 1, 60);
+        int kbps = Math.Clamp(_config.CppAgent.H264BitrateKbps, 250, 50_000);
+        var (ok, json) = await NamedPipeBridge.RunCppDesktopProbeAsync(monIdx, fps, kbps);
+        RefreshVisionCppMetricsUi();
+        RefreshCppEngineStatusUi();
+        if (SetCppConsoleBox is not null)
+        {
+            SetCppConsoleBox.Text = json;
+        }
+        var lm = CppNativeBridge.LastMetrics;
+        VisionMetaText.Text = ok
+            ? $"C++ H.264 Probe OK · {(lm.FromDxgi != 0 ? "DXGI" : "GDI")} {lm.CaptureTimeMs:F1} ms · H.264 {lm.EncodeTimeMs:F1} ms ({lm.EncodedBytes} B)"
+            : "C++ H.264 Probe failed";
+        ShowToast(ok ? $"C++ H.264 Probe: {lm.EncodedBytes} bytes ({lm.EncodeTimeMs:F1} ms)" : "C++ Probe failed");
+    }
+
+    private void OnVisionResetDxgiClick(object sender, RoutedEventArgs e)
+    {
+        int monIdx = VisionMonitorCombo.SelectedItem is MonitorDescriptor m ? m.Index : 0;
+        bool ok = CppNativeBridge.ReinitializeCapture(monIdx);
+        RefreshMonitorList();
+        RefreshVisionCppMetricsUi();
+        ShowToast(ok ? $"Reinitialized C++ DXGI on display {monIdx}" : "Reinitialized GDI fallback");
     }
 
     private void LoadScreenshotPreview(string path)
@@ -2086,6 +2174,7 @@ public partial class MainWindow : Window
         SetCatGenBtn.Style = tag == "GENERAL" ? active : normal;
         SetCatCpBtn.Style = tag == "CONTROL_PLANE" ? active : normal;
         SetCatAgentBtn.Style = tag == "AGENT" ? active : normal;
+        SetCatCppBtn.Style = tag == "CPP_AGENT" ? active : normal;
         SetCatLogBtn.Style = tag == "LOGGING" ? active : normal;
         SetCatSecBtn.Style = tag == "SECURITY" ? active : normal;
         SetCatAppBtn.Style = tag == "APPEARANCE" ? active : normal;
@@ -2094,6 +2183,7 @@ public partial class MainWindow : Window
         SetSectionGeneral.Visibility = tag is "ALL" or "GENERAL" ? Visibility.Visible : Visibility.Collapsed;
         SetSectionControlPlane.Visibility = tag is "ALL" or "CONTROL_PLANE" ? Visibility.Visible : Visibility.Collapsed;
         SetSectionAgent.Visibility = tag is "ALL" or "AGENT" ? Visibility.Visible : Visibility.Collapsed;
+        SetSectionCppAgent.Visibility = tag is "ALL" or "CPP_AGENT" ? Visibility.Visible : Visibility.Collapsed;
         SetSectionLogging.Visibility = tag is "ALL" or "LOGGING" ? Visibility.Visible : Visibility.Collapsed;
         SetSectionSecurity.Visibility = tag is "ALL" or "SECURITY" ? Visibility.Visible : Visibility.Collapsed;
         SetSectionAppearance.Visibility = tag is "ALL" or "APPEARANCE" ? Visibility.Visible : Visibility.Collapsed;
@@ -2137,6 +2227,19 @@ public partial class MainWindow : Window
         if (int.TryParse(SetMaxListEntriesBox.Text, out var maxList)) _config.MaxListEntries = Math.Clamp(maxList, 10, 1000);
         if (int.TryParse(SetTaskHistoryLimitBox.Text, out var histLim)) _config.TaskHistoryLimit = Math.Clamp(histLim, 50, 2000);
         _config.AutoRefreshMonitor = SetAutoRefreshMonChk.IsChecked == true;
+
+        // C++20 Native Agent, DXGI Capture, Media Foundation H.264 & WebRTC Engine
+        _config.CppAgent ??= new CppAgentSettings();
+        _config.CppAgent.AutoStartSupervisor = SetCppAutoStartChk.IsChecked == true;
+        _config.CppAgent.PreferDxgiCapture = SetCppPreferDxgiChk.IsChecked == true;
+        _config.CppAgent.H264PreferHardware = SetCppPreferHwH264Chk.IsChecked == true;
+        _config.CppAgent.H264AdaptiveBitrate = SetCppAdaptiveBitrateChk.IsChecked == true;
+        if (int.TryParse(SetCppFpsBox.Text, out var cppFps)) _config.CppAgent.H264TargetFps = Math.Clamp(cppFps, 1, 60);
+        if (int.TryParse(SetCppBitrateBox.Text, out var cppKbps)) _config.CppAgent.H264BitrateKbps = Math.Clamp(cppKbps, 250, 50_000);
+        if (int.TryParse(SetCppKeyframeBox.Text, out var cppKf)) _config.CppAgent.H264KeyframeIntervalSec = Math.Clamp(cppKf, 1, 15);
+        _config.CppAgent.TurnUrl = SetCppTurnUrlBox.Text.Trim();
+        _config.CppAgent.TurnUsername = SetCppTurnUserBox.Text.Trim();
+        _config.CppAgent.TurnCredential = SetCppTurnCredBox.Password.Trim();
 
         // Logging
         if (SetLogLevelCombo.SelectedItem is ComboBoxItem logItem && logItem.Tag is string lvl)
@@ -3005,16 +3108,29 @@ public partial class MainWindow : Window
         var trimmed = rawPrompt.Trim();
         var lower = trimmed.ToLowerInvariant();
 
-        if (lower.StartsWith("/pipe") || (lower.Contains("pipe") && !lower.Contains("screenshot")))
+        if (lower.StartsWith("/pipe") || lower.StartsWith("/cpp") || lower.StartsWith("/h264") || lower.StartsWith("/selftest") ||
+            (lower.Contains("pipe") && !lower.Contains("screenshot")))
         {
             var (pingOk, pingResp) = await NamedPipeBridge.PingHeartbeatAsync();
             var (statusOk, statusResp) = await NamedPipeBridge.RequestDesktopStatusAsync();
+            var (_, probeResp) = await NamedPipeBridge.RunCppDesktopProbeAsync(
+                0,
+                Math.Clamp(_config.CppAgent.H264TargetFps, 1, 60),
+                Math.Clamp(_config.CppAgent.H264BitrateKbps, 250, 50_000));
+            string selfTestSection = "";
+            if (lower.StartsWith("/selftest") || lower.Contains("selftest") || lower.Contains("self-test"))
+            {
+                var (stOk, stOut) = await NamedPipeBridge.RunCppSelfTestsAsync();
+                selfTestSection = $"\n• C++ Self-Tests ({(stOk ? "7/7 PASSED" : "FAILED")}):\n{stOut}\n";
+            }
             var pipeName = string.IsNullOrWhiteSpace(_config.DesktopPipeName) ? NamedPipeBridge.PipeName : _config.DesktopPipeName;
-            var summary = $"Desktop Pipe Bridge (\\\\.\\pipe\\{pipeName}):\n" +
+            var summary = $"C++20 Native Agent & Desktop Pipe Bridge (\\\\.\\pipe\\{pipeName}):\n" +
                           $"• Heartbeat: {(pingOk ? "OK" : "Unavailable")}\n" +
                           $"• Ping Response: {pingResp}\n" +
-                          $"• Status ({(statusOk ? "OK" : "Unavailable")}): {statusResp}";
-            return (true, summary, "Local Tool: named_pipe_bridge", null);
+                          $"• Pipe Status ({(statusOk ? "OK" : "Unavailable")}): {statusResp}\n" +
+                          $"• DXGI + Media Foundation H.264 Probe:\n{probeResp}" +
+                          selfTestSection;
+            return (true, summary, "Local Tool: cpp_native_agent_bridge", null);
         }
 
         if (lower.StartsWith("/som") || lower.Contains("set of marks") || lower.Contains("set-of-marks"))
@@ -3383,7 +3499,154 @@ public partial class MainWindow : Window
     {
         var (ok, resp) = await NamedPipeBridge.ReleaseAllInputAsync();
         AgPipeConsoleBox.Text = $"[RELEASE_ALL_INPUT -> {(ok ? "OK" : "UNAVAILABLE")}]\n{resp}";
+        RefreshVisionCppMetricsUi();
         ShowToast(ok ? "Released all held input" : "Desktop pipe not running");
+    }
+
+    private async void OnAgentCppSelfTestClick(object sender, RoutedEventArgs e)
+    {
+        AgPipeConsoleBox.Text = "Running C++20 7-stage verification suite (ai_bridge_tests.exe)...";
+        var (ok, output) = await NamedPipeBridge.RunCppSelfTestsAsync();
+        AgPipeConsoleBox.Text = $"[C++20 SELF-TESTS -> {(ok ? "ALL 7/7 PASSED" : "FAILED")}]\n{output}";
+        if (SetCppConsoleBox is not null) SetCppConsoleBox.Text = AgPipeConsoleBox.Text;
+        RefreshLocalAgentsSummary();
+        ShowToast(ok ? "C++ 7/7 self-tests passed" : "C++ self-test reported an error");
+    }
+
+    private async void OnAgentRestartPipeClick(object sender, RoutedEventArgs e)
+    {
+        AgPipeConsoleBox.Text = "Restarting C++ supervisor named-pipe server (ai_bridge_service.exe --pipe-server)...";
+        var pipeName = string.IsNullOrWhiteSpace(_config.DesktopPipeName) ? NamedPipeBridge.PipeName : _config.DesktopPipeName;
+        bool ok = await Task.Run(() => NamedPipeBridge.RestartCppSupervisor(
+            pipeName,
+            NamedPipeBridge.ActiveHmacSecret,
+            _config.ControlUrl,
+            _deviceToken,
+            _config.CppAgent));
+        var (_, statusResp) = await NamedPipeBridge.RequestDesktopStatusAsync();
+        AgPipeConsoleBox.Text = $"[RESTART C++ PIPE SERVER -> {(ok ? "ONLINE" : "OFFLINE")}]\n{statusResp}";
+        if (SetCppConsoleBox is not null) SetCppConsoleBox.Text = AgPipeConsoleBox.Text;
+        RefreshLocalAgentsSummary();
+        RefreshCppEngineStatusUi();
+        ShowToast(ok ? "C++ pipe server restarted" : "Failed to restart C++ pipe server");
+    }
+
+    private void RefreshCppEngineStatusUi()
+    {
+        if (SetCppStatusBadge is null) return;
+        bool dllUp = CppNativeBridge.IsAvailable();
+        var pipeName = string.IsNullOrWhiteSpace(_config.DesktopPipeName) ? NamedPipeBridge.PipeName : _config.DesktopPipeName;
+        bool pipeUp = NamedPipeBridge.IsDesktopAgentAvailable(pipeName);
+        SetCppStatusBadge.Text = (dllUp, pipeUp) switch
+        {
+            (true, true) => $"C++ DLL & Pipe Active ({pipeName})",
+            (true, false) => "C++ DLL Active · Pipe Stopped",
+            (false, true) => "Pipe Active · DLL Missing",
+            _ => "C++ Engine Offline",
+        };
+        SetCppStatusBadge.Foreground = (System.Windows.Media.Brush)FindResource((dllUp && pipeUp) ? "SuccessText" : (dllUp || pipeUp ? "WarningText" : "ErrorText"));
+        RefreshVisionCppMetricsUi();
+    }
+
+    private void OnCppApplyBitrateClick(object sender, RoutedEventArgs e)
+    {
+        int kbps = int.TryParse(SetCppBitrateBox.Text, out var parsed) ? Math.Clamp(parsed, 250, 50_000) : 4500;
+        int fps = int.TryParse(SetCppFpsBox.Text, out var parsedFps) ? Math.Clamp(parsedFps, 1, 60) : 30;
+        _config.CppAgent ??= new CppAgentSettings();
+        _config.CppAgent.H264BitrateKbps = kbps;
+        _config.CppAgent.H264TargetFps = fps;
+        _configService.SaveConfig(_config);
+
+        bool appliedLive = CppNativeBridge.TrySetEncoderBitrate(kbps);
+        CppNativeBridge.DefaultH264Fps = fps;
+        var json = CppNativeBridge.ProbeCaptureAndH264Json(0, fps, kbps);
+        SetCppConsoleBox.Text = $"[LIVE H.264 BITRATE UPDATE -> {kbps} kbps @ {fps} FPS (Encoder Active: {appliedLive})]\n{json}";
+        RefreshVisionCppMetricsUi();
+        ShowToast($"H.264 target set to {kbps} kbps @ {fps} FPS");
+    }
+
+    private async void OnCppProbeEngineClick(object sender, RoutedEventArgs e)
+    {
+        int kbps = int.TryParse(SetCppBitrateBox.Text, out var parsed) ? Math.Clamp(parsed, 250, 50_000) : _config.CppAgent.H264BitrateKbps;
+        int fps = int.TryParse(SetCppFpsBox.Text, out var parsedFps) ? Math.Clamp(parsedFps, 1, 60) : _config.CppAgent.H264TargetFps;
+        SetCppConsoleBox.Text = "Probing C++20 DXGI Desktop Duplication & Media Foundation H.264 encoder...";
+        var (ok, resp) = await NamedPipeBridge.RunCppDesktopProbeAsync(0, fps, kbps);
+        SetCppConsoleBox.Text = resp;
+        RefreshCppEngineStatusUi();
+        ShowToast(ok ? "C++ DXGI + H.264 probe succeeded" : "C++ probe completed with fallback");
+    }
+
+    private async void OnCppRunSelfTestsClick(object sender, RoutedEventArgs e)
+    {
+        SetCppConsoleBox.Text = "Executing C++20 7-stage verification suite (ai_bridge_tests.exe)...";
+        var (ok, output) = await NamedPipeBridge.RunCppSelfTestsAsync();
+        SetCppConsoleBox.Text = $"[ai_bridge_tests.exe -> {(ok ? "ALL 7/7 PASSED" : "FAILED")}]\n{output}";
+        RefreshCppEngineStatusUi();
+        ShowToast(ok ? "All 7/7 C++ self-tests passed" : "C++ self-test failed");
+    }
+
+    private void OnCppSystemHealthClick(object sender, RoutedEventArgs e)
+    {
+        var raw = CppNativeBridge.TryGetSystemHealthJson() ?? "{\"available\":false}";
+        var monitors = CppNativeBridge.TryEnumerateMonitors();
+        SetCppConsoleBox.Text =
+            $"[C++20 NATIVE SYSTEM HEALTH (aibridge_get_system_health_json)]\n{PrettyJson(raw)}\n\n" +
+            $"[C++20 DXGI ENUMERATED DISPLAYS ({monitors?.Count ?? 0})]\n" +
+            JsonSerializer.Serialize(monitors, new JsonSerializerOptions { WriteIndented = true });
+        RefreshCppEngineStatusUi();
+        ShowToast("Queried C++ native system health");
+    }
+
+    private async void OnCppPingPipeClick(object sender, RoutedEventArgs e)
+    {
+        var (ok, resp) = await NamedPipeBridge.PingHeartbeatAsync();
+        var (_, statusResp) = await NamedPipeBridge.RequestDesktopStatusAsync();
+        SetCppConsoleBox.Text = $"[HEARTBEAT_PING -> {(ok ? "OK" : "OFFLINE")}]\n{resp}\n\n[DESKTOP_STATUS_REPORT]\n{statusResp}";
+        RefreshCppEngineStatusUi();
+        ShowToast(ok ? "C++ Named-Pipe HMAC ping OK" : "C++ Named-Pipe offline");
+    }
+
+    private async void OnCppRestartSupervisorClick(object sender, RoutedEventArgs e)
+    {
+        SetCppConsoleBox.Text = "Restarting C++ supervisor named-pipe server...";
+        var pipeName = string.IsNullOrWhiteSpace(SetPipeNameBox.Text) ? _config.DesktopPipeName : SetPipeNameBox.Text.Trim();
+        bool ok = await Task.Run(() => NamedPipeBridge.RestartCppSupervisor(
+            pipeName,
+            NamedPipeBridge.ActiveHmacSecret,
+            _config.ControlUrl,
+            _deviceToken,
+            _config.CppAgent));
+        var (_, statusResp) = await NamedPipeBridge.RequestDesktopStatusAsync();
+        SetCppConsoleBox.Text = $"[RESTART C++ PIPE SERVER -> {(ok ? "ONLINE" : "OFFLINE")}]\n{statusResp}";
+        RefreshCppEngineStatusUi();
+        RefreshLocalAgentsSummary();
+        ShowToast(ok ? "C++ pipe server restarted" : "Could not start C++ pipe server");
+    }
+
+    private void OnCppStopSupervisorClick(object sender, RoutedEventArgs e)
+    {
+        NamedPipeBridge.StopManagedCppSupervisor();
+        try
+        {
+            foreach (var p in Process.GetProcessesByName("ai_bridge_service"))
+            {
+                try { p.Kill(); p.Dispose(); } catch { }
+            }
+        }
+        catch { }
+        SetCppConsoleBox.Text = "Stopped C++ supervisor named-pipe server (ai_bridge_service.exe).";
+        RefreshCppEngineStatusUi();
+        RefreshLocalAgentsSummary();
+        ShowToast("Stopped C++ pipe server");
+    }
+
+    private async void OnCppReleaseKeysClick(object sender, RoutedEventArgs e)
+    {
+        int releasedLocal = CppNativeBridge.ReleaseAllKeys();
+        var (ok, resp) = await NamedPipeBridge.ReleaseAllInputAsync();
+        SetCppConsoleBox.Text = $"[RELEASE_ALL_INPUT (In-Process Released: {releasedLocal}, Pipe: {(ok ? "OK" : "OFFLINE")})]\n{resp}";
+        RefreshCppEngineStatusUi();
+        ShowToast("Released all held keys & mouse buttons");
     }
 
     private void OnAgentAuthModeChanged(object sender, SelectionChangedEventArgs e)

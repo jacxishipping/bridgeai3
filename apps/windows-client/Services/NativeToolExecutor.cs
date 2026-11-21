@@ -82,8 +82,22 @@ public sealed class NativeToolExecutor
                     allowed_apps = config.Policy.AllowedApps,
                     active_window = WindowManagementService.GetActiveWindowInfo(),
                 },
-                "get_native_encode_status" or "probe_cpp_agent" or "cpp_agent_status" => JsonSerializer.Deserialize<JsonElement>(
-                    (await NamedPipeBridge.RunCppDesktopProbeAsync(0, ct)).Response),
+                "get_native_encode_status" or "probe_cpp_agent" or "cpp_agent_status" => new
+                {
+                    dll_available = CppNativeBridge.IsAvailable(),
+                    pipe_available = NamedPipeBridge.IsDesktopAgentAvailable(config.DesktopPipeName),
+                    probe_output = (await NamedPipeBridge.RunCppDesktopProbeAsync(
+                        0,
+                        Math.Clamp(config.CppAgent?.H264TargetFps ?? 30, 1, 60),
+                        Math.Clamp(config.CppAgent?.H264BitrateKbps ?? 4500, 250, 50_000),
+                        ct)).Response,
+                },
+                "run_cpp_self_tests" => new
+                {
+                    passed = (await NamedPipeBridge.RunCppSelfTestsAsync(ct)).Ok,
+                    output = (await NamedPipeBridge.RunCppSelfTestsAsync(ct)).Output,
+                },
+                "set_h264_bitrate" => SetH264Bitrate(config, args),
                 "list_desktop_windows" or "desktop_get_windows" => ListDesktopWindows(args),
                 "get_active_window" => new { window = WindowManagementService.GetActiveWindowInfo() },
                 "focus_window" => FocusDesktopWindow(config, args),
@@ -134,6 +148,23 @@ public sealed class NativeToolExecutor
         var trimmed = name.Trim();
         var dot = trimmed.LastIndexOf('.');
         return dot >= 0 ? trimmed[(dot + 1)..] : trimmed;
+    }
+
+    private static object SetH264Bitrate(AgentGuiConfig config, JsonElement args)
+    {
+        int kbps = args.TryGetProperty("bitrate_kbps", out var brEl) && brEl.TryGetInt32(out var brVal)
+            ? Math.Clamp(brVal, 250, 50_000)
+            : Math.Clamp(config.CppAgent?.H264BitrateKbps ?? 4500, 250, 50_000);
+        if (config.CppAgent is not null)
+        {
+            config.CppAgent.H264BitrateKbps = kbps;
+        }
+        bool applied = CppNativeBridge.TrySetEncoderBitrate(kbps);
+        return new
+        {
+            bitrate_kbps = kbps,
+            applied_live = applied,
+        };
     }
 
     private static object GetSystemInfo()

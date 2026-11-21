@@ -741,6 +741,8 @@
                                                 <ComboBox x:Name="VisionMonitorCombo" Style="{StaticResource SaaSComboBoxStyle}" Width="210" Margin="0,2,8,2" DisplayMemberPath="DisplayLabel"/>
                                                 <Button Content="Capture" Style="{StaticResource PrimaryBtnStyle}" Padding="12,6" FontSize="12" Click="OnCaptureScreenshotClick" Margin="0,2,8,2"/>
                                                 <Button Content="Full Desktop" Style="{StaticResource BtnStyle}" Padding="12,6" FontSize="12" Click="OnCaptureFullDesktopClick" Margin="0,2,8,2"/>
+                                                <Button Content="C++ H.264 Probe" Style="{StaticResource BtnStyle}" Padding="12,6" FontSize="12" Click="OnVisionCppProbeClick" Margin="0,2,8,2" ToolTip="Capture frame via C++20 DXGI and encode H.264 keyframe via Media Foundation"/>
+                                                <Button Content="Reset DXGI" Style="{StaticResource BtnStyle}" Padding="12,6" FontSize="12" Click="OnVisionResetDxgiClick" Margin="0,2,8,2" ToolTip="Reinitialize C++ DXGI Desktop Duplication output"/>
                                                 <Button x:Name="VisionZoomBtn" Content="Zoom: Fit" Style="{StaticResource BtnStyle}" Padding="12,6" FontSize="12" Click="OnVisionZoomToggleClick" Margin="0,2,8,2"/>
                                                 <Button Content="Open" Style="{StaticResource BtnStyle}" Padding="12,6" FontSize="12" Click="OnOpenScreenshotClick" Margin="0,2,8,2"/>
                                                 <Button Content="Copy Path" Style="{StaticResource BtnStyle}" Padding="12,6" FontSize="12" Click="OnCopyScreenshotPathClick" Margin="0,2,8,2"/>
@@ -763,7 +765,7 @@
                                                 </ScrollViewer>
                                                 <StackPanel x:Name="VisionEmptyState" HorizontalAlignment="Center" VerticalAlignment="Center" IsHitTestVisible="False">
                                                     <TextBlock Text="Click Capture to inspect your desktop session" FontSize="14" FontWeight="Medium" Foreground="{DynamicResource TextPrimary}" HorizontalAlignment="Center"/>
-                                                    <TextBlock Text="Multi-monitor GDI+ capture saved under ~/.ai-bridge/screenshots" FontSize="12" Foreground="{DynamicResource TextMuted}" Margin="0,6,0,0" HorizontalAlignment="Center"/>
+                                                    <TextBlock Text="Hardware C++20 DXGI Desktop Duplication &amp; Media Foundation H.264 with GDI fallback" FontSize="12" Foreground="{DynamicResource TextMuted}" Margin="0,6,0,0" HorizontalAlignment="Center"/>
                                                 </StackPanel>
                                             </Grid>
                                         </Border>
@@ -772,8 +774,11 @@
                                             <DockPanel>
                                                 <StackPanel DockPanel.Dock="Top" Margin="0,0,0,12">
                                                     <TextBlock Text="Display Topology" FontSize="11" FontWeight="SemiBold" Foreground="{DynamicResource TextMuted}"/>
-                                                    <TextBlock x:Name="VisionDisplayInfoText" Text="Detecting displays..." FontSize="11.5" FontFamily="Consolas" Foreground="{DynamicResource TextPrimary}" TextWrapping="Wrap" Margin="0,4,0,12"/>
-                                                    <Border Height="1" Background="{DynamicResource BorderHairline}" Margin="0,0,0,12"/>
+                                                    <TextBlock x:Name="VisionDisplayInfoText" Text="Detecting displays..." FontSize="11.5" FontFamily="Consolas" Foreground="{DynamicResource TextPrimary}" TextWrapping="Wrap" Margin="0,4,0,10"/>
+                                                    <Border Height="1" Background="{DynamicResource BorderHairline}" Margin="0,0,0,10"/>
+                                                    <TextBlock Text="C++20 DXGI &amp; H.264 Telemetry" FontSize="11" FontWeight="SemiBold" Foreground="{DynamicResource TextMuted}"/>
+                                                    <TextBlock x:Name="VisionCppMetricsText" Text="Engine: ai_bridge_native.dll ready" FontSize="11" FontFamily="Consolas" Foreground="{DynamicResource IndigoText}" TextWrapping="Wrap" Margin="0,4,0,10"/>
+                                                    <Border Height="1" Background="{DynamicResource BorderHairline}" Margin="0,0,0,10"/>
                                                     <TextBlock Text="Capture History" FontSize="12" FontWeight="Medium" Foreground="{DynamicResource TextSecondary}"/>
                                                 </StackPanel>
                                                 <Grid>
@@ -970,6 +975,7 @@
                                                 <Button x:Name="SetCatGenBtn" Content="General" Style="{StaticResource ChipBtnStyle}" Click="OnSettingsCategoryClick" Tag="GENERAL" Margin="0,2,4,2"/>
                                                 <Button x:Name="SetCatCpBtn" Content="Control Plane" Style="{StaticResource ChipBtnStyle}" Click="OnSettingsCategoryClick" Tag="CONTROL_PLANE" Margin="0,2,4,2"/>
                                                 <Button x:Name="SetCatAgentBtn" Content="Agent" Style="{StaticResource ChipBtnStyle}" Click="OnSettingsCategoryClick" Tag="AGENT" Margin="0,2,4,2"/>
+                                                <Button x:Name="SetCatCppBtn" Content="C++ Engine" Style="{StaticResource ChipBtnStyle}" Click="OnSettingsCategoryClick" Tag="CPP_AGENT" Margin="0,2,4,2"/>
                                                 <Button x:Name="SetCatLogBtn" Content="Logging" Style="{StaticResource ChipBtnStyle}" Click="OnSettingsCategoryClick" Tag="LOGGING" Margin="0,2,4,2"/>
                                                 <Button x:Name="SetCatSecBtn" Content="Security" Style="{StaticResource ChipBtnStyle}" Click="OnSettingsCategoryClick" Tag="SECURITY" Margin="0,2,4,2"/>
                                                 <Button x:Name="SetCatAppBtn" Content="Appearance" Style="{StaticResource ChipBtnStyle}" Click="OnSettingsCategoryClick" Tag="APPEARANCE" Margin="0,2,4,2"/>
@@ -1138,6 +1144,74 @@
                                                     </UniformGrid>
 
                                                     <CheckBox x:Name="SetAutoRefreshMonChk" Style="{StaticResource ToggleSwitchStyle}" Content="Auto-refresh System Monitor CPU, Memory, Disk &amp; Network telemetry"/>
+                                                </StackPanel>
+                                            </Border>
+
+                                            <!-- C++20 NATIVE AGENT, DXGI CAPTURE, MEDIA FOUNDATION H.264 & WEBRTC ENGINE -->
+                                            <Border x:Name="SetSectionCppAgent" Background="{DynamicResource BgCard}" BorderBrush="{DynamicResource BorderHairline}" BorderThickness="1" CornerRadius="12" Padding="20" Margin="0,0,0,14">
+                                                <StackPanel>
+                                                    <Grid Margin="0,0,0,12">
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="*"/>
+                                                            <ColumnDefinition Width="Auto"/>
+                                                        </Grid.ColumnDefinitions>
+                                                        <StackPanel Grid.Column="0">
+                                                            <TextBlock Text="C++20 Native Agent, DXGI Capture, Media Foundation H.264 &amp; WebRTC Engine" FontSize="13" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}"/>
+                                                            <TextBlock Text="Controls ai_bridge_native.dll (in-process P/Invoke), ai_bridge_service.exe (HMAC-SHA256 pipe server), and ai_bridge_desktop.exe (WebRTC/H.264 agent)" FontSize="11.5" Foreground="{DynamicResource TextMuted}" Margin="0,2,0,0"/>
+                                                        </StackPanel>
+                                                        <TextBlock Grid.Column="1" x:Name="SetCppStatusBadge" Text="C++ DLL &amp; Pipe Active" FontSize="11.5" FontFamily="Consolas" Foreground="{DynamicResource SuccessText}" VerticalAlignment="Center"/>
+                                                    </Grid>
+
+                                                    <CheckBox x:Name="SetCppAutoStartChk" Style="{StaticResource ToggleSwitchStyle}" Content="Auto-start C++ Supervisor Named-Pipe Server (ai_bridge_service.exe --pipe-server)"/>
+                                                    <CheckBox x:Name="SetCppPreferDxgiChk" Style="{StaticResource ToggleSwitchStyle}" Content="Prefer C++20 DXGI Desktop Duplication GPU capture (automatic GDI fallback on Session-0 / headless)" Margin="0,4,0,0"/>
+                                                    <CheckBox x:Name="SetCppPreferHwH264Chk" Style="{StaticResource ToggleSwitchStyle}" Content="Prefer Hardware H.264 Encoder MFT (NVIDIA NVENC / Intel QuickSync / AMD AMF)" Margin="0,4,0,0"/>
+                                                    <CheckBox x:Name="SetCppAdaptiveBitrateChk" Style="{StaticResource ToggleSwitchStyle}" Content="Enable Dynamic Adaptive Bitrate (ABR) scaling on WebRTC transport congestion" Margin="0,4,0,14"/>
+
+                                                    <UniformGrid Columns="3" Margin="-6,0,-6,12">
+                                                        <StackPanel Margin="6,0">
+                                                            <TextBlock Text="Target H.264 FPS (1–60)" FontSize="12" Foreground="{DynamicResource TextMuted}" Margin="0,0,0,6"/>
+                                                            <TextBox x:Name="SetCppFpsBox" Style="{StaticResource FieldStyle}" FontFamily="Consolas" Text="30"/>
+                                                        </StackPanel>
+                                                        <StackPanel Margin="6,0">
+                                                            <TextBlock Text="Target H.264 Bitrate (250–50000 kbps)" FontSize="12" Foreground="{DynamicResource TextMuted}" Margin="0,0,0,6"/>
+                                                            <TextBox x:Name="SetCppBitrateBox" Style="{StaticResource FieldStyle}" FontFamily="Consolas" Text="4500"/>
+                                                        </StackPanel>
+                                                        <StackPanel Margin="6,0">
+                                                            <TextBlock Text="H.264 Keyframe Interval (1–15s)" FontSize="12" Foreground="{DynamicResource TextMuted}" Margin="0,0,0,6"/>
+                                                            <TextBox x:Name="SetCppKeyframeBox" Style="{StaticResource FieldStyle}" FontFamily="Consolas" Text="2"/>
+                                                        </StackPanel>
+                                                    </UniformGrid>
+
+                                                    <UniformGrid Columns="3" Margin="-6,0,-6,14">
+                                                        <StackPanel Margin="6,0">
+                                                            <TextBlock Text="C++ WebRTC TURN Server URL (optional)" FontSize="12" Foreground="{DynamicResource TextMuted}" Margin="0,0,0,6"/>
+                                                            <TextBox x:Name="SetCppTurnUrlBox" Style="{StaticResource FieldStyle}" FontFamily="Consolas" ToolTip="Example: turn:turn.example.com:3478"/>
+                                                        </StackPanel>
+                                                        <StackPanel Margin="6,0">
+                                                            <TextBlock Text="TURN Username" FontSize="12" Foreground="{DynamicResource TextMuted}" Margin="0,0,0,6"/>
+                                                            <TextBox x:Name="SetCppTurnUserBox" Style="{StaticResource FieldStyle}" FontFamily="Consolas"/>
+                                                        </StackPanel>
+                                                        <StackPanel Margin="6,0">
+                                                            <TextBlock Text="TURN Credential / Secret" FontSize="12" Foreground="{DynamicResource TextMuted}" Margin="0,0,0,6"/>
+                                                            <PasswordBox x:Name="SetCppTurnCredBox" Style="{StaticResource PasswordFieldStyle}" FontFamily="Consolas"/>
+                                                        </StackPanel>
+                                                    </UniformGrid>
+
+                                                    <WrapPanel Margin="0,0,0,10">
+                                                        <Button Content="Apply H.264 Bitrate Live" Style="{StaticResource PrimaryBtnStyle}" Padding="10,6" FontSize="11.5" Click="OnCppApplyBitrateClick" Margin="0,2,6,2"/>
+                                                        <Button Content="Probe DXGI + H.264" Style="{StaticResource BtnStyle}" Padding="10,6" FontSize="11.5" Click="OnCppProbeEngineClick" Margin="0,2,6,2"/>
+                                                        <Button Content="Run C++ Self-Tests (7/7)" Style="{StaticResource BtnStyle}" Padding="10,6" FontSize="11.5" Click="OnCppRunSelfTestsClick" Margin="0,2,6,2"/>
+                                                        <Button Content="C++ System Health JSON" Style="{StaticResource BtnStyle}" Padding="10,6" FontSize="11.5" Click="OnCppSystemHealthClick" Margin="0,2,6,2"/>
+                                                        <Button Content="Ping Pipe" Style="{StaticResource BtnStyle}" Padding="10,6" FontSize="11.5" Click="OnCppPingPipeClick" Margin="0,2,6,2"/>
+                                                        <Button Content="Restart C++ Pipe Server" Style="{StaticResource BtnStyle}" Padding="10,6" FontSize="11.5" Click="OnCppRestartSupervisorClick" Margin="0,2,6,2"/>
+                                                        <Button Content="Stop Pipe Server" Style="{StaticResource DangerBtnStyle}" Padding="10,6" FontSize="11.5" Click="OnCppStopSupervisorClick" Margin="0,2,6,2"/>
+                                                        <Button Content="Release Held Keys" Style="{StaticResource DangerBtnStyle}" Padding="10,6" FontSize="11.5" Click="OnCppReleaseKeysClick" Margin="0,2,0,2"/>
+                                                    </WrapPanel>
+
+                                                    <TextBox x:Name="SetCppConsoleBox" Height="130" Background="{DynamicResource ConsoleCardBg}" Foreground="#CBD5E1"
+                                                             BorderThickness="0" FontFamily="Consolas" FontSize="11" IsReadOnly="True" Padding="10"
+                                                             TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
+                                                             Text="Click 'Probe DXGI + H.264' or 'Run C++ Self-Tests (7/7)' to inspect the native C++20 engine."/>
                                                 </StackPanel>
                                             </Border>
 
@@ -1599,11 +1673,13 @@
                                                                     <WrapPanel Margin="0,0,0,8">
                                                                         <Button Content="Start / Stop" Style="{StaticResource BtnStyle}" Padding="8,4" FontSize="11" Click="OnToggleAgentClick" Margin="0,2,4,2"/>
                                                                         <Button Content="Ping Pipe" Style="{StaticResource BtnStyle}" Padding="8,4" FontSize="11" Click="OnAgentPipePingClick" Margin="0,2,4,2"/>
-                                                                        <Button Content="Pipe Status" Style="{StaticResource BtnStyle}" Padding="8,4" FontSize="11" Click="OnAgentPipeStatusClick" Margin="0,2,4,2"/>
+                                                                        <Button Content="Pipe Status &amp; H.264" Style="{StaticResource BtnStyle}" Padding="8,4" FontSize="11" Click="OnAgentPipeStatusClick" Margin="0,2,4,2"/>
+                                                                        <Button Content="C++ Self-Test" Style="{StaticResource BtnStyle}" Padding="8,4" FontSize="11" Click="OnAgentCppSelfTestClick" Margin="0,2,4,2"/>
+                                                                        <Button Content="Restart Pipe" Style="{StaticResource BtnStyle}" Padding="8,4" FontSize="11" Click="OnAgentRestartPipeClick" Margin="0,2,4,2"/>
                                                                         <Button Content="Push Policy" Style="{StaticResource BtnStyle}" Padding="8,4" FontSize="11" Click="OnAgentPipePushPolicyClick" Margin="0,2,4,2"/>
                                                                         <Button Content="Release Input" Style="{StaticResource DangerBtnStyle}" Padding="8,4" FontSize="11" Click="OnAgentPipeReleaseInputClick" Margin="0,2,0,2"/>
                                                                     </WrapPanel>
-                                                                    <TextBox x:Name="AgPipeConsoleBox" Height="64" Background="{DynamicResource ConsoleCardBg}" Foreground="#CBD5E1"
+                                                                    <TextBox x:Name="AgPipeConsoleBox" Height="96" Background="{DynamicResource ConsoleCardBg}" Foreground="#CBD5E1"
                                                                              BorderThickness="0" FontFamily="Consolas" FontSize="10.5" IsReadOnly="True" Padding="8"
                                                                              TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" Text="Pipe output appears here."/>
                                                                 </StackPanel>

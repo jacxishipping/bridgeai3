@@ -83,7 +83,8 @@ public static class NamedPipeBridge
         string? pipeName = null,
         string? hmacSecret = null,
         string? controlUrl = null,
-        string? deviceToken = null)
+        string? deviceToken = null,
+        CppAgentSettings? cppSettings = null)
     {
         var targetPipe = NormalizePipeName(pipeName);
         ActivePipeName = targetPipe;
@@ -92,9 +93,47 @@ public static class NamedPipeBridge
             : hmacSecret!;
         ActiveHmacSecret = secret;
 
+        var cfg = cppSettings ?? new CppAgentSettings();
+        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        var cfgDir = Path.Combine(home, ".ai-bridge");
+        Directory.CreateDirectory(cfgDir);
+        var cfgPath = Path.Combine(cfgDir, "cpp_service_runtime.json");
+        var desktopExe = FindCppExecutable("ai_bridge_desktop.exe") ?? "";
+
+        try
+        {
+            var cfgJson = JsonSerializer.Serialize(new
+            {
+                pipe_name = $@"\\.\pipe\{targetPipe}",
+                pipe_secret = secret,
+                control_url = controlUrl ?? "",
+                device_token = deviceToken ?? "",
+                desktop_agent_path = desktopExe,
+                turn_url = cfg.TurnUrl ?? "",
+                turn_username = cfg.TurnUsername ?? "",
+                turn_credential = cfg.TurnCredential ?? "",
+                target_fps = Math.Clamp(cfg.H264TargetFps, 1, 60),
+                bitrate_kbps = Math.Clamp(cfg.H264BitrateKbps, 250, 50_000),
+                keyframe_interval_sec = Math.Clamp(cfg.H264KeyframeIntervalSec, 1, 15),
+                prefer_dxgi = cfg.PreferDxgiCapture,
+                prefer_hardware_h264 = cfg.H264PreferHardware,
+                adaptive_bitrate = cfg.H264AdaptiveBitrate,
+            }, new JsonSerializerOptions { WriteIndented = true });
+            File.WriteAllText(cfgPath, cfgJson, Encoding.UTF8);
+        }
+        catch
+        {
+            // Non-fatal if config write fails
+        }
+
         if (IsDesktopAgentAvailable(targetPipe))
         {
             return true;
+        }
+
+        if (!cfg.AutoStartSupervisor)
+        {
+            return false;
         }
 
         lock (_procLock)
@@ -112,22 +151,6 @@ public static class NamedPipeBridge
 
             try
             {
-                var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-                var cfgDir = Path.Combine(home, ".ai-bridge");
-                Directory.CreateDirectory(cfgDir);
-                var cfgPath = Path.Combine(cfgDir, "cpp_service_runtime.json");
-                var desktopExe = FindCppExecutable("ai_bridge_desktop.exe") ?? "";
-
-                var cfgJson = JsonSerializer.Serialize(new
-                {
-                    pipe_name = $@"\\.\pipe\{targetPipe}",
-                    pipe_secret = secret,
-                    control_url = controlUrl ?? "",
-                    device_token = deviceToken ?? "",
-                    desktop_agent_path = desktopExe,
-                }, new JsonSerializerOptions { WriteIndented = true });
-                File.WriteAllText(cfgPath, cfgJson, Encoding.UTF8);
-
                 var psi = new ProcessStartInfo
                 {
                     FileName = serviceExe,
@@ -157,6 +180,41 @@ public static class NamedPipeBridge
         }
 
         return IsDesktopAgentAvailable(targetPipe);
+    }
+
+    public static bool RestartCppSupervisor(
+        string? pipeName = null,
+        string? hmacSecret = null,
+        string? controlUrl = null,
+        string? deviceToken = null,
+        CppAgentSettings? cppSettings = null)
+    {
+        StopManagedCppSupervisor();
+        try
+        {
+            foreach (var p in Process.GetProcessesByName("ai_bridge_service"))
+            {
+                try { p.Kill(); p.Dispose(); } catch { }
+            }
+        }
+        catch { }
+
+        var forceSettings = cppSettings is null
+            ? new CppAgentSettings { AutoStartSupervisor = true }
+            : new CppAgentSettings
+            {
+                AutoStartSupervisor = true,
+                PreferDxgiCapture = cppSettings.PreferDxgiCapture,
+                H264TargetFps = cppSettings.H264TargetFps,
+                H264BitrateKbps = cppSettings.H264BitrateKbps,
+                H264KeyframeIntervalSec = cppSettings.H264KeyframeIntervalSec,
+                H264PreferHardware = cppSettings.H264PreferHardware,
+                H264AdaptiveBitrate = cppSettings.H264AdaptiveBitrate,
+                TurnUrl = cppSettings.TurnUrl,
+                TurnUsername = cppSettings.TurnUsername,
+                TurnCredential = cppSettings.TurnCredential,
+            };
+        return EnsureCppSupervisorRunning(pipeName, hmacSecret, controlUrl, deviceToken, forceSettings);
     }
 
     public static void StopManagedCppSupervisor()
@@ -316,12 +374,16 @@ public static class NamedPipeBridge
         }
     }
 
-    public static async Task<(bool Ok, string Response)> RunCppDesktopProbeAsync(int monitorIndex = 0, CancellationToken ct = default)
+    public static async Task<(bool Ok, string Response)> RunCppDesktopProbeAsync(
+        int monitorIndex = 0,
+        int fps = 30,
+        int bitrateKbps = 4500,
+        CancellationToken ct = default)
     {
         var desktopExe = FindCppExecutable("ai_bridge_desktop.exe");
         if (desktopExe is null)
         {
-            return (CppNativeBridge.IsAvailable(), CppNativeBridge.ProbeCaptureAndH264Json(monitorIndex));
+            return (CppNativeBridge.IsAvailable(), CppNativeBridge.ProbeCaptureAndH264Json(monitorIndex, fps, bitrateKbps));
         }
 
         try
@@ -329,8 +391,8 @@ public static class NamedPipeBridge
             var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
             var cfgPath = Path.Combine(home, ".ai-bridge", "cpp_service_runtime.json");
             var args = File.Exists(cfgPath)
-                ? $"--monitor {monitorIndex} --config \"{cfgPath}\""
-                : $"--monitor {monitorIndex}";
+                ? $"--monitor {monitorIndex} --fps {fps} --bitrate-kbps {bitrateKbps} --config \"{cfgPath}\""
+                : $"--monitor {monitorIndex} --fps {fps} --bitrate-kbps {bitrateKbps}";
 
             var psi = new ProcessStartInfo
             {
@@ -345,13 +407,14 @@ public static class NamedPipeBridge
             using var proc = Process.Start(psi);
             if (proc is null)
             {
-                return (CppNativeBridge.IsAvailable(), CppNativeBridge.ProbeCaptureAndH264Json(monitorIndex));
+                return (CppNativeBridge.IsAvailable(), CppNativeBridge.ProbeCaptureAndH264Json(monitorIndex, fps, bitrateKbps));
             }
             var stdout = await proc.StandardOutput.ReadToEndAsync(ct);
             await proc.WaitForExitAsync(ct);
+            var pinvokeJson = CppNativeBridge.ProbeCaptureAndH264Json(monitorIndex, fps, bitrateKbps);
             if (!string.IsNullOrWhiteSpace(stdout))
             {
-                return (proc.ExitCode == 0 || proc.ExitCode == 3, stdout.Trim());
+                return (proc.ExitCode == 0 || proc.ExitCode == 3, $"{stdout.Trim()}\n\n[In-Process P/Invoke DXGI + Media Foundation H.264]\n{pinvokeJson}");
             }
         }
         catch
@@ -359,7 +422,45 @@ public static class NamedPipeBridge
             // Fall back to direct in-process P/Invoke probe
         }
 
-        return (CppNativeBridge.IsAvailable(), CppNativeBridge.ProbeCaptureAndH264Json(monitorIndex));
+        return (CppNativeBridge.IsAvailable(), CppNativeBridge.ProbeCaptureAndH264Json(monitorIndex, fps, bitrateKbps));
+    }
+
+    public static async Task<(bool Ok, string Output)> RunCppSelfTestsAsync(CancellationToken ct = default)
+    {
+        var testsExe = FindCppExecutable("ai_bridge_tests.exe");
+        if (testsExe is null)
+        {
+            return (false, "ai_bridge_tests.exe not found in installation directory.");
+        }
+
+        try
+        {
+            var psi = new ProcessStartInfo
+            {
+                FileName = testsExe,
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true,
+                WorkingDirectory = Path.GetDirectoryName(testsExe) ?? AppContext.BaseDirectory,
+            };
+            using var proc = Process.Start(psi);
+            if (proc is null)
+            {
+                return (false, "Failed to start ai_bridge_tests.exe.");
+            }
+            var stdout = await proc.StandardOutput.ReadToEndAsync(ct);
+            var stderr = await proc.StandardError.ReadToEndAsync(ct);
+            await proc.WaitForExitAsync(ct);
+            var combined = string.IsNullOrWhiteSpace(stderr)
+                ? stdout.Trim()
+                : $"{stdout.Trim()}\n{stderr.Trim()}";
+            return (proc.ExitCode == 0, combined);
+        }
+        catch (Exception ex)
+        {
+            return (false, $"C++ self-test execution error: {ex.Message}");
+        }
     }
 
     public static Task<(bool Ok, string Response)> PingHeartbeatAsync(CancellationToken ct = default) =>

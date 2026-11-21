@@ -150,6 +150,38 @@ public static class CppNativeBridge
     private static bool? _dllAvailable;
     private static readonly object _sync = new();
     public static AIBridgeCaptureMetrics LastMetrics { get; private set; }
+    public static bool PreferDxgiCapture { get; set; } = true;
+    public static int DefaultH264Fps { get; set; } = 30;
+    public static int DefaultH264BitrateKbps { get; set; } = 4500;
+
+    public static bool TrySetEncoderBitrate(int bitrateKbps)
+    {
+        if (!IsAvailable()) return false;
+        try
+        {
+            int clamped = Math.Clamp(bitrateKbps, 250, 50_000);
+            DefaultH264BitrateKbps = clamped;
+            return aibridge_set_encoder_bitrate(clamped) != 0;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    public static bool ReinitializeCapture(int monitorIndex = 0)
+    {
+        if (!IsAvailable()) return false;
+        try
+        {
+            aibridge_capture_shutdown();
+            return aibridge_capture_init(monitorIndex) != 0;
+        }
+        catch
+        {
+            return false;
+        }
+    }
 
     public static bool IsAvailable()
     {
@@ -216,7 +248,7 @@ public static class CppNativeBridge
     {
         result = null;
         metrics = default;
-        if (!IsAvailable()) return false;
+        if (!PreferDxgiCapture || !IsAvailable()) return false;
 
         try
         {
@@ -268,7 +300,7 @@ public static class CppNativeBridge
     {
         result = null;
         metrics = default;
-        if (!IsAvailable() || hwnd <= 0) return false;
+        if (!PreferDxgiCapture || !IsAvailable() || hwnd <= 0) return false;
 
         try
         {
