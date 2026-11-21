@@ -681,5 +681,16 @@ await RunTest("QuickCommandOverlayWindow: instantiates and dispatches submitted 
     Assert(received == "draw a car in Paint", $"Expected submitted command, got '{received}'");
 });
 
+// 23. C++20 WebRTC H.264 Stream CLI argument builder & lifecycle
+await RunTest("NamedPipeBridge: BuildCppWebRtcArguments formats monitor, fps, bitrate & session", () =>
+{
+    var args = NamedPipeBridge.BuildCppWebRtcArguments("https://clideos.us", "tok_123", "sess_abc", 1, 60, 8000);
+    Assert(args.Contains("--monitor 1") && args.Contains("--fps 60") && args.Contains("--bitrate-kbps 8000") && args.Contains("--session-id \"sess_abc\""),
+        $"Unexpected WebRTC args: {args}");
+    NamedPipeBridge.StopCppWebRtcSession();
+    Assert(!NamedPipeBridge.IsCppWebRtcRunning, "Expected IsCppWebRtcRunning to be false after stop");
+    return Task.CompletedTask;
+});
+
 Console.WriteLine($"\nSummary: {passed} passed, {failed} failed ({passed + failed} total)");
 return failed > 0 ? 1 : 0;

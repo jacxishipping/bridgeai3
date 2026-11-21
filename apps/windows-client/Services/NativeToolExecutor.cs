@@ -1229,6 +1229,20 @@ public sealed class NativeToolExecutor
         if (string.Equals(msgType, "START_WEBRTC_SESSION", StringComparison.OrdinalIgnoreCase))
         {
             AgentTakeoverService.NotifyAgentActivity();
+            var sessId = args.TryGetProperty("session_id", out var sEl) ? sEl.GetString() ?? "" : "";
+            int monIdx = args.TryGetProperty("monitor_index", out var mEl) && mEl.TryGetInt32(out var mv) ? mv : 0;
+            int fps = args.TryGetProperty("fps", out var fEl) && fEl.TryGetInt32(out var fv) ? fv : (config.CppAgent?.H264TargetFps ?? 30);
+            int kbps = args.TryGetProperty("bitrate_kbps", out var bEl) && bEl.TryGetInt32(out var bv) ? bv : (config.CppAgent?.H264BitrateKbps ?? 4500);
+            var token = new ConfigService().LoadToken();
+            var (webOk, webDetail) = NamedPipeBridge.StartCppWebRtcSession(config.ControlUrl, token, sessId, monIdx, fps, kbps);
+            var (pipeOk, pipeReply) = await NamedPipeBridge.SendCommandAsync(msgType, args, ct: ct);
+            return new { status = (webOk || pipeOk) ? "ok" : "error", webrtc_started = webOk, webrtc_detail = webDetail, pipe_response = pipeReply };
+        }
+        if (string.Equals(msgType, "STOP_WEBRTC_SESSION", StringComparison.OrdinalIgnoreCase))
+        {
+            NamedPipeBridge.StopCppWebRtcSession();
+            var (_, stopReply) = await NamedPipeBridge.SendCommandAsync(msgType, args, ct: ct);
+            return new { status = "ok", webrtc_stopped = true, pipe_response = stopReply };
         }
         var (ok, reply) = await NamedPipeBridge.SendCommandAsync(msgType, args, ct: ct);
         if (!ok)

@@ -1862,6 +1862,26 @@ public partial class MainWindow : Window
         ShowToast(ok ? $"Reinitialized C++ DXGI on display {monIdx}" : "Reinitialized GDI fallback");
     }
 
+    private void OnVisionToggleWebRtcClick(object sender, RoutedEventArgs e)
+    {
+        if (NamedPipeBridge.IsCppWebRtcRunning)
+        {
+            NamedPipeBridge.StopCppWebRtcSession();
+            VisionWebRtcBtn.Content = "Start H.264 Stream";
+            VisionMetaText.Text = "C++20 H.264 WebRTC stream stopped";
+            ShowToast("Stopped C++20 H.264 stream");
+            return;
+        }
+        int monIdx = VisionMonitorCombo.SelectedItem is MonitorDescriptor m ? m.Index : 0;
+        int fps = Math.Clamp(_config.CppAgent?.H264TargetFps ?? 30, 1, 60);
+        int kbps = Math.Clamp(_config.CppAgent?.H264BitrateKbps ?? 4500, 250, 50_000);
+        var (ok, detail) = NamedPipeBridge.StartCppWebRtcSession(_config.ControlUrl, _deviceToken, $"live-{Guid.NewGuid():N}"[..12], monIdx, fps, kbps);
+        VisionWebRtcBtn.Content = ok ? "Stop H.264 Stream" : "Start H.264 Stream";
+        VisionMetaText.Text = detail;
+        AppendLog(ok ? "ok" : "warn", detail);
+        ShowToast(ok ? $"Started {fps} FPS H.264 stream" : detail);
+    }
+
     private void LoadScreenshotPreview(string path)
     {
         _lastScreenshotPath = path;

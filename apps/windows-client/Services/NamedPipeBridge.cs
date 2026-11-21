@@ -28,7 +28,119 @@ public static class NamedPipeBridge
     public const int MaxMessageBytes = 65536;
 
     private static Process? _managedServiceProcess;
+    private static Process? _managedWebRtcProcess;
     private static readonly object _procLock = new();
+
+    public static bool IsCppWebRtcRunning
+    {
+        get
+        {
+            lock (_procLock)
+            {
+                return _managedWebRtcProcess is { HasExited: false };
+            }
+        }
+    }
+
+    public static string BuildCppWebRtcArguments(
+        string controlUrl,
+        string deviceToken,
+        string sessionId,
+        int monitorIndex = 0,
+        int fps = 30,
+        int bitrateKbps = 4500,
+        string? configPath = null)
+    {
+        int clampedFps = Math.Clamp(fps, 1, 60);
+        int clampedKbps = Math.Clamp(bitrateKbps, 250, 50_000);
+        var parts = new System.Collections.Generic.List<string>
+        {
+            $"--monitor {Math.Max(0, monitorIndex)}",
+            $"--fps {clampedFps}",
+            $"--bitrate-kbps {clampedKbps}",
+        };
+        if (!string.IsNullOrWhiteSpace(controlUrl))
+        {
+            parts.Add($"--control-url \"{controlUrl.Trim()}\"");
+        }
+        if (!string.IsNullOrWhiteSpace(deviceToken))
+        {
+            parts.Add($"--device-token \"{deviceToken.Trim()}\"");
+        }
+        if (!string.IsNullOrWhiteSpace(sessionId))
+        {
+            parts.Add($"--session-id \"{sessionId.Trim()}\"");
+        }
+        if (!string.IsNullOrWhiteSpace(configPath) && File.Exists(configPath))
+        {
+            parts.Add($"--config \"{configPath}\"");
+        }
+        return string.Join(" ", parts);
+    }
+
+    public static (bool Ok, string Detail) StartCppWebRtcSession(
+        string controlUrl,
+        string deviceToken,
+        string sessionId,
+        int monitorIndex = 0,
+        int fps = 30,
+        int bitrateKbps = 4500)
+    {
+        StopCppWebRtcSession();
+        var desktopExe = FindCppExecutable("ai_bridge_desktop.exe");
+        if (desktopExe is null)
+        {
+            return (false, "ai_bridge_desktop.exe not found in application directory.");
+        }
+        lock (_procLock)
+        {
+            try
+            {
+                var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+                var cfgPath = Path.Combine(home, ".ai-bridge", "cpp_service_runtime.json");
+                var args = BuildCppWebRtcArguments(controlUrl, deviceToken, sessionId, monitorIndex, fps, bitrateKbps, cfgPath);
+                var psi = new ProcessStartInfo
+                {
+                    FileName = desktopExe,
+                    Arguments = args,
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    WindowStyle = ProcessWindowStyle.Hidden,
+                    WorkingDirectory = Path.GetDirectoryName(desktopExe) ?? AppContext.BaseDirectory,
+                };
+                _managedWebRtcProcess = Process.Start(psi);
+                if (_managedWebRtcProcess is null)
+                {
+                    return (false, "Failed to launch ai_bridge_desktop.exe.");
+                }
+                return (true, $"Started C++20 H.264 WebRTC agent (PID {_managedWebRtcProcess.Id}, {Math.Clamp(fps, 1, 60)} FPS @ {Math.Clamp(bitrateKbps, 250, 50_000)} kbps).");
+            }
+            catch (Exception ex)
+            {
+                return (false, $"WebRTC launch error: {ex.Message}");
+            }
+        }
+    }
+
+    public static void StopCppWebRtcSession()
+    {
+        lock (_procLock)
+        {
+            try
+            {
+                if (_managedWebRtcProcess is { HasExited: false })
+                {
+                    _managedWebRtcProcess.Kill(entireProcessTree: true);
+                    _managedWebRtcProcess.Dispose();
+                }
+            }
+            catch { }
+            finally
+            {
+                _managedWebRtcProcess = null;
+            }
+        }
+    }
 
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern bool WaitNamedPipeW(string lpNamedPipeName, uint nTimeOut);
@@ -219,6 +331,7 @@ public static class NamedPipeBridge
 
     public static void StopManagedCppSupervisor()
     {
+        StopCppWebRtcSession();
         lock (_procLock)
         {
             try
