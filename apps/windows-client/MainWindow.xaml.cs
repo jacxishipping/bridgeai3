@@ -47,6 +47,7 @@ public partial class MainWindow : Window
     private readonly ObservableCollection<AgentChatThread> _chatThreads = new();
     private AgentChatThread _activeThread = new() { Title = "New Chat", Preview = "Ready on this Windows PC" };
     private bool _isChatBusy;
+    private System.Threading.CancellationTokenSource? _activeChatCts;
     private string _operatorToken = "";
     private bool _operatorIsAdminToken;
 
@@ -2943,6 +2944,13 @@ public partial class MainWindow : Window
 
     private async void OnAgSendChatClick(object sender, RoutedEventArgs e)
     {
+        if (_isChatBusy)
+        {
+            _activeChatCts?.Cancel();
+            AgentTakeoverService.TakeOver();
+            ShowToast("Stopping AI Agent run...");
+            return;
+        }
         var text = AgPromptBox.Text.Trim();
         if (string.IsNullOrWhiteSpace(text)) return;
         AgPromptBox.Clear();
@@ -2953,9 +2961,12 @@ public partial class MainWindow : Window
     {
         if (_isChatBusy || string.IsNullOrWhiteSpace(prompt)) return;
         _isChatBusy = true;
-        AgSendBtn.IsEnabled = false;
-        AgSendBtn.Content = "Thinking...";
+        _activeChatCts = new System.Threading.CancellationTokenSource();
+        var chatCt = _activeChatCts.Token;
+        AgSendBtn.Content = "Stop ■";
+        AgSendBtn.Style = (Style)FindResource("DangerBtnStyle");
 
+        AgentChatMessage? liveProgressMsg = null;
         try
         {
             if (_activeThread.Messages.Count == 0)
@@ -2992,7 +3003,6 @@ public partial class MainWindow : Window
                 if (modeTag is "openai" or "anthropic" or "gemini" &&
                     !string.Equals(modeTag, agent.Provider, StringComparison.OrdinalIgnoreCase))
                 {
-                    // Allow header mode switcher to temporarily override provider cleanly if requested
                     agent.Provider = modeTag;
                 }
 
@@ -3000,11 +3010,45 @@ public partial class MainWindow : Window
                     .TakeLast(16)
                     .Select(m => (m.Role, m.Content))
                     .ToList();
+
+                liveProgressMsg = new AgentChatMessage
+                {
+                    Role = "assistant",
+                    Content = "Thinking and planning desktop actions...",
+                    ToolsSummary = $"{agent.AgentName} · Live Execution",
+                    Timestamp = DateTime.Now.ToString("HH:mm:ss"),
+                };
+                _activeThread.Messages.Add(liveProgressMsg);
+                SyncChatStreamVisibility();
+
+                var progressLines = new List<string>();
+                void OnStepProgress(string line)
+                {
+                    Dispatcher.Invoke(() =>
+                    {
+                        progressLines.Add(line);
+                        if (liveProgressMsg is not null)
+                        {
+                            liveProgressMsg.Content = string.Join("\n", progressLines.TakeLast(10));
+                            AgMessagesList.Items.Refresh();
+                            AgChatScroll.ScrollToEnd();
+                        }
+                    });
+                }
+
                 var (dOk, dReply, dSummary, dShot, dErr) = await _agentRuntime.RunChatAsync(
                     effConfig,
                     _agentApiKey,
                     historyPayload,
-                    confirmMutatingToolAsync: async (tool, argsJson) => await RequestLocalApprovalAsync(tool, "agent-chat", argsJson));
+                    confirmMutatingToolAsync: async (tool, argsJson) => await RequestLocalApprovalAsync(tool, "agent-chat", argsJson),
+                    ct: chatCt,
+                    onProgress: OnStepProgress);
+
+                if (liveProgressMsg is not null)
+                {
+                    _activeThread.Messages.Remove(liveProgressMsg);
+                    liveProgressMsg = null;
+                }
 
                 if (dOk)
                 {
@@ -3127,11 +3171,27 @@ public partial class MainWindow : Window
             AgThreadsList.Items.Refresh();
             SyncChatStreamVisibility();
         }
+        catch (OperationCanceledException)
+        {
+            if (liveProgressMsg is not null) _activeThread.Messages.Remove(liveProgressMsg);
+            _activeThread.Messages.Add(new AgentChatMessage
+            {
+                Role = "assistant",
+                Content = "Stopped by user.",
+                ToolsSummary = "Cancelled",
+                Timestamp = DateTime.Now.ToString("HH:mm:ss"),
+            });
+            AgThreadsList.Items.Refresh();
+            SyncChatStreamVisibility();
+        }
         finally
         {
+            _activeChatCts?.Dispose();
+            _activeChatCts = null;
             _isChatBusy = false;
             AgSendBtn.IsEnabled = true;
             AgSendBtn.Content = "Send ↑";
+            AgSendBtn.Style = (Style)FindResource("PrimaryBtnStyle");
             AgPromptBox.Focus();
         }
     }

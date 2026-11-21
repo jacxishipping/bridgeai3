@@ -284,7 +284,8 @@ public sealed class DeviceAgentRuntimeService : IDisposable
         string apiKey,
         IEnumerable<(string Role, string Content)> history,
         Func<string, string, Task<bool>>? confirmMutatingToolAsync = null,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        Action<string>? onProgress = null)
     {
         var agent = config.DeviceAgent ?? new DeviceAgentSettings();
         var provider = (agent.Provider ?? "openai").Trim().ToLowerInvariant();
@@ -301,8 +302,8 @@ public sealed class DeviceAgentRuntimeService : IDisposable
         }
 
         return provider == "anthropic"
-            ? await RunAnthropicLoopAsync(config, agent, baseUrl, model, apiKey, history, confirmMutatingToolAsync, ct)
-            : await RunOpenAiCompatLoopAsync(config, agent, baseUrl, model, apiKey, history, confirmMutatingToolAsync, ct);
+            ? await RunAnthropicLoopAsync(config, agent, baseUrl, model, apiKey, history, confirmMutatingToolAsync, onProgress, ct)
+            : await RunOpenAiCompatLoopAsync(config, agent, baseUrl, model, apiKey, history, confirmMutatingToolAsync, onProgress, ct);
     }
 
     private async Task<(bool Ok, string ReplyText, string ToolsSummary, string? ScreenshotBase64, string Error)> RunOpenAiCompatLoopAsync(
@@ -313,6 +314,7 @@ public sealed class DeviceAgentRuntimeService : IDisposable
         string apiKey,
         IEnumerable<(string Role, string Content)> history,
         Func<string, string, Task<bool>>? confirmMutatingToolAsync,
+        Action<string>? onProgress,
         CancellationToken ct)
     {
         var messages = new List<object>
@@ -414,7 +416,7 @@ public sealed class DeviceAgentRuntimeService : IDisposable
                     string? stepShotTool = null;
                     foreach (var (tName, tArgsJson) in textCalls)
                     {
-                        var toolResult = await ExecuteGuardedToolAsync(tName, tArgsJson, config, agent, confirmMutatingToolAsync, ct);
+                        var toolResult = await ExecuteGuardedToolAsync(tName, tArgsJson, config, agent, confirmMutatingToolAsync, onProgress, ct);
                         executedTools.Add(tName);
                         if (toolResult.ScreenshotBase64 is not null)
                         {
@@ -492,7 +494,7 @@ public sealed class DeviceAgentRuntimeService : IDisposable
             string? nativeStepShotTool = null;
             foreach (var (id, name, argsJson) in callItems)
             {
-                var toolResult = await ExecuteGuardedToolAsync(name, argsJson, config, agent, confirmMutatingToolAsync, ct);
+                var toolResult = await ExecuteGuardedToolAsync(name, argsJson, config, agent, confirmMutatingToolAsync, onProgress, ct);
                 executedTools.Add(name);
                 if (toolResult.ScreenshotBase64 is not null)
                 {
@@ -536,6 +538,7 @@ public sealed class DeviceAgentRuntimeService : IDisposable
         string apiKey,
         IEnumerable<(string Role, string Content)> history,
         Func<string, string, Task<bool>>? confirmMutatingToolAsync,
+        Action<string>? onProgress,
         CancellationToken ct)
     {
         var messages = new List<object>();
@@ -623,7 +626,7 @@ public sealed class DeviceAgentRuntimeService : IDisposable
             var toolResults = new List<object>();
             foreach (var (id, name, argsJson) in toolUses)
             {
-                var toolResult = await ExecuteGuardedToolAsync(name, argsJson, config, agent, confirmMutatingToolAsync, ct);
+                var toolResult = await ExecuteGuardedToolAsync(name, argsJson, config, agent, confirmMutatingToolAsync, onProgress, ct);
                 executedTools.Add(name);
                 if (toolResult.ScreenshotBase64 is not null)
                 {
@@ -660,8 +663,10 @@ public sealed class DeviceAgentRuntimeService : IDisposable
         AgentGuiConfig config,
         DeviceAgentSettings agent,
         Func<string, string, Task<bool>>? confirmMutatingToolAsync,
+        Action<string>? onProgress,
         CancellationToken ct)
     {
+        ct.ThrowIfCancellationRequested();
         if (!IsToolAllowed(toolName, config, out var denyReason))
         {
             return (JsonSerializer.Serialize(new { error = denyReason, blocked_by = "agent_settings" }), null);
@@ -676,7 +681,10 @@ public sealed class DeviceAgentRuntimeService : IDisposable
             }
         }
 
-        var (_, resultJson) = await _executor.ExecuteAsync(toolName, argsJson, config, ct);
+        onProgress?.Invoke($"▶ Executing {toolName}...");
+        AgentTakeoverService.UpdateActionLabel($"Running {toolName}");
+        var (ok, resultJson) = await _executor.ExecuteAsync(toolName, argsJson, config, ct);
+        onProgress?.Invoke(ok ? $"✓ {toolName} completed" : $"✗ {toolName} failed");
         string? shot = null;
         try
         {

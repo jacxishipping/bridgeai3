@@ -626,5 +626,17 @@ await RunTest("DeviceAgentRuntimeService: Vision-in-the-Loop compresses PNG scre
     return Task.CompletedTask;
 });
 
+// 20. Live HUD action label & RunChatAsync cancellation
+await RunTest("AgentTakeoverService & DeviceAgentRuntimeService: Live HUD action label & cancellation", () =>
+{
+    AgentTakeoverService.UpdateActionLabel("Drawing car wheels");
+    var rt = new DeviceAgentRuntimeService(new NativeToolExecutor(new SystemMonitorService(), Path.GetTempPath()));
+    using var cts = new CancellationTokenSource();
+    cts.Cancel();
+    var res = rt.RunChatAsync(new AgentGuiConfig { DeviceAgent = new DeviceAgentSettings { Provider = "openai" } }, "", new[] { ("user", "hi") }, ct: cts.Token).GetAwaiter().GetResult();
+    Assert(!res.Ok, "Expected missing API key / cancelled run to fail cleanly");
+    return Task.CompletedTask;
+});
+
 Console.WriteLine($"\nSummary: {passed} passed, {failed} failed ({passed + failed} total)");
 return failed > 0 ? 1 : 0;

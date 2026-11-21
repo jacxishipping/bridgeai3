@@ -288,6 +288,15 @@ public sealed class AgentTakeoverPillWindow : Window
         Reposition();
     }
 
+    public void UpdateActionText(string action)
+    {
+        if (AgentTakeoverService.State != TakeoverState.AgentControlling) return;
+        _label.Text = string.IsNullOrWhiteSpace(action)
+            ? "AI agent is controlling your screen  ·  Ctrl+Alt+T"
+            : $"AI Agent: {action}  ·  Ctrl+Alt+T";
+        Reposition();
+    }
+
     public void HidePill()
     {
         if (IsVisible) Hide();

@@ -149,6 +149,16 @@ public static class AgentTakeoverService
         SetState(TakeoverState.AgentControlling);
     });
 
+    /// <summary>Updates the floating HUD pill text with the currently executing agent action.</summary>
+    public static void UpdateActionLabel(string actionText) => RunOnUi(() =>
+    {
+        if (_state == TakeoverState.AgentControlling)
+        {
+            _lastActivityTick = Environment.TickCount64;
+            _pill?.UpdateActionText(actionText);
+        }
+    });
+
     /// <summary>User clicked "Return Control to Agent".</summary>
     public static void ReturnControlToAgent() => RunOnUi(() =>
     {
