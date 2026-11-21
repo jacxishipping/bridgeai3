@@ -121,6 +121,45 @@ public static class DesktopInputService
         SendInput(1, new[] { new Input { Type = InputMouse, U = new InputUnion { Mi = new MouseInput { DwFlags = up } } } }, Marshal.SizeOf<Input>());
     }
 
+    public static int DrawPath(IReadOnlyList<IReadOnlyList<(int X, int Y)>> strokes, string button = "left", int stepDelayMs = 6)
+    {
+        var (down, up) = ResolveMouseButtons(button);
+        int delay = Math.Clamp(stepDelayMs, 2, 40);
+        int totalPoints = 0;
+
+        foreach (var stroke in strokes)
+        {
+            if (stroke is null || stroke.Count < 2) continue;
+            MoveMouse(stroke[0].X, stroke[0].Y);
+            Thread.Sleep(delay * 2);
+            SendInput(1, new[] { new Input { Type = InputMouse, U = new InputUnion { Mi = new MouseInput { DwFlags = down } } } }, Marshal.SizeOf<Input>());
+            Thread.Sleep(delay);
+
+            for (int seg = 0; seg < stroke.Count - 1; seg++)
+            {
+                var (x1, y1) = stroke[seg];
+                var (x2, y2) = stroke[seg + 1];
+                double dx = x2 - x1;
+                double dy = y2 - y1;
+                double dist = Math.Sqrt(dx * dx + dy * dy);
+                int steps = Math.Clamp((int)Math.Ceiling(dist / 10.0), 2, 40);
+                for (int i = 1; i <= steps; i++)
+                {
+                    int curX = x1 + (int)Math.Round((x2 - x1) * (double)i / steps);
+                    int curY = y1 + (int)Math.Round((y2 - y1) * (double)i / steps);
+                    MoveMouse(curX, curY);
+                    Thread.Sleep(delay);
+                }
+                totalPoints++;
+            }
+
+            SendInput(1, new[] { new Input { Type = InputMouse, U = new InputUnion { Mi = new MouseInput { DwFlags = up } } } }, Marshal.SizeOf<Input>());
+            Thread.Sleep(delay * 3);
+        }
+
+        return totalPoints;
+    }
+
     public static void ClickMouse(int x, int y, string button = "left", bool doubleClick = false)
     {
         if (CppNativeBridge.IsAvailable())

@@ -284,7 +284,7 @@ public sealed class DeviceAgentSettings
     public double Temperature { get; set; } = 0.2;
 
     [JsonPropertyName("max_tool_steps")]
-    public int MaxToolSteps { get; set; } = 8;
+    public int MaxToolSteps { get; set; } = 16;
 
     [JsonPropertyName("confirm_mutating_functions")]
     public bool ConfirmMutatingFunctions { get; set; } = false;

@@ -53,10 +53,15 @@ public sealed class DeviceAgentRuntimeService : IDisposable
         new("click_element", "ui", true, "Click a UI element by name, AutomationId, or Set-of-Marks mark_id.", new { type = "object", properties = new { name = new { type = "string" }, mark_id = new { type = "string" }, window = new { type = "string" }, button = new { type = "string" }, double_click = new { type = "boolean" } } }),
         new("invoke_element", "ui", true, "Invoke, toggle, select, or expand a native UI control by name.", new { type = "object", properties = new { name = new { type = "string" }, window = new { type = "string" } }, required = new[] { "name" } }),
         new("set_element_value", "ui", true, "Set text inside an input field by name or AutomationId, with optional Enter submit.", new { type = "object", properties = new { name = new { type = "string" }, value = new { type = "string" }, submit = new { type = "boolean" }, window = new { type = "string" } }, required = new[] { "name", "value" } }),
+        new("mouse_move", "ui", true, "Move the mouse cursor to exact screen coordinates (x, y).", new { type = "object", properties = new { x = new { type = "integer" }, y = new { type = "integer" } }, required = new[] { "x", "y" } }),
         new("mouse_click", "ui", true, "Click the mouse at exact screen coordinates (x, y).", new { type = "object", properties = new { x = new { type = "integer" }, y = new { type = "integer" }, button = new { type = "string" }, clicks = new { type = "integer" } }, required = new[] { "x", "y" } }),
+        new("mouse_drag", "ui", true, "Drag the mouse from (start_x, start_y) to (end_x, end_y) while holding the mouse button (great for drawing or dragging).", new { type = "object", properties = new { start_x = new { type = "integer" }, start_y = new { type = "integer" }, end_x = new { type = "integer" }, end_y = new { type = "integer" }, button = new { type = "string" } }, required = new[] { "start_x", "start_y", "end_x", "end_y" } }),
+        new("mouse_draw_path", "ui", true, "Draw one or more smooth polylines/strokes on the screen (e.g. in Paint). Pass 'strokes' as an array of strokes, where each stroke is an array of [x, y] coordinate pairs like [[[300,450],[700,450],[700,380],[300,380],[300,450]]].", new { type = "object", properties = new { strokes = new { type = "array", items = new { type = "array", items = new { type = "array", items = new { type = "integer" } } } }, button = new { type = "string" } }, required = new[] { "strokes" } }),
         new("mouse_scroll", "ui", true, "Scroll mouse wheel by delta (positive up, negative down), optionally at (x, y).", new { type = "object", properties = new { delta = new { type = "integer" }, x = new { type = "integer" }, y = new { type = "integer" }, horizontal = new { type = "boolean" } }, required = new[] { "delta" } }),
         new("keyboard_type", "ui", true, "Type text at the current keyboard focus.", new { type = "object", properties = new { text = new { type = "string" } }, required = new[] { "text" } }),
+        new("key_press", "ui", true, "Press a single key such as enter, tab, escape, backspace, up, down, left, right.", new { type = "object", properties = new { key = new { type = "string" } }, required = new[] { "key" } }),
         new("press_hotkey", "ui", true, "Press a keyboard shortcut combo such as ctrl+c, alt+tab, or win+d.", new { type = "object", properties = new { combo = new { type = "string" } }, required = new[] { "combo" } }),
+        new("desktop_wait", "ui", false, "Wait for a specified number of milliseconds (50-10000) for an app or UI to finish opening.", new { type = "object", properties = new { ms = new { type = "integer" } }, required = new[] { "ms" } }),
 
         new("get_clipboard", "clipboard", false, "Read current text from the Windows clipboard.", new { type = "object", properties = new { } }),
         new("set_clipboard", "clipboard", true, "Write text to the Windows clipboard.", new { type = "object", properties = new { text = new { type = "string" } }, required = new[] { "text" } }),
@@ -142,7 +147,8 @@ public sealed class DeviceAgentRuntimeService : IDisposable
                 or "click_element" or "click_text" or "invoke_element" or "set_element_value"
                 or "type_into_element" or "focus_element" or "perform_approved_ui_action"
                 or "mouse_move" or "desktop_mouse_move" or "mouse_click" or "desktop_click"
-                or "mouse_scroll" or "desktop_scroll" or "mouse_drag" or "keyboard_type"
+                or "mouse_scroll" or "desktop_scroll" or "mouse_drag" or "mouse_draw_path" or "draw_path"
+                or "desktop_wait" or "keyboard_type"
                 or "desktop_keyboard" or "key_press" or "keyboard_press" or "press_hotkey" => "ui",
 
             "get_clipboard" or "desktop_clipboard_get" or "set_clipboard" or "desktop_clipboard_set" => "clipboard",
@@ -204,6 +210,14 @@ public sealed class DeviceAgentRuntimeService : IDisposable
         }
         sb.AppendLine($"Target Device: {config.DeviceId} (Windows host: {Environment.MachineName}, user: {Environment.UserName})");
         sb.AppendLine($"Policy State: Interactive UI={(config.Policy.AllowDesktopControl ? "ON" : "OFF")}, Full PC Access={(config.Policy.AllowFullPcAccess ? "ALLOWED" : "OFF")}.");
+        sb.AppendLine();
+        sb.AppendLine("OPERATING RULES (CRITICAL):");
+        sb.AppendLine("- You are an AUTONOMOUS WINDOWS DESKTOP OPERATOR with real, live tools on this PC — NEVER act like a passive text chatbot.");
+        sb.AppendLine("- NEVER tell the user 'I cannot interact with your screen' or give manual instructions when you have tools to perform the task directly.");
+        sb.AppendLine("- ALWAYS execute the user's request by calling your tools step-by-step until the task is actually finished on this PC.");
+        sb.AppendLine("- For drawing tasks (e.g. 'draw a car'): call desktop_open_application(app='mspaint.exe'), then desktop_wait(ms=1500), then maximize_window(title='Paint'), then get_screen_size(), then mouse_draw_path(strokes=[...]) to draw the full picture on the Paint canvas (canvas starts around y=220..650, x=120..1100), and finally capture_desktop_screenshot() to show the result.");
+        sb.AppendLine("- Tool Invocation Format: Prefer native function/tool calling. If your model does not emit native tool_calls, output one or more blocks in this exact format:");
+        sb.AppendLine("  <tool_call>{\"name\": \"tool_name\", \"arguments\": {\"arg\": \"value\"}}</tool_call>");
         sb.AppendLine();
         if (!string.IsNullOrWhiteSpace(agent.SystemPrompt))
         {
@@ -324,7 +338,9 @@ public sealed class DeviceAgentRuntimeService : IDisposable
 
         var executedTools = new List<string>();
         string? latestScreenshot = null;
-        int maxSteps = Math.Clamp(agent.MaxToolSteps, 1, 20);
+        int maxSteps = Math.Clamp(agent.MaxToolSteps, 1, 30);
+        bool nudgedForTools = false;
+        var lastUserPrompt = history.LastOrDefault(h => h.Role.Equals("user", StringComparison.OrdinalIgnoreCase)).Content ?? "";
 
         for (int step = 0; step < maxSteps; step++)
         {
@@ -365,10 +381,50 @@ public sealed class DeviceAgentRuntimeService : IDisposable
                 ? cEl.GetString() ?? ""
                 : "";
 
-            if (!msgEl.TryGetProperty("tool_calls", out var callsEl) ||
-                callsEl.ValueKind != JsonValueKind.Array ||
-                callsEl.GetArrayLength() == 0)
+            bool hasNativeCalls = msgEl.TryGetProperty("tool_calls", out var callsEl) &&
+                                  callsEl.ValueKind == JsonValueKind.Array &&
+                                  callsEl.GetArrayLength() > 0;
+
+            if (!hasNativeCalls)
             {
+                // Fallback for custom OpenAI-compatible models that emit <tool_call>{...}</tool_call> in content text
+                var textCalls = ParseTextToolCalls(content);
+                if (textCalls.Count > 0)
+                {
+                    messages.Add(new { role = "assistant", content });
+                    var obs = new StringBuilder();
+                    obs.AppendLine("Tool execution results:");
+                    foreach (var (tName, tArgsJson) in textCalls)
+                    {
+                        var toolResult = await ExecuteGuardedToolAsync(tName, tArgsJson, config, agent, confirmMutatingToolAsync, ct);
+                        executedTools.Add(tName);
+                        if (toolResult.ScreenshotBase64 is not null)
+                        {
+                            latestScreenshot = toolResult.ScreenshotBase64;
+                        }
+                        obs.AppendLine($"[{tName}] => {StripBase64ForLlm(toolResult.ResultJson)}");
+                    }
+                    obs.AppendLine("Continue with the next <tool_call> if more steps are needed, or provide a brief final confirmation once finished.");
+                    messages.Add(new { role = "user", content = obs.ToString() });
+                    continue;
+                }
+
+                // If the user asked for an action on this PC and the model acted like a plain chatbot on turn 0, nudge it once to invoke tools
+                if (!nudgedForTools && executedTools.Count == 0 && toolsPayload.Count > 0 && LooksLikeActionRequest(lastUserPrompt))
+                {
+                    nudgedForTools = true;
+                    messages.Add(new { role = "assistant", content });
+                    messages.Add(new
+                    {
+                        role = "user",
+                        content =
+                            "SYSTEM REMINDER: Do NOT answer as a passive chatbot or describe steps for me to do manually. " +
+                            "You have live Windows tools attached right now (desktop_open_application, desktop_wait, maximize_window, get_screen_size, mouse_draw_path, mouse_drag, mouse_click, keyboard_type, capture_desktop_screenshot, etc.). " +
+                            "Execute the request directly on this Windows PC now using either native tool_calls or <tool_call>{\"name\":\"...\",\"arguments\":{...}}</tool_call>.",
+                    });
+                    continue;
+                }
+
                 var summary = executedTools.Count > 0
                     ? $"{agent.AgentName} ({model}) · Tools: {string.Join(", ", executedTools)}"
                     : $"{agent.AgentName} ({model})";
@@ -586,6 +642,78 @@ public sealed class DeviceAgentRuntimeService : IDisposable
 
     private static string Truncate(string s, int max) =>
         s.Length <= max ? s : s[..max] + "...";
+
+    public static List<(string Name, string ArgsJson)> ParseTextToolCalls(string content)
+    {
+        var results = new List<(string Name, string ArgsJson)>();
+        if (string.IsNullOrWhiteSpace(content)) return results;
+
+        // 1. Match <tool_call>{...}</tool_call> blocks
+        var tagMatches = System.Text.RegularExpressions.Regex.Matches(
+            content,
+            @"<tool_call>\s*(\{[\s\S]*?\})\s*</tool_call>",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        foreach (System.Text.RegularExpressions.Match m in tagMatches)
+        {
+            TryAddParsedToolJson(m.Groups[1].Value, results);
+        }
+
+        // 2. Also match ```tool_call or ```json blocks containing {"name": "...", "arguments": {...}}
+        if (results.Count == 0)
+        {
+            var fenceMatches = System.Text.RegularExpressions.Regex.Matches(
+                content,
+                @"```(?:tool_call|json)?\s*(\{[\s\S]*?\})\s*```",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            foreach (System.Text.RegularExpressions.Match m in fenceMatches)
+            {
+                TryAddParsedToolJson(m.Groups[1].Value, results);
+            }
+        }
+
+        return results;
+    }
+
+    private static void TryAddParsedToolJson(string rawJson, List<(string Name, string ArgsJson)> results)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(rawJson);
+            var root = doc.RootElement;
+            if (root.ValueKind != JsonValueKind.Object) return;
+            string? name = root.TryGetProperty("name", out var nEl) ? nEl.GetString()
+                : root.TryGetProperty("tool", out var tEl) ? tEl.GetString() : null;
+            if (string.IsNullOrWhiteSpace(name)) return;
+            string argsJson = "{}";
+            if (root.TryGetProperty("arguments", out var aEl))
+            {
+                argsJson = aEl.ValueKind == JsonValueKind.String ? (aEl.GetString() ?? "{}") : aEl.GetRawText();
+            }
+            else if (root.TryGetProperty("args", out var a2El))
+            {
+                argsJson = a2El.ValueKind == JsonValueKind.String ? (a2El.GetString() ?? "{}") : a2El.GetRawText();
+            }
+            results.Add((name.Trim(), argsJson));
+        }
+        catch
+        {
+            // Ignore malformed JSON blocks
+        }
+    }
+
+    private static bool LooksLikeActionRequest(string prompt)
+    {
+        if (string.IsNullOrWhiteSpace(prompt)) return false;
+        var p = prompt.ToLowerInvariant();
+        string[] verbs =
+        {
+            "draw", "paint", "open", "launch", "click", "type", "write", "create", "edit",
+            "delete", "run", "execute", "start", "stop", "close", "minimize", "maximize",
+            "focus", "screenshot", "capture", "search", "find", "list", "check", "show",
+            "move", "drag", "scroll", "press", "copy", "paste", "kill", "restart",
+        };
+        return verbs.Any(v => p.Contains(v, StringComparison.Ordinal));
+    }
 
     public void Dispose() => _http.Dispose();
 }

@@ -587,5 +587,21 @@ await RunTest("AgentTakeoverService: AgentControlling -> TakeOver blocks desktop
     await tcs.Task;
 });
 
+// 18. DeviceAgentRuntimeService text <tool_call> fallback parser & drawing tools in catalog
+await RunTest("DeviceAgentRuntimeService: text <tool_call> fallback & drawing tools (mouse_draw_path, mouse_drag)", () =>
+{
+    var cfg = new AgentGuiConfig();
+    var enabled = DeviceAgentRuntimeService.GetEnabledTools(cfg).Select(t => t.Name).ToHashSet();
+    Assert(enabled.Contains("mouse_draw_path") && enabled.Contains("mouse_drag") && enabled.Contains("mouse_move") && enabled.Contains("desktop_wait"),
+        "Expected mouse_draw_path, mouse_drag, mouse_move, and desktop_wait in enabled tools");
+
+    var calls = DeviceAgentRuntimeService.ParseTextToolCalls(
+        "Opening Paint now.\n<tool_call>{\"name\":\"desktop_open_application\",\"arguments\":{\"app\":\"mspaint.exe\"}}</tool_call>\n" +
+        "<tool_call>{\"name\":\"mouse_draw_path\",\"arguments\":{\"strokes\":[[[300,400],[600,400]]]}}</tool_call>");
+    Assert(calls.Count == 2 && calls[0].Name == "desktop_open_application" && calls[1].Name == "mouse_draw_path",
+        $"Expected 2 parsed tool calls, got {calls.Count}");
+    return Task.CompletedTask;
+});
+
 Console.WriteLine($"\nSummary: {passed} passed, {failed} failed ({passed + failed} total)");
 return failed > 0 ? 1 : 0;

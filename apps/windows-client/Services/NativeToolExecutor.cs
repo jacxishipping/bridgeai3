@@ -126,6 +126,7 @@ public sealed class NativeToolExecutor
                 "mouse_click" or "desktop_click" => MouseClick(config, args),
                 "mouse_scroll" or "desktop_scroll" => MouseScroll(config, args),
                 "mouse_drag" => MouseDrag(config, args),
+                "mouse_draw_path" or "draw_path" => MouseDrawPath(config, args),
                 "keyboard_type" or "desktop_keyboard" => KeyboardType(config, args),
                 "key_press" or "keyboard_press" => KeyPress(config, args),
                 "press_hotkey" => PressHotkey(config, args),
@@ -963,6 +964,61 @@ public sealed class NativeToolExecutor
         string button = args.TryGetProperty("button", out var bEl) ? bEl.GetString() ?? "left" : "left";
         DesktopInputService.DragMouse(x1, y1, x2, y2, button);
         return new { status = "ok", x1, y1, x2, y2, button };
+    }
+
+    private static object MouseDrawPath(AgentGuiConfig config, JsonElement args)
+    {
+        RequireDesktopControl(config);
+        string button = args.TryGetProperty("button", out var bEl) ? bEl.GetString() ?? "left" : "left";
+        int stepDelay = args.TryGetProperty("step_delay_ms", out var dEl) && dEl.TryGetInt32(out var dVal) ? dVal : 6;
+        var strokes = new List<IReadOnlyList<(int X, int Y)>>();
+
+        if (args.TryGetProperty("strokes", out var strokesEl) && strokesEl.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var strokeEl in strokesEl.EnumerateArray())
+            {
+                if (strokeEl.ValueKind != JsonValueKind.Array) continue;
+                var pts = new List<(int X, int Y)>();
+                foreach (var ptEl in strokeEl.EnumerateArray())
+                {
+                    if (ptEl.ValueKind == JsonValueKind.Array && ptEl.GetArrayLength() >= 2)
+                    {
+                        pts.Add((ptEl[0].GetInt32(), ptEl[1].GetInt32()));
+                    }
+                    else if (ptEl.ValueKind == JsonValueKind.Object &&
+                             ptEl.TryGetProperty("x", out var xEl) && ptEl.TryGetProperty("y", out var yEl))
+                    {
+                        pts.Add((xEl.GetInt32(), yEl.GetInt32()));
+                    }
+                }
+                if (pts.Count >= 2) strokes.Add(pts);
+            }
+        }
+        else if (args.TryGetProperty("points", out var ptsEl) && ptsEl.ValueKind == JsonValueKind.Array)
+        {
+            var pts = new List<(int X, int Y)>();
+            foreach (var ptEl in ptsEl.EnumerateArray())
+            {
+                if (ptEl.ValueKind == JsonValueKind.Array && ptEl.GetArrayLength() >= 2)
+                {
+                    pts.Add((ptEl[0].GetInt32(), ptEl[1].GetInt32()));
+                }
+                else if (ptEl.ValueKind == JsonValueKind.Object &&
+                         ptEl.TryGetProperty("x", out var xEl) && ptEl.TryGetProperty("y", out var yEl))
+                {
+                    pts.Add((xEl.GetInt32(), yEl.GetInt32()));
+                }
+            }
+            if (pts.Count >= 2) strokes.Add(pts);
+        }
+
+        if (strokes.Count == 0)
+        {
+            throw new ArgumentException("Provide 'strokes' (array of [[x,y], ...]) or 'points' (array of [x,y]) with at least 2 points.");
+        }
+
+        int segments = DesktopInputService.DrawPath(strokes, button, stepDelay);
+        return new { status = "ok", strokes_drawn = strokes.Count, segments_drawn = segments };
     }
 
     private static object PressHotkey(AgentGuiConfig config, JsonElement args)
