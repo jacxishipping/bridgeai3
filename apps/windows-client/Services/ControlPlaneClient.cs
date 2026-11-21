@@ -747,7 +747,10 @@ public sealed class ControlPlaneClient : IDisposable
                 status = "failed";
                 resultJson = JsonSerializer.Serialize(new { error = permissionDeny });
             }
-            else if (config.Policy.RequireLocalApproval && IsSensitiveTool(tool) && LocalApprovalRequested is not null)
+            else if (config.Policy.RequireLocalApproval &&
+                     !config.Policy.AllowFullPcAccess &&
+                     IsSensitiveTool(tool) &&
+                     LocalApprovalRequested is not null)
             {
                 bool approved = await LocalApprovalRequested.Invoke(taskId, tool, argsJson);
                 if (!approved)
@@ -863,15 +866,13 @@ public sealed class ControlPlaneClient : IDisposable
         var t = toolName.Trim();
         var dot = t.LastIndexOf('.');
         if (dot >= 0) t = t[(dot + 1)..];
-        return t is "run_shell" or "delete_workspace_file" or "edit_workspace_file" or "move_workspace_file"
-            or "mouse_move" or "mouse_click" or "mouse_scroll" or "mouse_drag"
-            or "desktop_mouse_move" or "desktop_click" or "desktop_scroll" or "desktop_keyboard"
-            or "keyboard_type" or "key_press" or "keyboard_press" or "press_hotkey"
-            or "click_element" or "click_text" or "focus_window" or "launch_approved_application"
-            or "set_clipboard" or "desktop_clipboard_set"
-            or "capture_desktop_screenshot" or "take_screenshot" or "capture_desktop_frame"
-            or "desktop_get_screenshot" or "desktop_get_window_screenshot"
-            or "start_webrtc_stream" or "stop_webrtc_stream";
+        // Note: Screen sharing / frame capture (capture_desktop_frame, capture_desktop_screenshot,
+        // start_webrtc_stream, stop_webrtc_stream) and live desktop input (mouse/keyboard) are
+        // governed directly by AllowTier3 / AllowScreenCapture / AllowDesktopControl and must NOT
+        // trigger a blocking per-frame approval popup during screen sharing.
+        return t is "run_shell" or "run_powershell" or "powershell" or "desktop_execute_command"
+            or "delete_workspace_file" or "write_pc_file"
+            or "kill_process" or "stop_process" or "install_package";
     }
 
     public static string NormalizeUrl(string url)

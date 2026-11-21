@@ -1993,6 +1993,22 @@ public partial class MainWindow : Window
         _pendingApprovalTcs?.TrySetResult(true);
     }
 
+    private void OnApproveAlwaysLocalApprovalClick(object sender, RoutedEventArgs e)
+    {
+        ApprovalModalOverlay.Visibility = Visibility.Collapsed;
+        _config.Policy.RequireLocalApproval = false;
+        if (_config.DeviceAgent is not null)
+        {
+            _config.DeviceAgent.ConfirmMutatingFunctions = false;
+        }
+        _configService.SaveConfig(_config);
+        LoadPolicyIntoUi();
+        LoadDeviceAgentSettingsIntoUi();
+        SyncPolicyInBackgroundIfConnected();
+        _pendingApprovalTcs?.TrySetResult(true);
+        ShowToast("Local approval prompts disabled");
+    }
+
     private void OnDenyLocalApprovalClick(object sender, RoutedEventArgs e)
     {
         ApprovalModalOverlay.Visibility = Visibility.Collapsed;

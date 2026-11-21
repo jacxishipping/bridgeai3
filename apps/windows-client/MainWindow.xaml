@@ -1992,7 +1992,8 @@
                         </Border>
                         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
                             <Button Content="Deny" Style="{StaticResource DangerBtnStyle}" Click="OnDenyLocalApprovalClick" Margin="0,0,8,0"/>
-                            <Button Content="Approve &amp; Run" Style="{StaticResource PrimaryBtnStyle}" Click="OnApproveLocalApprovalClick"/>
+                            <Button Content="Approve Once" Style="{StaticResource BtnStyle}" Click="OnApproveLocalApprovalClick" Margin="0,0,8,0"/>
+                            <Button Content="Always Allow (Don't Ask Again)" Style="{StaticResource PrimaryBtnStyle}" Click="OnApproveAlwaysLocalApprovalClick"/>
                         </StackPanel>
                     </StackPanel>
                 </Border>
