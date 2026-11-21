@@ -692,5 +692,22 @@ await RunTest("NamedPipeBridge: BuildCppWebRtcArguments formats monitor, fps, bi
     return Task.CompletedTask;
 });
 
+// 24. Human-like input speed profiles & Catmull-Rom curve smoothing
+await RunTest("DesktopInputService: Speed profiles and Catmull-Rom spline smoothing", () =>
+{
+    DesktopInputService.SetSpeedProfile("fast");
+    Assert(DesktopInputService.SpeedMultiplier < 0.7, "Expected fast speed multiplier < 0.7");
+    DesktopInputService.SetSpeedProfile("careful");
+    Assert(DesktopInputService.SpeedMultiplier > 1.3, "Expected careful speed multiplier > 1.3");
+    DesktopInputService.SetSpeedProfile("natural");
+    Assert(Math.Abs(DesktopInputService.SpeedMultiplier - 1.0) < 0.001, "Expected natural speed multiplier == 1.0");
+
+    var raw = new List<(int X, int Y)> { (100, 100), (200, 140), (300, 110), (400, 160) };
+    var smoothed = DesktopInputService.SmoothStrokeCatmullRom(raw, 4);
+    Assert(smoothed.Count == 13 && smoothed[0] == (100, 100) && smoothed[^1] == (400, 160),
+        $"Expected 13 smoothed points preserving endpoints, got {smoothed.Count}");
+    return Task.CompletedTask;
+});
+
 Console.WriteLine($"\nSummary: {passed} passed, {failed} failed ({passed + failed} total)");
 return failed > 0 ? 1 : 0;

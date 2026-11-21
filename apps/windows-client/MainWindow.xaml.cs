@@ -252,6 +252,8 @@ public partial class MainWindow : Window
         CppNativeBridge.PreferDxgiCapture = _config.CppAgent.PreferDxgiCapture;
         CppNativeBridge.DefaultH264Fps = Math.Clamp(_config.CppAgent.H264TargetFps, 1, 60);
         CppNativeBridge.DefaultH264BitrateKbps = Math.Clamp(_config.CppAgent.H264BitrateKbps, 250, 50_000);
+        DesktopInputService.SetSpeedProfile(_config.CppAgent.InputSpeedProfile);
+        Views.AgentGlowOverlayWindow.ShowCursorHalo = _config.CppAgent.ShowAgentCursorHalo;
         if (CppNativeBridge.IsAvailable())
         {
             CppNativeBridge.TrySetEncoderBitrate(CppNativeBridge.DefaultH264BitrateKbps);
@@ -861,6 +863,8 @@ public partial class MainWindow : Window
         SetCppTurnUrlBox.Text = _config.CppAgent.TurnUrl ?? "";
         SetCppTurnUserBox.Text = _config.CppAgent.TurnUsername ?? "";
         SetCppTurnCredBox.Password = _config.CppAgent.TurnCredential ?? "";
+        SetCppCursorHaloChk.IsChecked = _config.CppAgent.ShowAgentCursorHalo;
+        SelectComboByTag(SetCppInputSpeedCombo, _config.CppAgent.InputSpeedProfile, 1);
         RefreshCppEngineStatusUi();
 
         // Logging
@@ -2386,6 +2390,11 @@ public partial class MainWindow : Window
         _config.CppAgent.TurnUrl = SetCppTurnUrlBox.Text.Trim();
         _config.CppAgent.TurnUsername = SetCppTurnUserBox.Text.Trim();
         _config.CppAgent.TurnCredential = SetCppTurnCredBox.Password.Trim();
+        _config.CppAgent.ShowAgentCursorHalo = SetCppCursorHaloChk.IsChecked == true;
+        if (SetCppInputSpeedCombo.SelectedItem is ComboBoxItem spdItem && spdItem.Tag is string spdTag)
+        {
+            _config.CppAgent.InputSpeedProfile = spdTag;
+        }
 
         // Logging
         if (SetLogLevelCombo.SelectedItem is ComboBoxItem logItem && logItem.Tag is string lvl)

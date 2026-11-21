@@ -81,6 +81,51 @@ public static class DesktopInputService
     private static extern bool GetCursorPos(out PointStruct lpPoint);
 
     public static bool HumanLikeInputEnabled { get; set; } = true;
+    public static double SpeedMultiplier { get; set; } = 1.0;
+
+    public static void SetSpeedProfile(string? profile)
+    {
+        SpeedMultiplier = (profile ?? "natural").Trim().ToLowerInvariant() switch
+        {
+            "fast" => 0.55,
+            "careful" => 1.45,
+            _ => 1.0,
+        };
+    }
+
+    /// <summary>
+    /// Smooths a 4+ point freehand polyline using centripetal Catmull-Rom spline subdivision.
+    /// </summary>
+    public static List<(int X, int Y)> SmoothStrokeCatmullRom(IReadOnlyList<(int X, int Y)> pts, int subdivisions = 4)
+    {
+        if (pts.Count < 4) return new List<(int X, int Y)>(pts);
+        int sub = Math.Clamp(subdivisions, 2, 12);
+        var result = new List<(int X, int Y)>(pts.Count * sub);
+        for (int i = 0; i < pts.Count - 1; i++)
+        {
+            var p0 = pts[Math.Max(0, i - 1)];
+            var p1 = pts[i];
+            var p2 = pts[i + 1];
+            var p3 = pts[Math.Min(pts.Count - 1, i + 2)];
+            for (int s = 0; s < sub; s++)
+            {
+                double t = (double)s / sub;
+                double t2 = t * t;
+                double t3 = t2 * t;
+                double x = 0.5 * ((2 * p1.X)
+                    + (-p0.X + p2.X) * t
+                    + (2 * p0.X - 5 * p1.X + 4 * p2.X - p3.X) * t2
+                    + (-p0.X + 3 * p1.X - 3 * p2.X + p3.X) * t3);
+                double y = 0.5 * ((2 * p1.Y)
+                    + (-p0.Y + p2.Y) * t
+                    + (2 * p0.Y - 5 * p1.Y + 4 * p2.Y - p3.Y) * t2
+                    + (-p0.Y + 3 * p1.Y - 3 * p2.Y + p3.Y) * t3);
+                result.Add(((int)Math.Round(x), (int)Math.Round(y)));
+            }
+        }
+        result.Add(pts[^1]);
+        return result;
+    }
 
     public static (int X, int Y) GetCurrentCursorPosition()
     {
@@ -135,8 +180,8 @@ public static class DesktopInputService
             return;
         }
 
-        // Natural Fitts's-Law duration (90ms for short moves up to ~320ms across screen)
-        int durationMs = Math.Clamp((int)(75 + Math.Sqrt(dist) * 7.5), 90, 340);
+        // Natural Fitts's-Law duration scaled by SpeedMultiplier (fast / natural / careful)
+        int durationMs = Math.Clamp((int)((75 + Math.Sqrt(dist) * 7.5) * SpeedMultiplier), 55, 480);
         int steps = Math.Clamp(durationMs / 8, 10, 48);
 
         // Gentle perpendicular hand arc (2%-6% of distance)
@@ -215,9 +260,10 @@ public static class DesktopInputService
         int delay = Math.Clamp(stepDelayMs, 2, 25);
         int totalPoints = 0;
 
-        foreach (var stroke in strokes)
+        foreach (var rawStroke in strokes)
         {
-            if (stroke is null || stroke.Count < 2) continue;
+            if (rawStroke is null || rawStroke.Count < 2) continue;
+            var stroke = rawStroke.Count >= 4 ? SmoothStrokeCatmullRom(rawStroke, 4) : rawStroke;
 
             // Glide hand smoothly to the start of the stroke before putting the pen down
             MoveMouse(stroke[0].X, stroke[0].Y);

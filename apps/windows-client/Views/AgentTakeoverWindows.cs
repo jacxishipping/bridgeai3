@@ -31,9 +31,14 @@ internal static class TakeoverNative
 /// </summary>
 public sealed class AgentGlowOverlayWindow : Window
 {
+    public static bool ShowCursorHalo { get; set; } = true;
+
     private readonly RotateTransform _rotate = new(0, 0.5, 0.5);
     private readonly Border _outer;
     private readonly Border _inner;
+    private readonly Canvas _cursorCanvas;
+    private readonly Ellipse _cursorHalo;
+    private readonly System.Windows.Threading.DispatcherTimer _cursorTimer;
     private Storyboard? _storyboard;
 
     public AgentGlowOverlayWindow()
@@ -85,12 +90,55 @@ public sealed class AgentGlowOverlayWindow : Window
             Effect = new BlurEffect { Radius = 38 },
         };
 
+        _cursorHalo = new Ellipse
+        {
+            Width = 34,
+            Height = 34,
+            Stroke = new SolidColorBrush(System.Windows.Media.Color.FromRgb(0x38, 0xBD, 0xF8)),
+            StrokeThickness = 2.5,
+            Fill = new SolidColorBrush(System.Windows.Media.Color.FromArgb(0x38, 0x63, 0x66, 0xF1)),
+            IsHitTestVisible = false,
+            Visibility = Visibility.Collapsed,
+            Effect = new DropShadowEffect
+            {
+                Color = System.Windows.Media.Color.FromRgb(0x22, 0xD3, 0xEE),
+                BlurRadius = 18,
+                ShadowDepth = 0,
+                Opacity = 0.9,
+            },
+        };
+        _cursorCanvas = new Canvas { IsHitTestVisible = false };
+        _cursorCanvas.Children.Add(_cursorHalo);
+
+        _cursorTimer = new System.Windows.Threading.DispatcherTimer
+        {
+            Interval = TimeSpan.FromMilliseconds(16),
+        };
+        _cursorTimer.Tick += (_, _) => UpdateCursorHaloPosition();
+
         var grid = new Grid { IsHitTestVisible = false };
         grid.Children.Add(_inner);
         grid.Children.Add(_outer);
+        grid.Children.Add(_cursorCanvas);
         Content = grid;
 
         SourceInitialized += (_, _) => MakeClickThrough();
+    }
+
+    private void UpdateCursorHaloPosition()
+    {
+        if (!ShowCursorHalo || !IsVisible)
+        {
+            _cursorHalo.Visibility = Visibility.Collapsed;
+            return;
+        }
+        var (px, py) = DesktopInputService.GetCurrentCursorPosition();
+        var dpi = VisualTreeHelper.GetDpi(this);
+        double dipX = (px / dpi.DpiScaleX) - Left;
+        double dipY = (py / dpi.DpiScaleY) - Top;
+        Canvas.SetLeft(_cursorHalo, dipX - _cursorHalo.Width / 2.0);
+        Canvas.SetTop(_cursorHalo, dipY - _cursorHalo.Height / 2.0);
+        _cursorHalo.Visibility = Visibility.Visible;
     }
 
     private void MakeClickThrough()
@@ -136,11 +184,14 @@ public sealed class AgentGlowOverlayWindow : Window
         _storyboard.Children.Add(pulse);
 
         _storyboard.Begin(this, true);
+        _cursorTimer.Start();
         BeginAnimation(OpacityProperty, new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(350)));
     }
 
     public void HideGlow()
     {
+        _cursorTimer.Stop();
+        _cursorHalo.Visibility = Visibility.Collapsed;
         _storyboard?.Stop(this);
         var fade = new DoubleAnimation(Opacity, 0, TimeSpan.FromMilliseconds(250));
         fade.Completed += (_, _) =>

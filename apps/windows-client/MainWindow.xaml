@@ -1171,7 +1171,17 @@
                                                     <CheckBox x:Name="SetCppAutoStartChk" Style="{StaticResource ToggleSwitchStyle}" Content="Auto-start C++ Supervisor Named-Pipe Server (ai_bridge_service.exe --pipe-server)"/>
                                                     <CheckBox x:Name="SetCppPreferDxgiChk" Style="{StaticResource ToggleSwitchStyle}" Content="Prefer C++20 DXGI Desktop Duplication GPU capture (automatic GDI fallback on Session-0 / headless)" Margin="0,4,0,0"/>
                                                     <CheckBox x:Name="SetCppPreferHwH264Chk" Style="{StaticResource ToggleSwitchStyle}" Content="Prefer Hardware H.264 Encoder MFT (NVIDIA NVENC / Intel QuickSync / AMD AMF)" Margin="0,4,0,0"/>
-                                                    <CheckBox x:Name="SetCppAdaptiveBitrateChk" Style="{StaticResource ToggleSwitchStyle}" Content="Enable Dynamic Adaptive Bitrate (ABR) scaling on WebRTC transport congestion" Margin="0,4,0,14"/>
+                                                    <CheckBox x:Name="SetCppAdaptiveBitrateChk" Style="{StaticResource ToggleSwitchStyle}" Content="Enable Dynamic Adaptive Bitrate (ABR) scaling on WebRTC transport congestion" Margin="0,4,0,0"/>
+                                                    <CheckBox x:Name="SetCppCursorHaloChk" Style="{StaticResource ToggleSwitchStyle}" Content="Show glowing cursor halo while AI Agent controls the screen" Margin="0,4,0,10"/>
+
+                                                    <StackPanel Orientation="Horizontal" Margin="0,0,0,14" VerticalAlignment="Center">
+                                                        <TextBlock Text="Human-Like Input Speed:" FontSize="12" Foreground="{DynamicResource TextMuted}" VerticalAlignment="Center" Margin="0,0,12,0"/>
+                                                        <ComboBox x:Name="SetCppInputSpeedCombo" Style="{StaticResource SaaSComboBoxStyle}" Width="220" SelectedIndex="1">
+                                                            <ComboBoxItem Content="Fast (0.55x — snappy glide)" Tag="fast"/>
+                                                            <ComboBoxItem Content="Natural (1.0x — human pace)" Tag="natural"/>
+                                                            <ComboBoxItem Content="Careful (1.45x — slow &amp; precise)" Tag="careful"/>
+                                                        </ComboBox>
+                                                    </StackPanel>
 
                                                     <UniformGrid Columns="3" Margin="-6,0,-6,12">
                                                         <StackPanel Margin="6,0">

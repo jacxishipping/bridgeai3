@@ -216,6 +216,12 @@ public sealed class CppAgentSettings
 
     [JsonPropertyName("turn_credential")]
     public string TurnCredential { get; set; } = "";
+
+    [JsonPropertyName("input_speed_profile")]
+    public string InputSpeedProfile { get; set; } = "natural"; // fast | natural | careful
+
+    [JsonPropertyName("show_agent_cursor_halo")]
+    public bool ShowAgentCursorHalo { get; set; } = true;
 }
 
 public sealed class AgentFunctionPermissions
