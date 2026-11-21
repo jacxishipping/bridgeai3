@@ -970,8 +970,51 @@ public sealed class NativeToolExecutor
     {
         RequireDesktopControl(config);
         string button = args.TryGetProperty("button", out var bEl) ? bEl.GetString() ?? "left" : "left";
-        int stepDelay = args.TryGetProperty("step_delay_ms", out var dEl) && dEl.TryGetInt32(out var dVal) ? dVal : 6;
+        int stepDelay = args.TryGetProperty("step_delay_ms", out var dEl) && dEl.TryGetInt32(out var dVal) ? dVal : 4;
         var strokes = new List<IReadOnlyList<(int X, int Y)>>();
+
+        if (args.TryGetProperty("shapes", out var shapesEl) && shapesEl.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var shapeEl in shapesEl.EnumerateArray())
+            {
+                if (shapeEl.ValueKind != JsonValueKind.Object) continue;
+                var type = (shapeEl.TryGetProperty("type", out var tEl) ? tEl.GetString() ?? "" : "").Trim().ToLowerInvariant();
+                if (type is "circle" or "ellipse" or "arc")
+                {
+                    double cx = shapeEl.TryGetProperty("cx", out var cxEl) ? cxEl.GetDouble() : 0;
+                    double cy = shapeEl.TryGetProperty("cy", out var cyEl) ? cyEl.GetDouble() : 0;
+                    double rx = shapeEl.TryGetProperty("rx", out var rxEl) ? rxEl.GetDouble()
+                        : (shapeEl.TryGetProperty("r", out var rEl) ? rEl.GetDouble() : 40);
+                    double ry = shapeEl.TryGetProperty("ry", out var ryEl) ? ryEl.GetDouble() : rx;
+                    double startDeg = shapeEl.TryGetProperty("start_deg", out var sEl) ? sEl.GetDouble() : 0;
+                    double endDeg = shapeEl.TryGetProperty("end_deg", out var eEl) ? eEl.GetDouble() : 360;
+                    int segs = Math.Clamp((int)Math.Ceiling(Math.Abs(endDeg - startDeg) / 9.0), 12, 64);
+                    var pts = new List<(int X, int Y)>(segs + 1);
+                    for (int i = 0; i <= segs; i++)
+                    {
+                        double rad = (startDeg + (endDeg - startDeg) * i / segs) * Math.PI / 180.0;
+                        pts.Add(((int)Math.Round(cx + rx * Math.Cos(rad)), (int)Math.Round(cy + ry * Math.Sin(rad))));
+                    }
+                    if (pts.Count >= 2) strokes.Add(pts);
+                }
+                else if (type == "rect")
+                {
+                    int x = shapeEl.TryGetProperty("x", out var xEl) ? xEl.GetInt32() : 0;
+                    int y = shapeEl.TryGetProperty("y", out var yEl) ? yEl.GetInt32() : 0;
+                    int w = shapeEl.TryGetProperty("w", out var wEl) ? wEl.GetInt32() : (shapeEl.TryGetProperty("width", out var w2El) ? w2El.GetInt32() : 100);
+                    int h = shapeEl.TryGetProperty("h", out var hEl) ? hEl.GetInt32() : (shapeEl.TryGetProperty("height", out var h2El) ? h2El.GetInt32() : 60);
+                    strokes.Add(new List<(int X, int Y)> { (x, y), (x + w, y), (x + w, y + h), (x, y + h), (x, y) });
+                }
+                else if (type == "line")
+                {
+                    int x1 = shapeEl.TryGetProperty("x1", out var x1El) ? x1El.GetInt32() : 0;
+                    int y1 = shapeEl.TryGetProperty("y1", out var y1El) ? y1El.GetInt32() : 0;
+                    int x2 = shapeEl.TryGetProperty("x2", out var x2El) ? x2El.GetInt32() : 0;
+                    int y2 = shapeEl.TryGetProperty("y2", out var y2El) ? y2El.GetInt32() : 0;
+                    strokes.Add(new List<(int X, int Y)> { (x1, y1), (x2, y2) });
+                }
+            }
+        }
 
         if (args.TryGetProperty("strokes", out var strokesEl) && strokesEl.ValueKind == JsonValueKind.Array)
         {
@@ -1014,7 +1057,7 @@ public sealed class NativeToolExecutor
 
         if (strokes.Count == 0)
         {
-            throw new ArgumentException("Provide 'strokes' (array of [[x,y], ...]) or 'points' (array of [x,y]) with at least 2 points.");
+            throw new ArgumentException("Provide 'strokes' (array of [[x,y], ...]), 'shapes' (circle/ellipse/arc/rect/line), or 'points' with at least 2 points.");
         }
 
         int segments = DesktopInputService.DrawPath(strokes, button, stepDelay);

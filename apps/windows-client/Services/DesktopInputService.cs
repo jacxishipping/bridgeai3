@@ -64,13 +64,30 @@ public static class DesktopInputService
         public IntPtr DwExtraInfo;
     }
 
+    [StructLayout(LayoutKind.Sequential)]
+    private struct PointStruct
+    {
+        public int X;
+        public int Y;
+    }
+
     [DllImport("user32.dll", SetLastError = true)]
     private static extern uint SendInput(uint nInputs, Input[] pInputs, int cbSize);
 
     [DllImport("user32.dll")]
     private static extern int GetSystemMetrics(int nIndex);
 
-    public static void MoveMouse(int x, int y)
+    [DllImport("user32.dll")]
+    private static extern bool GetCursorPos(out PointStruct lpPoint);
+
+    public static bool HumanLikeInputEnabled { get; set; } = true;
+
+    public static (int X, int Y) GetCurrentCursorPosition()
+    {
+        return GetCursorPos(out var pt) ? (pt.X, pt.Y) : (0, 0);
+    }
+
+    public static void MoveMouseInstant(int x, int y)
     {
         if (CppNativeBridge.TryMoveMouse(x, y))
         {
@@ -96,6 +113,65 @@ public static class DesktopInputService
         SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<Input>());
     }
 
+    /// <summary>
+    /// Moves the mouse cursor like a human along a subtle cubic Bezier arc with
+    /// Fitts's-Law duration and smooth ease-in / ease-out velocity.
+    /// </summary>
+    public static void MoveMouse(int x, int y)
+    {
+        if (!HumanLikeInputEnabled)
+        {
+            MoveMouseInstant(x, y);
+            return;
+        }
+
+        var (startX, startY) = GetCurrentCursorPosition();
+        double dx = x - startX;
+        double dy = y - startY;
+        double dist = Math.Sqrt(dx * dx + dy * dy);
+        if (dist < 4.0)
+        {
+            MoveMouseInstant(x, y);
+            return;
+        }
+
+        // Natural Fitts's-Law duration (90ms for short moves up to ~320ms across screen)
+        int durationMs = Math.Clamp((int)(75 + Math.Sqrt(dist) * 7.5), 90, 340);
+        int steps = Math.Clamp(durationMs / 8, 10, 48);
+
+        // Gentle perpendicular hand arc (2%-6% of distance)
+        var rng = Random.Shared;
+        double arcSign = rng.Next(2) == 0 ? 1.0 : -1.0;
+        double arcMag = Math.Min(36.0, dist * (0.025 + rng.NextDouble() * 0.035)) * arcSign;
+        double perpX = -dy / dist;
+        double perpY = dx / dist;
+
+        double cp1x = startX + dx * 0.30 + perpX * arcMag;
+        double cp1y = startY + dy * 0.30 + perpY * arcMag;
+        double cp2x = startX + dx * 0.72 + perpX * (arcMag * 0.45);
+        double cp2y = startY + dy * 0.72 + perpY * (arcMag * 0.45);
+
+        int sleepPerStep = Math.Max(4, durationMs / steps);
+        for (int i = 1; i <= steps; i++)
+        {
+            double rawT = (double)i / steps;
+            // Quintic smoothstep: gentle acceleration and natural deceleration onto target
+            double t = rawT * rawT * rawT * (rawT * (rawT * 6.0 - 15.0) + 10.0);
+            double omt = 1.0 - t;
+            double curX = omt * omt * omt * startX
+                        + 3.0 * omt * omt * t * cp1x
+                        + 3.0 * omt * t * t * cp2x
+                        + t * t * t * x;
+            double curY = omt * omt * omt * startY
+                        + 3.0 * omt * omt * t * cp1y
+                        + 3.0 * omt * t * t * cp2y
+                        + t * t * t * y;
+            MoveMouseInstant((int)Math.Round(curX), (int)Math.Round(curY));
+            if (i < steps) Thread.Sleep(sleepPerStep);
+        }
+        MoveMouseInstant(x, y);
+    }
+
     private static (uint Down, uint Up) ResolveMouseButtons(string button) =>
         button.Trim().ToLowerInvariant() switch
         {
@@ -104,36 +180,50 @@ public static class DesktopInputService
             _ => (MouseEventLeftDown, MouseEventLeftUp),
         };
 
-    public static void DragMouse(int startX, int startY, int endX, int endY, string button = "left", int steps = 12)
+    public static void DragMouse(int startX, int startY, int endX, int endY, string button = "left", int steps = 0)
     {
         MoveMouse(startX, startY);
+        Thread.Sleep(24);
         var (down, up) = ResolveMouseButtons(button);
 
         SendInput(1, new[] { new Input { Type = InputMouse, U = new InputUnion { Mi = new MouseInput { DwFlags = down } } } }, Marshal.SizeOf<Input>());
-        steps = Math.Clamp(steps, 1, 60);
-        for (int i = 1; i <= steps; i++)
+        Thread.Sleep(24);
+
+        double dx = endX - startX;
+        double dy = endY - startY;
+        double dist = Math.Sqrt(dx * dx + dy * dy);
+        int actualSteps = steps > 0 ? Math.Clamp(steps, 2, 120) : Math.Clamp((int)Math.Ceiling(dist / 4.0), 8, 90);
+
+        for (int i = 1; i <= actualSteps; i++)
         {
-            int curX = startX + (int)Math.Round((endX - startX) * (double)i / steps);
-            int curY = startY + (int)Math.Round((endY - startY) * (double)i / steps);
-            MoveMouse(curX, curY);
-            Thread.Sleep(8);
+            double rawT = (double)i / actualSteps;
+            double t = rawT * rawT * (3.0 - 2.0 * rawT);
+            int curX = startX + (int)Math.Round(dx * t);
+            int curY = startY + (int)Math.Round(dy * t);
+            MoveMouseInstant(curX, curY);
+            Thread.Sleep(5);
         }
+        MoveMouseInstant(endX, endY);
+        Thread.Sleep(22);
         SendInput(1, new[] { new Input { Type = InputMouse, U = new InputUnion { Mi = new MouseInput { DwFlags = up } } } }, Marshal.SizeOf<Input>());
+        Thread.Sleep(18);
     }
 
-    public static int DrawPath(IReadOnlyList<IReadOnlyList<(int X, int Y)>> strokes, string button = "left", int stepDelayMs = 6)
+    public static int DrawPath(IReadOnlyList<IReadOnlyList<(int X, int Y)>> strokes, string button = "left", int stepDelayMs = 4)
     {
         var (down, up) = ResolveMouseButtons(button);
-        int delay = Math.Clamp(stepDelayMs, 2, 40);
+        int delay = Math.Clamp(stepDelayMs, 2, 25);
         int totalPoints = 0;
 
         foreach (var stroke in strokes)
         {
             if (stroke is null || stroke.Count < 2) continue;
+
+            // Glide hand smoothly to the start of the stroke before putting the pen down
             MoveMouse(stroke[0].X, stroke[0].Y);
-            Thread.Sleep(delay * 2);
+            Thread.Sleep(26);
             SendInput(1, new[] { new Input { Type = InputMouse, U = new InputUnion { Mi = new MouseInput { DwFlags = down } } } }, Marshal.SizeOf<Input>());
-            Thread.Sleep(delay);
+            Thread.Sleep(24);
 
             for (int seg = 0; seg < stroke.Count - 1; seg++)
             {
@@ -142,19 +232,23 @@ public static class DesktopInputService
                 double dx = x2 - x1;
                 double dy = y2 - y1;
                 double dist = Math.Sqrt(dx * dx + dy * dy);
-                int steps = Math.Clamp((int)Math.Ceiling(dist / 10.0), 2, 40);
+                // Fine 3px interpolation keeps curves and diagonals razor-smooth in Paint
+                int steps = Math.Clamp((int)Math.Ceiling(dist / 3.0), 2, 80);
                 for (int i = 1; i <= steps; i++)
                 {
-                    int curX = x1 + (int)Math.Round((x2 - x1) * (double)i / steps);
-                    int curY = y1 + (int)Math.Round((y2 - y1) * (double)i / steps);
-                    MoveMouse(curX, curY);
+                    double t = (double)i / steps;
+                    int curX = x1 + (int)Math.Round(dx * t);
+                    int curY = y1 + (int)Math.Round(dy * t);
+                    MoveMouseInstant(curX, curY);
                     Thread.Sleep(delay);
                 }
                 totalPoints++;
             }
 
+            // Hold briefly at stroke end so the brush registers the final pixel cleanly
+            Thread.Sleep(22);
             SendInput(1, new[] { new Input { Type = InputMouse, U = new InputUnion { Mi = new MouseInput { DwFlags = up } } } }, Marshal.SizeOf<Input>());
-            Thread.Sleep(delay * 3);
+            Thread.Sleep(28);
         }
 
         return totalPoints;
@@ -162,32 +256,17 @@ public static class DesktopInputService
 
     public static void ClickMouse(int x, int y, string button = "left", bool doubleClick = false)
     {
-        if (CppNativeBridge.IsAvailable())
-        {
-            int countNative = doubleClick ? 2 : 1;
-            bool allOk = true;
-            for (int i = 0; i < countNative; i++)
-            {
-                if (!CppNativeBridge.TryMouseButton(button, "click", x, y))
-                {
-                    allOk = false;
-                    break;
-                }
-            }
-            if (allOk) return;
-        }
         MoveMouse(x, y);
-        var (down, up) = ResolveMouseButtons(button);
+        if (HumanLikeInputEnabled) Thread.Sleep(Random.Shared.Next(16, 32));
 
+        var (down, up) = ResolveMouseButtons(button);
         int count = doubleClick ? 2 : 1;
         for (int i = 0; i < count; i++)
         {
-            var inputs = new[]
-            {
-                new Input { Type = InputMouse, U = new InputUnion { Mi = new MouseInput { DwFlags = down } } },
-                new Input { Type = InputMouse, U = new InputUnion { Mi = new MouseInput { DwFlags = up } } },
-            };
-            SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<Input>());
+            SendInput(1, new[] { new Input { Type = InputMouse, U = new InputUnion { Mi = new MouseInput { DwFlags = down } } } }, Marshal.SizeOf<Input>());
+            if (HumanLikeInputEnabled) Thread.Sleep(Random.Shared.Next(42, 72));
+            SendInput(1, new[] { new Input { Type = InputMouse, U = new InputUnion { Mi = new MouseInput { DwFlags = up } } } }, Marshal.SizeOf<Input>());
+            if (doubleClick && i == 0) Thread.Sleep(Random.Shared.Next(65, 95));
         }
     }
 
@@ -196,85 +275,94 @@ public static class DesktopInputService
         if (x.HasValue && y.HasValue)
         {
             MoveMouse(x.Value, y.Value);
+            if (HumanLikeInputEnabled) Thread.Sleep(20);
         }
-        if (CppNativeBridge.TryScrollMouse(horizontal ? 0 : delta, horizontal ? delta : 0))
+
+        int remaining = delta;
+        int notch = delta >= 0 ? 120 : -120;
+        while (remaining != 0)
         {
-            return;
-        }
-        var inputs = new[]
-        {
-            new Input
+            int step = Math.Abs(remaining) >= 120 ? notch : remaining;
+            remaining -= step;
+            var inputs = new[]
             {
-                Type = InputMouse,
-                U = new InputUnion
+                new Input
                 {
-                    Mi = new MouseInput
+                    Type = InputMouse,
+                    U = new InputUnion
                     {
-                        MouseData = unchecked((uint)delta),
-                        DwFlags = horizontal ? MouseEventHWheel : MouseEventWheel,
+                        Mi = new MouseInput
+                        {
+                            MouseData = unchecked((uint)step),
+                            DwFlags = horizontal ? MouseEventHWheel : MouseEventWheel,
+                        },
                     },
                 },
-            },
-        };
-        SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<Input>());
+            };
+            SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<Input>());
+            if (remaining != 0 && HumanLikeInputEnabled) Thread.Sleep(Random.Shared.Next(20, 36));
+        }
     }
 
     public static void TypeText(string text)
     {
         if (string.IsNullOrEmpty(text)) return;
 
-        var inputs = new List<Input>(text.Length * 2);
+        var rng = Random.Shared;
         for (int i = 0; i < text.Length; i++)
         {
             char ch = text[i];
             if (ch == '\r')
             {
                 if (i + 1 < text.Length && text[i + 1] == '\n') i++;
-                inputs.Add(new Input { Type = InputKeyboard, U = new InputUnion { Ki = new KeyboardInput { WVk = 0x0D } } });
-                inputs.Add(new Input { Type = InputKeyboard, U = new InputUnion { Ki = new KeyboardInput { WVk = 0x0D, DwFlags = KeyEventKeyUp } } });
+                PressKey(0x0D);
+                if (HumanLikeInputEnabled) Thread.Sleep(rng.Next(70, 120));
                 continue;
             }
             if (ch == '\n')
             {
-                inputs.Add(new Input { Type = InputKeyboard, U = new InputUnion { Ki = new KeyboardInput { WVk = 0x0D } } });
-                inputs.Add(new Input { Type = InputKeyboard, U = new InputUnion { Ki = new KeyboardInput { WVk = 0x0D, DwFlags = KeyEventKeyUp } } });
+                PressKey(0x0D);
+                if (HumanLikeInputEnabled) Thread.Sleep(rng.Next(70, 120));
                 continue;
             }
             if (ch == '\t')
             {
-                inputs.Add(new Input { Type = InputKeyboard, U = new InputUnion { Ki = new KeyboardInput { WVk = 0x09 } } });
-                inputs.Add(new Input { Type = InputKeyboard, U = new InputUnion { Ki = new KeyboardInput { WVk = 0x09, DwFlags = KeyEventKeyUp } } });
+                PressKey(0x09);
+                if (HumanLikeInputEnabled) Thread.Sleep(rng.Next(45, 80));
                 continue;
             }
 
-            inputs.Add(new Input
+            SendInput(1, new[]
             {
-                Type = InputKeyboard,
-                U = new InputUnion
-                {
-                    Ki = new KeyboardInput { WScan = ch, DwFlags = KeyEventUnicode },
-                },
-            });
-            inputs.Add(new Input
+                new Input { Type = InputKeyboard, U = new InputUnion { Ki = new KeyboardInput { WScan = ch, DwFlags = KeyEventUnicode } } },
+            }, Marshal.SizeOf<Input>());
+            if (HumanLikeInputEnabled) Thread.Sleep(rng.Next(16, 30));
+            SendInput(1, new[]
             {
-                Type = InputKeyboard,
-                U = new InputUnion
-                {
-                    Ki = new KeyboardInput { WScan = ch, DwFlags = KeyEventUnicode | KeyEventKeyUp },
-                },
-            });
+                new Input { Type = InputKeyboard, U = new InputUnion { Ki = new KeyboardInput { WScan = ch, DwFlags = KeyEventUnicode | KeyEventKeyUp } } },
+            }, Marshal.SizeOf<Input>());
+
+            if (HumanLikeInputEnabled && i + 1 < text.Length)
+            {
+                int pause = ch is ' ' or '.' or ',' or '!' or '?'
+                    ? rng.Next(65, 115)
+                    : rng.Next(28, 62);
+                Thread.Sleep(pause);
+            }
         }
-        SendInput((uint)inputs.Count, inputs.ToArray(), Marshal.SizeOf<Input>());
     }
 
     public static void PressKey(ushort virtualKey)
     {
-        var inputs = new[]
+        SendInput(1, new[]
         {
             new Input { Type = InputKeyboard, U = new InputUnion { Ki = new KeyboardInput { WVk = virtualKey } } },
+        }, Marshal.SizeOf<Input>());
+        if (HumanLikeInputEnabled) Thread.Sleep(Random.Shared.Next(32, 56));
+        SendInput(1, new[]
+        {
             new Input { Type = InputKeyboard, U = new InputUnion { Ki = new KeyboardInput { WVk = virtualKey, DwFlags = KeyEventKeyUp } } },
-        };
-        SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<Input>());
+        }, Marshal.SizeOf<Input>());
     }
 
     public static void PressHotkey(string combo)
@@ -291,24 +379,23 @@ public static class DesktopInputService
             keys.Add(ResolveVirtualKey(part));
         }
 
-        var inputs = new Input[keys.Count * 2];
         for (int i = 0; i < keys.Count; i++)
         {
-            inputs[i] = new Input
+            SendInput(1, new[]
             {
-                Type = InputKeyboard,
-                U = new InputUnion { Ki = new KeyboardInput { WVk = keys[i] } },
-            };
+                new Input { Type = InputKeyboard, U = new InputUnion { Ki = new KeyboardInput { WVk = keys[i] } } },
+            }, Marshal.SizeOf<Input>());
+            if (HumanLikeInputEnabled) Thread.Sleep(Random.Shared.Next(20, 36));
         }
-        for (int i = 0; i < keys.Count; i++)
+        if (HumanLikeInputEnabled) Thread.Sleep(Random.Shared.Next(35, 55));
+        for (int i = keys.Count - 1; i >= 0; i--)
         {
-            inputs[keys.Count + i] = new Input
+            SendInput(1, new[]
             {
-                Type = InputKeyboard,
-                U = new InputUnion { Ki = new KeyboardInput { WVk = keys[keys.Count - 1 - i], DwFlags = KeyEventKeyUp } },
-            };
+                new Input { Type = InputKeyboard, U = new InputUnion { Ki = new KeyboardInput { WVk = keys[i], DwFlags = KeyEventKeyUp } } },
+            }, Marshal.SizeOf<Input>());
+            if (HumanLikeInputEnabled && i > 0) Thread.Sleep(Random.Shared.Next(16, 30));
         }
-        SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<Input>());
     }
 
     public static ushort ResolveVirtualKey(string token)
