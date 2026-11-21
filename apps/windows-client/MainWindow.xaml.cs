@@ -74,9 +74,18 @@ public partial class MainWindow : Window
     private readonly TextBlock[] _navIcons;
     private readonly List<PaletteCommand> _paletteCommands = new();
     private TaskCompletionSource<bool>? _pendingApprovalTcs;
+    private Views.QuickCommandOverlayWindow? _quickOverlay;
+    private HwndSource? _hwndSource;
+    private const int HotkeyQuickCommandId = 0xA1B2;
 
     [DllImport("dwmapi.dll", PreserveSig = true)]
     private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int attrValue, int attrSize);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool UnregisterHotKey(IntPtr hWnd, int id);
 
     private static readonly (string Title, string Subtitle)[] TabMeta =
     {
@@ -194,6 +203,37 @@ public partial class MainWindow : Window
     {
         base.OnSourceInitialized(e);
         UpdateDwmWindowChrome();
+        var hwnd = new WindowInteropHelper(this).Handle;
+        if (hwnd != IntPtr.Zero)
+        {
+            _hwndSource = HwndSource.FromHwnd(hwnd);
+            _hwndSource?.AddHook(WndProcHook);
+            // Global Ctrl+Shift+Space launcher (MOD_CONTROL=0x0002 | MOD_SHIFT=0x0004 | MOD_NOREPEAT=0x4000, VK_SPACE=0x20)
+            RegisterHotKey(hwnd, HotkeyQuickCommandId, 0x0002 | 0x0004 | 0x4000, 0x20);
+        }
+    }
+
+    private IntPtr WndProcHook(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
+    {
+        const int WM_HOTKEY = 0x0312;
+        if (msg == WM_HOTKEY && wParam.ToInt32() == HotkeyQuickCommandId)
+        {
+            OpenQuickCommandOverlay();
+            handled = true;
+        }
+        return IntPtr.Zero;
+    }
+
+    private void OpenQuickCommandOverlay()
+    {
+        _quickOverlay ??= new Views.QuickCommandOverlayWindow(cmd =>
+        {
+            Dispatcher.BeginInvoke(async () =>
+            {
+                await SendAgentPromptAsync(cmd);
+            });
+        });
+        _quickOverlay.ShowAndFocus();
     }
 
     private void UpdateDwmWindowChrome()
@@ -366,6 +406,7 @@ public partial class MainWindow : Window
             new PaletteCommand("Action: Copy Diagnostics Report", () => OnCopyDiagnosticsClick(this, new RoutedEventArgs())),
             new PaletteCommand("Action: Toggle Light / Dark Theme", () => OnToggleThemeClick(this, new RoutedEventArgs())),
             new PaletteCommand("Action: Test Agent Takeover Border Glow", () => AgentTakeoverService.StartAgentTakeover()),
+            new PaletteCommand("Action: Open Global Quick-Command Bar (Ctrl+Shift+Space)", () => OpenQuickCommandOverlay()),
         });
     }
 
@@ -601,6 +642,7 @@ public partial class MainWindow : Window
     {
         var menu = new ContextMenuStrip();
         menu.Items.Add("Show Window", null, (_, _) => Dispatcher.Invoke(ShowFromTray));
+        menu.Items.Add("Quick Agent Command (Ctrl+Shift+Space)", null, (_, _) => Dispatcher.Invoke(OpenQuickCommandOverlay));
         menu.Items.Add("Start / Stop Agent", null, (_, _) => Dispatcher.Invoke(() => OnToggleAgentClick(this, new RoutedEventArgs())));
         menu.Items.Add("Pause / Resume", null, (_, _) => Dispatcher.Invoke(() => OnTogglePauseClick(this, new RoutedEventArgs())));
         menu.Items.Add("Ping Control Plane", null, (_, _) => Dispatcher.Invoke(() => OnPingClick(this, new RoutedEventArgs())));
@@ -672,6 +714,14 @@ public partial class MainWindow : Window
         _monitorTimer.Stop();
         await _client.StopAsync();
         _client.Dispose();
+        try
+        {
+            var hwnd = new WindowInteropHelper(this).Handle;
+            if (hwnd != IntPtr.Zero) UnregisterHotKey(hwnd, HotkeyQuickCommandId);
+            _hwndSource?.RemoveHook(WndProcHook);
+            _quickOverlay?.Close();
+        }
+        catch { }
         AgentTakeoverService.Shutdown();
         NamedPipeBridge.StopManagedCppSupervisor();
         if (_trayIcon is not null)

@@ -657,5 +657,29 @@ await RunTest("OcrService & NativeToolExecutor: ocr_screen returns structured te
     Assert(enabled.Contains("ocr_screen") && enabled.Contains("click_text_ocr"), "Expected OCR tools in agent catalog");
 });
 
+// 22. Global Quick-Command Overlay (Ctrl+Shift+Space)
+await RunTest("QuickCommandOverlayWindow: instantiates and dispatches submitted command", async () =>
+{
+    var tcs = new TaskCompletionSource<string>();
+    var sta = new Thread(() =>
+    {
+        try
+        {
+            _ = System.Windows.Application.Current ?? new System.Windows.Application();
+            var win = new AIBridgeClient.Views.QuickCommandOverlayWindow(cmd => tcs.TrySetResult(cmd));
+            win.SubmitCommandForTest("draw a car in Paint");
+            win.Close();
+        }
+        catch (Exception ex)
+        {
+            tcs.TrySetException(ex);
+        }
+    });
+    sta.SetApartmentState(ApartmentState.STA);
+    sta.Start();
+    var received = await tcs.Task;
+    Assert(received == "draw a car in Paint", $"Expected submitted command, got '{received}'");
+});
+
 Console.WriteLine($"\nSummary: {passed} passed, {failed} failed ({passed + failed} total)");
 return failed > 0 ? 1 : 0;
