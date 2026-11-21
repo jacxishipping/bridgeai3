@@ -542,5 +542,50 @@ await RunTest("C++20 Native Agent: 5-line HMAC wire round-trip, CppAgentSettings
     Assert(okBr && brJson.Contains("6000") && cfg.CppAgent.H264BitrateKbps == 6000, "Expected set_h264_bitrate to update target bitrate");
 });
 
+// 17. Agent Screen Takeover input lock, border glow overlay & Take Over state machine
+await RunTest("AgentTakeoverService: AgentControlling -> TakeOver blocks desktop tools -> ReturnControl resumes", async () =>
+{
+    var tcs = new TaskCompletionSource<bool>();
+    var sta = new Thread(() =>
+    {
+        try
+        {
+            var app = System.Windows.Application.Current ?? new System.Windows.Application();
+            AgentTakeoverService.Enabled = true;
+            AgentTakeoverService.StartAgentTakeover();
+            System.Windows.Threading.Dispatcher.CurrentDispatcher.Invoke(() => { }, System.Windows.Threading.DispatcherPriority.Background);
+            Assert(AgentTakeoverService.State == TakeoverState.AgentControlling, $"Expected AgentControlling, got {AgentTakeoverService.State}");
+
+            AgentTakeoverService.TakeOver();
+            System.Windows.Threading.Dispatcher.CurrentDispatcher.Invoke(() => { }, System.Windows.Threading.DispatcherPriority.Background);
+            Assert(AgentTakeoverService.State == TakeoverState.UserControl && AgentTakeoverService.IsUserInControl, "Expected UserControl after TakeOver()");
+
+            var exec = new NativeToolExecutor(new SystemMonitorService(), Path.GetTempPath());
+            var cfg = new AgentGuiConfig
+            {
+                Workspace = Path.GetTempPath(),
+                Policy = new AgentPolicyConfig { AllowTier3 = true, MaxTierUnattended = 3, AllowDesktopControl = true },
+            };
+            var (okWhileUserControls, resBlocked) = exec.ExecuteAsync("mouse_move", "{\"x\":100,\"y\":100}", cfg, CancellationToken.None).GetAwaiter().GetResult();
+            Assert(!okWhileUserControls && resBlocked.Contains("Human takeover is active"), $"Expected agent mouse_move to be blocked during UserControl, got: {resBlocked}");
+
+            AgentTakeoverService.ReturnControlToAgent();
+            System.Windows.Threading.Dispatcher.CurrentDispatcher.Invoke(() => { }, System.Windows.Threading.DispatcherPriority.Background);
+            Assert(AgentTakeoverService.State == TakeoverState.Idle && !AgentTakeoverService.IsUserInControl, "Expected Idle after ReturnControlToAgent()");
+
+            AgentTakeoverService.Shutdown();
+            tcs.SetResult(true);
+        }
+        catch (Exception ex)
+        {
+            AgentTakeoverService.Shutdown();
+            tcs.SetException(ex);
+        }
+    });
+    sta.SetApartmentState(ApartmentState.STA);
+    sta.Start();
+    await tcs.Task;
+});
+
 Console.WriteLine($"\nSummary: {passed} passed, {failed} failed ({passed + failed} total)");
 return failed > 0 ? 1 : 0;
