@@ -638,5 +638,24 @@ await RunTest("AgentTakeoverService & DeviceAgentRuntimeService: Live HUD action
     return Task.CompletedTask;
 });
 
+// 21. Native Offline Windows OCR (ocr_screen & click_text_ocr)
+await RunTest("OcrService & NativeToolExecutor: ocr_screen returns structured text and click_text_ocr obeys policy", async () =>
+{
+    var exec = new NativeToolExecutor(new SystemMonitorService(), Path.GetTempPath());
+    var cfg = new AgentGuiConfig
+    {
+        Workspace = Path.GetTempPath(),
+        Policy = new AgentPolicyConfig { AllowTier3 = true, MaxTierUnattended = 3, AllowDesktopControl = false },
+    };
+    var (okOcr, ocrJson) = await exec.ExecuteAsync("ocr_screen", "{}", cfg, CancellationToken.None);
+    Assert(okOcr && ocrJson.Contains("engine") && ocrJson.Contains("words"), $"Expected ocr_screen to succeed, got: {ocrJson}");
+
+    var (okClickDenied, _) = await exec.ExecuteAsync("click_text_ocr", "{\"text\":\"Start\"}", cfg, CancellationToken.None);
+    Assert(!okClickDenied, "Expected click_text_ocr to be denied when AllowDesktopControl=false");
+
+    var enabled = DeviceAgentRuntimeService.GetEnabledTools(cfg).Select(t => t.Name).ToHashSet();
+    Assert(enabled.Contains("ocr_screen") && enabled.Contains("click_text_ocr"), "Expected OCR tools in agent catalog");
+});
+
 Console.WriteLine($"\nSummary: {passed} passed, {failed} failed ({passed + failed} total)");
 return failed > 0 ? 1 : 0;

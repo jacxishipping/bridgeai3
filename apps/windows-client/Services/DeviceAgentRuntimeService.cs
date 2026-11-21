@@ -39,6 +39,8 @@ public sealed class DeviceAgentRuntimeService : IDisposable
         new("capture_desktop_screenshot", "capture", false, "Capture a PNG screenshot of the primary display or virtual desktop.", new { type = "object", properties = new { full_desktop = new { type = "boolean" }, monitor_index = new { type = "integer" } } }),
         new("desktop_get_window_screenshot", "capture", false, "Capture a screenshot of a specific window by title substring.", new { type = "object", properties = new { title = new { type = "string" } } }),
         new("set_of_marks_screenshot", "capture", false, "Capture screenshot overlaid with numbered [1]..[N] interactive UI element badges.", new { type = "object", properties = new { window = new { type = "string" }, max_marks = new { type = "integer" } } }),
+        new("ocr_screen", "capture", false, "Run native offline Windows OCR on the screen and return all detected text and pixel bounding boxes.", new { type = "object", properties = new { query = new { type = "string" }, monitor_index = new { type = "integer" } } }),
+        new("click_text_ocr", "ui", true, "Find visible text anywhere on screen via Windows OCR and click its center like a human.", new { type = "object", properties = new { text = new { type = "string" }, button = new { type = "string" }, double_click = new { type = "boolean" } }, required = new[] { "text" } }),
 
         new("list_desktop_windows", "window", false, "List all visible top-level windows with titles, process names, PIDs, and coordinates.", new { type = "object", properties = new { query = new { type = "string" }, limit = new { type = "integer" } } }),
         new("get_active_window", "window", false, "Get details of the currently focused foreground window.", new { type = "object", properties = new { } }),
@@ -137,14 +139,14 @@ public sealed class DeviceAgentRuntimeService : IDisposable
                 or "desktop_get_monitors" or "get_screen_size" or "get_desktop_status" or "desktop_get_status" => "sys",
 
             "capture_desktop_screenshot" or "take_screenshot" or "capture_desktop_frame" or "desktop_get_screenshot"
-                or "desktop_get_window_screenshot" or "set_of_marks_screenshot" => "capture",
+                or "desktop_get_window_screenshot" or "set_of_marks_screenshot" or "ocr_screen" => "capture",
 
             "list_desktop_windows" or "desktop_get_windows" or "get_active_window" or "focus_window"
                 or "maximize_window" or "minimize_window" or "restore_window" or "close_window"
                 or "move_resize_window" => "window",
 
             "get_ui_tree" or "find_elements" or "list_ui_elements" or "desktop_get_ui_elements"
-                or "click_element" or "click_text" or "invoke_element" or "set_element_value"
+                or "click_element" or "click_text" or "click_text_ocr" or "invoke_element" or "set_element_value"
                 or "type_into_element" or "focus_element" or "perform_approved_ui_action"
                 or "mouse_move" or "desktop_mouse_move" or "mouse_click" or "desktop_click"
                 or "mouse_scroll" or "desktop_scroll" or "mouse_drag" or "mouse_draw_path" or "draw_path"

@@ -122,6 +122,8 @@ public sealed class NativeToolExecutor
                 "capture_desktop_screenshot" or "take_screenshot" or "capture_desktop_frame" or "desktop_get_screenshot" => CaptureScreenshot(config, args),
                 "set_of_marks_screenshot" => CaptureSetOfMarksScreenshot(config, args),
                 "desktop_get_window_screenshot" => CaptureWindowScreenshot(config, args),
+                "ocr_screen" => await OcrScreenAsync(config, args, ct),
+                "click_text_ocr" => await ClickTextOcrAsync(config, args, ct),
                 "mouse_move" or "desktop_mouse_move" => MouseMove(config, args),
                 "mouse_click" or "desktop_click" => MouseClick(config, args),
                 "mouse_scroll" or "desktop_scroll" => MouseScroll(config, args),
@@ -723,6 +725,55 @@ public sealed class NativeToolExecutor
             size_bytes = shot.SizeBytes,
             base64_data = shot.Base64Png,
             image_base64 = shot.Base64Png,
+        };
+    }
+
+    private async Task<object> OcrScreenAsync(AgentGuiConfig config, JsonElement args, CancellationToken ct)
+    {
+        if (!config.Policy.AllowTier3 || config.Policy.MaxTierUnattended < 3)
+        {
+            throw new UnauthorizedAccessException("Policy denied: Tier 3 sensitive operations are disabled.");
+        }
+        int monitorIdx = args.TryGetProperty("monitor_index", out var mEl) && mEl.TryGetInt32(out var m) ? m : 0;
+        string? query = args.TryGetProperty("query", out var qEl) ? qEl.GetString() : null;
+        var res = await OcrService.RecognizeScreenAsync(ResolveScreenshotDir(config), monitorIdx, query, ct);
+        return new
+        {
+            engine = res.Engine,
+            full_text = res.FullText,
+            word_count = res.Words.Count,
+            words = res.Words.Take(120).ToList(),
+            screenshot_path = res.ScreenshotPath,
+        };
+    }
+
+    private async Task<object> ClickTextOcrAsync(AgentGuiConfig config, JsonElement args, CancellationToken ct)
+    {
+        RequireDesktopControl(config);
+        string text = args.TryGetProperty("text", out var tEl) ? tEl.GetString() ?? ""
+            : args.TryGetProperty("query", out var qEl) ? qEl.GetString() ?? "" : "";
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            throw new ArgumentException("Target 'text' is required for click_text_ocr.");
+        }
+        int monitorIdx = args.TryGetProperty("monitor_index", out var mEl) && mEl.TryGetInt32(out var m) ? m : 0;
+        string button = args.TryGetProperty("button", out var bEl) ? bEl.GetString() ?? "left" : "left";
+        bool dbl = args.TryGetProperty("double_click", out var dEl) && dEl.ValueKind == JsonValueKind.True;
+
+        var res = await OcrService.RecognizeScreenAsync(ResolveScreenshotDir(config), monitorIdx, text, ct);
+        var hit = res.Words.FirstOrDefault(w => w.Text.Contains(text, StringComparison.OrdinalIgnoreCase));
+        if (hit is null)
+        {
+            throw new InvalidOperationException($"OCR text '{text}' was not found on screen (engine={res.Engine}).");
+        }
+        DesktopInputService.ClickMouse(hit.CenterX, hit.CenterY, button, dbl);
+        return new
+        {
+            status = "clicked",
+            engine = res.Engine,
+            matched_text = hit.Text,
+            x = hit.CenterX,
+            y = hit.CenterY,
         };
     }
 
