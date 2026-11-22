@@ -425,6 +425,15 @@ public partial class MainWindow : Window
             new PaletteCommand("Action: Test Agent Takeover Border Glow", () => AgentTakeoverService.StartAgentTakeover()),
             new PaletteCommand("Action: Open Global Quick-Command Bar (Ctrl+Shift+Space)", () => OpenQuickCommandOverlay()),
         });
+        foreach (var pb in AgentPlaybookService.Load().Take(12))
+        {
+            var capturedPrompt = pb.Prompt;
+            _paletteCommands.Add(new PaletteCommand($"Playbook: {pb.Name}", () =>
+            {
+                SelectTab(6);
+                _ = SendAgentPromptAsync(capturedPrompt);
+            }));
+        }
     }
 
     private void OnWindowPreviewKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
@@ -2858,6 +2867,28 @@ public partial class MainWindow : Window
         var (ok, detail) = AgentActionTimelineService.UndoLastAction();
         AppendLog(ok ? "ok" : "warn", detail);
         ShowToast(detail);
+    }
+
+    private void OnAgSavePlaybookClick(object sender, RoutedEventArgs e)
+    {
+        var lastUser = _activeThread.Messages.LastOrDefault(m => string.Equals(m.Role, "user", StringComparison.OrdinalIgnoreCase))?.Content?.Trim();
+        var prompt = !string.IsNullOrWhiteSpace(AgPromptBox.Text) ? AgPromptBox.Text.Trim() : (lastUser ?? "");
+        if (string.IsNullOrWhiteSpace(prompt))
+        {
+            ShowToast("Type or send a prompt first to save as a Playbook");
+            return;
+        }
+        var list = AgentPlaybookService.Load();
+        var title = prompt.Length > 36 ? prompt[..36] + "..." : prompt;
+        list.Insert(0, new AgentPlaybook
+        {
+            Name = title,
+            Prompt = prompt,
+            Description = $"Saved {DateTime.Now:MMM dd HH:mm}",
+        });
+        AgentPlaybookService.Save(list);
+        BuildPaletteCommands();
+        ShowToast($"Saved Playbook: {title}");
     }
 
     private void OnAgDeleteThreadClick(object sender, RoutedEventArgs e)

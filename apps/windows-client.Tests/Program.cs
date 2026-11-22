@@ -828,5 +828,26 @@ await RunTest("VoiceInputService: builds offline System.Speech recognition scrip
     return Task.CompletedTask;
 });
 
+// 32. Reusable 1-Click Playbooks persistence
+await RunTest("AgentPlaybookService: loads defaults and persists custom playbooks", () =>
+{
+    var tmpFile = Path.Combine(Path.GetTempPath(), $"aib-pb-{Guid.NewGuid():N}.json");
+    try
+    {
+        var defaults = AgentPlaybookService.Load(tmpFile);
+        Assert(defaults.Count >= 3, "Expected >= 3 default playbooks");
+        defaults.Insert(0, new AgentPlaybook { Name = "Morning Setup", Prompt = "Open VS Code and check git status" });
+        AgentPlaybookService.Save(defaults, tmpFile);
+
+        var reloaded = AgentPlaybookService.Load(tmpFile);
+        Assert(reloaded[0].Name == "Morning Setup", "Expected saved playbook to reload first");
+    }
+    finally
+    {
+        if (File.Exists(tmpFile)) File.Delete(tmpFile);
+    }
+    return Task.CompletedTask;
+});
+
 Console.WriteLine($"\nSummary: {passed} passed, {failed} failed ({passed + failed} total)");
 return failed > 0 ? 1 : 0;
