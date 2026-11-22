@@ -101,16 +101,54 @@ $bitmap = Await ($decoder.GetSoftwareBitmapAsync()) ([Windows.Graphics.Imaging.S
 $res = Await ($engine.RecognizeAsync($bitmap)) ([Windows.Media.Ocr.OcrResult])
 $words = @()
 foreach ($line in $res.Lines) {{
-    foreach ($w in $line.Words) {{
-        $r = $w.BoundingRect
+    $lw = @($line.Words)
+    if ($lw.Count -gt 0) {{
+        # Emit full line hit
+        $minX = ($lw | ForEach-Object {{ $_.BoundingRect.X }} | Measure-Object -Minimum).Minimum
+        $minY = ($lw | ForEach-Object {{ $_.BoundingRect.Y }} | Measure-Object -Minimum).Minimum
+        $maxR = ($lw | ForEach-Object {{ $_.BoundingRect.X + $_.BoundingRect.Width }} | Measure-Object -Maximum).Maximum
+        $maxB = ($lw | ForEach-Object {{ $_.BoundingRect.Y + $_.BoundingRect.Height }} | Measure-Object -Maximum).Maximum
         $words += [PSCustomObject]@{{
-            text = $w.Text
-            x = [int][Math]::Round($r.X)
-            y = [int][Math]::Round($r.Y)
-            width = [int][Math]::Round($r.Width)
-            height = [int][Math]::Round($r.Height)
-            center_x = [int][Math]::Round($r.X + $r.Width / 2.0)
-            center_y = [int][Math]::Round($r.Y + $r.Height / 2.0)
+            text = $line.Text
+            x = [int][Math]::Round($minX)
+            y = [int][Math]::Round($minY)
+            width = [int][Math]::Round($maxR - $minX)
+            height = [int][Math]::Round($maxB - $minY)
+            center_x = [int][Math]::Round(($minX + $maxR) / 2.0)
+            center_y = [int][Math]::Round(($minY + $maxB) / 2.0)
+        }}
+        # Emit 2-word and 3-word phrase spans so buttons like 'Sign In' or 'Add to Cart' have exact bounding boxes
+        for ($i = 0; $i -lt $lw.Count; $i++) {{
+            $w = $lw[$i]
+            $r = $w.BoundingRect
+            $words += [PSCustomObject]@{{
+                text = $w.Text
+                x = [int][Math]::Round($r.X)
+                y = [int][Math]::Round($r.Y)
+                width = [int][Math]::Round($r.Width)
+                height = [int][Math]::Round($r.Height)
+                center_x = [int][Math]::Round($r.X + $r.Width / 2.0)
+                center_y = [int][Math]::Round($r.Y + $r.Height / 2.0)
+            }}
+            for ($span = 2; $span -le 3; $span++) {{
+                if ($i + $span -le $lw.Count) {{
+                    $slice = $lw[$i..($i + $span - 1)]
+                    $phrase = ($slice | ForEach-Object {{ $_.Text }}) -join ' '
+                    $sx = ($slice | ForEach-Object {{ $_.BoundingRect.X }} | Measure-Object -Minimum).Minimum
+                    $sy = ($slice | ForEach-Object {{ $_.BoundingRect.Y }} | Measure-Object -Minimum).Minimum
+                    $sr = ($slice | ForEach-Object {{ $_.BoundingRect.X + $_.BoundingRect.Width }} | Measure-Object -Maximum).Maximum
+                    $sb = ($slice | ForEach-Object {{ $_.BoundingRect.Y + $_.BoundingRect.Height }} | Measure-Object -Maximum).Maximum
+                    $words += [PSCustomObject]@{{
+                        text = $phrase
+                        x = [int][Math]::Round($sx)
+                        y = [int][Math]::Round($sy)
+                        width = [int][Math]::Round($sr - $sx)
+                        height = [int][Math]::Round($sb - $sy)
+                        center_x = [int][Math]::Round(($sx + $sr) / 2.0)
+                        center_y = [int][Math]::Round(($sy + $sb) / 2.0)
+                    }}
+                }}
+            }}
         }}
     }}
 }}

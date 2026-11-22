@@ -786,10 +786,30 @@ public sealed class NativeToolExecutor
         bool dbl = args.TryGetProperty("double_click", out var dEl) && dEl.ValueKind == JsonValueKind.True;
 
         var res = await OcrService.RecognizeScreenAsync(ResolveScreenshotDir(config), monitorIdx, text, ct);
-        var hit = res.Words.FirstOrDefault(w => w.Text.Contains(text, StringComparison.OrdinalIgnoreCase));
+        // Prefer exact match, then shortest substring match (so "Sign In" phrase beats full nav bar line)
+        var hit = res.Words
+            .Where(w => w.Text.Contains(text, StringComparison.OrdinalIgnoreCase))
+            .OrderBy(w => string.Equals(w.Text.Trim(), text.Trim(), StringComparison.OrdinalIgnoreCase) ? 0 : 1)
+            .ThenBy(w => w.Text.Length)
+            .FirstOrDefault();
         if (hit is null)
         {
-            throw new InvalidOperationException($"OCR text '{text}' was not found on screen (engine={res.Engine}).");
+            // Fallback to deep UI Automation search (e.g. Chrome DOM buttons)
+            var uiaMatches = UiAutomationService.FindVisibleElements(text, 10, maxDepth: 12);
+            var uiaHit = uiaMatches.FirstOrDefault();
+            if (uiaHit is not null)
+            {
+                DesktopInputService.ClickMouse(uiaHit.CenterX, uiaHit.CenterY, button, dbl);
+                return new
+                {
+                    status = "clicked",
+                    engine = "uia_fallback",
+                    matched_text = uiaHit.Name,
+                    x = uiaHit.CenterX,
+                    y = uiaHit.CenterY,
+                };
+            }
+            throw new InvalidOperationException($"OCR text '{text}' was not found on screen (engine={res.Engine}). Try capture_desktop_screenshot and mouse_click(x, y).");
         }
         DesktopInputService.ClickMouse(hit.CenterX, hit.CenterY, button, dbl);
         return new
@@ -1175,7 +1195,7 @@ public sealed class NativeToolExecutor
         string? window = args.TryGetProperty("window", out var wEl) ? wEl.GetString()
             : args.TryGetProperty("window_title", out var wtEl) ? wtEl.GetString() : null;
         string? controlType = args.TryGetProperty("control_type", out var ctEl) ? ctEl.GetString() : null;
-        int maxDepth = args.TryGetProperty("max_depth", out var dEl) && dEl.TryGetInt32(out var d) ? Math.Clamp(d, 2, 10) : 6;
+        int maxDepth = args.TryGetProperty("max_depth", out var dEl) && dEl.TryGetInt32(out var d) ? Math.Clamp(d, 2, 16) : 10;
         int limit = args.TryGetProperty("limit", out var lEl) && lEl.TryGetInt32(out var l) ? Math.Clamp(l, 1, 200) : 80;
         var elements = UiAutomationService.FindVisibleElements(query, limit, window, controlType, maxDepth);
         return new { count = elements.Count, window = window ?? "desktop", elements };
