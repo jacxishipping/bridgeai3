@@ -110,10 +110,20 @@ public partial class MainWindow : Window
         PolicyAuditList.ItemsSource = _policyAuditHistory;
         SetTagsItems.ItemsSource = _deviceTags;
         AgCustomGrid.ItemsSource = _customAgents;
-        _chatThreads.Add(_activeThread);
+        var savedThreads = ChatHistoryService.Load();
+        if (savedThreads.Count > 0)
+        {
+            foreach (var st in savedThreads) _chatThreads.Add(st);
+            _activeThread = _chatThreads[0];
+        }
+        else
+        {
+            _chatThreads.Add(_activeThread);
+        }
         AgThreadsList.ItemsSource = _chatThreads;
         AgThreadsList.SelectedItem = _activeThread;
         AgMessagesList.ItemsSource = _activeThread.Messages;
+        SyncChatStreamVisibility();
 
         _config = _configService.LoadConfig();
         _deviceToken = _configService.LoadToken();
@@ -2823,6 +2833,56 @@ public partial class MainWindow : Window
         ShowToast(detail);
     }
 
+    private void OnAgDeleteThreadClick(object sender, RoutedEventArgs e)
+    {
+        if (_chatThreads.Count <= 1)
+        {
+            _activeThread.Messages.Clear();
+            _activeThread.Title = "New Chat";
+            _activeThread.Preview = "Ready on this Windows PC";
+        }
+        else
+        {
+            _chatThreads.Remove(_activeThread);
+            _activeThread = _chatThreads[0];
+            AgThreadsList.SelectedItem = _activeThread;
+            AgMessagesList.ItemsSource = _activeThread.Messages;
+        }
+        ChatHistoryService.Save(_chatThreads);
+        AgThreadsList.Items.Refresh();
+        SyncChatStreamVisibility();
+        ShowToast("Deleted conversation");
+    }
+
+    private void OnAgExportThreadClick(object sender, RoutedEventArgs e)
+    {
+        if (_activeThread.Messages.Count == 0)
+        {
+            ShowToast("Nothing to export in this chat");
+            return;
+        }
+        var dlg = new Microsoft.Win32.SaveFileDialog
+        {
+            FileName = $"ai-bridge-chat-{DateTimeOffset.Now:yyyyMMdd-HHmmss}.md",
+            Filter = "Markdown (*.md)|*.md|Text (*.txt)|*.txt",
+        };
+        if (dlg.ShowDialog() == true)
+        {
+            File.WriteAllText(dlg.FileName, ChatHistoryService.ExportThreadToMarkdown(_activeThread));
+            ShowToast("Exported chat to Markdown");
+        }
+    }
+
+    private void OnAgThreadSearchChanged(object sender, TextChangedEventArgs e)
+    {
+        var q = AgThreadSearchBox?.Text?.Trim() ?? "";
+        AgThreadsList.ItemsSource = string.IsNullOrWhiteSpace(q)
+            ? _chatThreads
+            : _chatThreads.Where(t =>
+                t.Title.Contains(q, StringComparison.OrdinalIgnoreCase) ||
+                t.Preview.Contains(q, StringComparison.OrdinalIgnoreCase)).ToList();
+    }
+
     private void OnAgCopyMessageClick(object sender, RoutedEventArgs e)
     {
         if (sender is System.Windows.Controls.Button btn && btn.Tag is string txt && !string.IsNullOrWhiteSpace(txt))
@@ -3307,6 +3367,7 @@ public partial class MainWindow : Window
         }
         finally
         {
+            ChatHistoryService.Save(_chatThreads);
             _activeChatCts?.Dispose();
             _activeChatCts = null;
             _isChatBusy = false;

@@ -757,5 +757,29 @@ await RunTest("AgentChatMessage: collapsible ToolDetails visibility & copy bindi
     return Task.CompletedTask;
 });
 
+// 27. Persistent Chat History save/load & Markdown export
+await RunTest("ChatHistoryService: persists threads to disk and exports Markdown", () =>
+{
+    var tmpFile = Path.Combine(Path.GetTempPath(), $"aib-chats-{Guid.NewGuid():N}.json");
+    try
+    {
+        var th = new AgentChatThread { Title = "Draw Car Session", Preview = "Drew car in Paint" };
+        th.Messages.Add(new AgentChatMessage { Role = "user", Content = "draw a car", Timestamp = "10:00:00" });
+        th.Messages.Add(new AgentChatMessage { Role = "assistant", Content = "Done!", ToolsSummary = "mouse_draw_path", Timestamp = "10:00:04" });
+        ChatHistoryService.Save(new[] { th }, tmpFile);
+
+        var loaded = ChatHistoryService.Load(tmpFile);
+        Assert(loaded.Count == 1 && loaded[0].Title == "Draw Car Session" && loaded[0].Messages.Count == 2, "Expected persisted thread to round-trip");
+
+        var md = ChatHistoryService.ExportThreadToMarkdown(loaded[0]);
+        Assert(md.Contains("# Draw Car Session") && md.Contains("draw a car") && md.Contains("mouse_draw_path"), "Expected valid Markdown export");
+    }
+    finally
+    {
+        if (File.Exists(tmpFile)) File.Delete(tmpFile);
+    }
+    return Task.CompletedTask;
+});
+
 Console.WriteLine($"\nSummary: {passed} passed, {failed} failed ({passed + failed} total)");
 return failed > 0 ? 1 : 0;

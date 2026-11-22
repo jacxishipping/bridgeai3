@@ -1380,7 +1380,18 @@
 
                                                 <!-- Thread History List -->
                                                 <StackPanel>
-                                                    <TextBlock Text="CONVERSATIONS" FontSize="10" FontWeight="SemiBold" Foreground="{DynamicResource TextMuted}" Margin="4,4,0,6"/>
+                                                    <Grid Margin="4,4,0,6">
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="*"/>
+                                                            <ColumnDefinition Width="Auto"/>
+                                                        </Grid.ColumnDefinitions>
+                                                        <TextBlock Grid.Column="0" Text="CONVERSATIONS" FontSize="10" FontWeight="SemiBold" Foreground="{DynamicResource TextMuted}" VerticalAlignment="Center"/>
+                                                        <StackPanel Grid.Column="1" Orientation="Horizontal">
+                                                            <Button Content="Export" Style="{StaticResource GhostBtnStyle}" Padding="5,1" FontSize="10" Click="OnAgExportThreadClick" ToolTip="Export active conversation to Markdown (.md)"/>
+                                                            <Button Content="Del" Style="{StaticResource GhostBtnStyle}" Padding="5,1" FontSize="10" Click="OnAgDeleteThreadClick" ToolTip="Delete active conversation"/>
+                                                        </StackPanel>
+                                                    </Grid>
+                                                    <TextBox x:Name="AgThreadSearchBox" Style="{StaticResource FieldStyle}" Padding="8,5" FontSize="11" Tag="Search chats..." TextChanged="OnAgThreadSearchChanged" Margin="0,0,0,6"/>
                                                     <ListBox x:Name="AgThreadsList" Background="Transparent" BorderThickness="0" SelectionChanged="OnAgThreadSelected" ScrollViewer.HorizontalScrollBarVisibility="Disabled">
                                                         <ListBox.ItemTemplate>
                                                             <DataTemplate>
