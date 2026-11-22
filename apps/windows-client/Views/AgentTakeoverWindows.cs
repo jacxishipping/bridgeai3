@@ -141,6 +141,44 @@ public sealed class AgentGlowOverlayWindow : Window
         _cursorHalo.Visibility = Visibility.Visible;
     }
 
+    public void TriggerClickRipple(int screenX, int screenY)
+    {
+        if (!ShowCursorHalo || !IsVisible) return;
+        var dpi = VisualTreeHelper.GetDpi(this);
+        double dipX = (screenX / dpi.DpiScaleX) - Left;
+        double dipY = (screenY / dpi.DpiScaleY) - Top;
+
+        var ring = new Ellipse
+        {
+            Width = 16,
+            Height = 16,
+            Stroke = new SolidColorBrush(System.Windows.Media.Color.FromRgb(0x22, 0xD3, 0xEE)),
+            StrokeThickness = 2.5,
+            IsHitTestVisible = false,
+            RenderTransformOrigin = new System.Windows.Point(0.5, 0.5),
+            RenderTransform = new ScaleTransform(1, 1),
+        };
+        Canvas.SetLeft(ring, dipX - 8);
+        Canvas.SetTop(ring, dipY - 8);
+        _cursorCanvas.Children.Add(ring);
+
+        var sb = new Storyboard();
+        var sx = new DoubleAnimation(1.0, 4.0, TimeSpan.FromMilliseconds(320)) { EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut } };
+        var sy = new DoubleAnimation(1.0, 4.0, TimeSpan.FromMilliseconds(320)) { EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut } };
+        var op = new DoubleAnimation(0.95, 0.0, TimeSpan.FromMilliseconds(320));
+        Storyboard.SetTarget(sx, ring);
+        Storyboard.SetTargetProperty(sx, new PropertyPath("(UIElement.RenderTransform).(ScaleTransform.ScaleX)"));
+        Storyboard.SetTarget(sy, ring);
+        Storyboard.SetTargetProperty(sy, new PropertyPath("(UIElement.RenderTransform).(ScaleTransform.ScaleY)"));
+        Storyboard.SetTarget(op, ring);
+        Storyboard.SetTargetProperty(op, new PropertyPath(OpacityProperty));
+        sb.Children.Add(sx);
+        sb.Children.Add(sy);
+        sb.Children.Add(op);
+        sb.Completed += (_, _) => _cursorCanvas.Children.Remove(ring);
+        sb.Begin();
+    }
+
     private void MakeClickThrough()
     {
         var hwnd = new WindowInteropHelper(this).Handle;
@@ -225,6 +263,7 @@ public sealed class AgentGlowOverlayWindow : Window
 public sealed class AgentTakeoverPillWindow : Window
 {
     private readonly TextBlock _label;
+    private readonly System.Windows.Controls.Button _pauseButton;
     private readonly System.Windows.Controls.Button _button;
     private readonly Ellipse _dot;
 
@@ -263,6 +302,25 @@ public sealed class AgentTakeoverPillWindow : Window
             Margin = new Thickness(0, 0, 14, 0),
         };
 
+        _pauseButton = new System.Windows.Controls.Button
+        {
+            Content = "Pause",
+            Padding = new Thickness(11, 6, 11, 6),
+            Margin = new Thickness(0, 0, 8, 0),
+            FontSize = 12,
+            FontWeight = FontWeights.SemiBold,
+            Foreground = System.Windows.Media.Brushes.White,
+            Background = new SolidColorBrush(System.Windows.Media.Color.FromRgb(0x33, 0x41, 0x55)),
+            BorderThickness = new Thickness(0),
+            Cursor = System.Windows.Input.Cursors.Hand,
+            Focusable = false,
+        };
+        _pauseButton.Click += (_, _) =>
+        {
+            AgentTakeoverService.TogglePause();
+            _pauseButton.Content = AgentTakeoverService.IsPaused ? "Resume" : "Pause";
+        };
+
         _button = new System.Windows.Controls.Button
         {
             Padding = new Thickness(14, 6, 14, 6),
@@ -283,6 +341,7 @@ public sealed class AgentTakeoverPillWindow : Window
         var row = new StackPanel { Orientation = System.Windows.Controls.Orientation.Horizontal };
         row.Children.Add(_dot);
         row.Children.Add(_label);
+        row.Children.Add(_pauseButton);
         row.Children.Add(_button);
 
         Content = new Border
@@ -328,6 +387,8 @@ public sealed class AgentTakeoverPillWindow : Window
         _label.Text = agent
             ? "AI agent is controlling your screen  ·  Ctrl+Alt+T"
             : "You are in control  ·  agent input paused";
+        _pauseButton.Visibility = agent ? Visibility.Visible : Visibility.Collapsed;
+        _pauseButton.Content = AgentTakeoverService.IsPaused ? "Resume" : "Pause";
         _button.Content = agent ? "Take Over" : "Return Control to Agent";
         _button.Background = new SolidColorBrush(agent
             ? System.Windows.Media.Color.FromRgb(0xEF, 0x44, 0x44)

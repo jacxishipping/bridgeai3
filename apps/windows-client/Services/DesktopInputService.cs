@@ -303,6 +303,7 @@ public static class DesktopInputService
     public static void ClickMouse(int x, int y, string button = "left", bool doubleClick = false)
     {
         MoveMouse(x, y);
+        AgentTakeoverService.TriggerClickRipple(x, y);
         if (HumanLikeInputEnabled) Thread.Sleep(Random.Shared.Next(16, 32));
 
         var (down, up) = ResolveMouseButtons(button);

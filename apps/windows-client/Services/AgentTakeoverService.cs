@@ -95,12 +95,38 @@ public static class AgentTakeoverService
     private static DispatcherTimer? _idleTimer;
     private static long _lastActivityTick;
     private static volatile TakeoverState _state = TakeoverState.Idle;
+    private static volatile bool _paused;
     private static AgentGlowOverlayWindow? _overlay;
     private static AgentTakeoverPillWindow? _pill;
 
     public static TakeoverState State => _state;
 
     public static bool IsUserInControl => _state == TakeoverState.UserControl;
+
+    public static bool IsPaused => _paused;
+
+    public static void TogglePause()
+    {
+        _paused = !_paused;
+        RunOnUi(() =>
+        {
+            if (_state == TakeoverState.AgentControlling)
+            {
+                _pill?.UpdateActionText(_paused ? "Paused by user" : "Resumed");
+            }
+        });
+    }
+
+    public static void TriggerClickRipple(int screenX, int screenY) => RunOnUi(() =>
+    {
+        if (_state == TakeoverState.AgentControlling)
+        {
+            _overlay?.TriggerClickRipple(screenX, screenY);
+        }
+    });
+
+    public static void UpdateStep(int step, int maxSteps, string action) =>
+        UpdateActionLabel($"Step {step}/{maxSteps} · {action}");
 
     /// <summary>Master switch (Settings → Security). When false the glow/blocking never activates.</summary>
     public static bool Enabled { get; set; } = true;

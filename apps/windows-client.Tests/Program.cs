@@ -798,5 +798,18 @@ await RunTest("DeviceAgentRuntimeService: FormatFileAttachmentContext formats dr
     return Task.CompletedTask;
 });
 
+// 29. Takeover HUD Pause/Resume, Step Counter & Click Ripples
+await RunTest("AgentTakeoverService: TogglePause, UpdateStep & TriggerClickRipple work cleanly", () =>
+{
+    bool before = AgentTakeoverService.IsPaused;
+    AgentTakeoverService.TogglePause();
+    Assert(AgentTakeoverService.IsPaused == !before, "Expected TogglePause to flip IsPaused");
+    AgentTakeoverService.TogglePause();
+    Assert(AgentTakeoverService.IsPaused == before, "Expected second TogglePause to restore IsPaused");
+    AgentTakeoverService.UpdateStep(2, 16, "mouse_draw_path");
+    AgentTakeoverService.TriggerClickRipple(400, 300);
+    return Task.CompletedTask;
+});
+
 Console.WriteLine($"\nSummary: {passed} passed, {failed} failed ({passed + failed} total)");
 return failed > 0 ? 1 : 0;

@@ -712,6 +712,10 @@ public sealed class DeviceAgentRuntimeService : IDisposable
         CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
+        while (AgentTakeoverService.IsPaused)
+        {
+            await Task.Delay(150, ct);
+        }
         if (!IsToolAllowed(toolName, config, out var denyReason))
         {
             return (JsonSerializer.Serialize(new { error = denyReason, blocked_by = "agent_settings" }), null);
