@@ -3231,6 +3231,33 @@ public partial class MainWindow : Window
         AgAttachmentBar.Visibility = Visibility.Collapsed;
     }
 
+    private async void OnAgVoiceInputClick(object sender, RoutedEventArgs e)
+    {
+        if (AgMicBtn is null) return;
+        AgMicBtn.IsEnabled = false;
+        AgMicBtn.Content = "Listening...";
+        ShowToast("Listening for voice command (speak now)...");
+        try
+        {
+            var (ok, transcript, err) = await VoiceInputService.ListenOnceAsync(8);
+            if (ok && !string.IsNullOrWhiteSpace(transcript))
+            {
+                AgPromptBox.Text = transcript;
+                ShowToast($"Heard: {transcript}");
+                await SendAgentPromptAsync(transcript);
+            }
+            else
+            {
+                ShowToast(string.IsNullOrWhiteSpace(err) ? "Voice input unavailable" : err);
+            }
+        }
+        finally
+        {
+            AgMicBtn.Content = "🎤 Voice";
+            AgMicBtn.IsEnabled = true;
+        }
+    }
+
     private async void OnAgSendChatClick(object sender, RoutedEventArgs e)
     {
         if (_isChatBusy)

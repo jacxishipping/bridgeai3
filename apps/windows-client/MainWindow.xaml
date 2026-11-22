@@ -1555,6 +1555,7 @@
                                                             </Grid.ColumnDefinitions>
                                                             <TextBlock Grid.Column="0" Text="Drop files · Ctrl+V image · /ui · /som · /screenshot · /sysinfo" FontSize="10.5" FontFamily="Consolas" Foreground="{DynamicResource TextMuted}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" Margin="0,0,10,0"/>
                                                             <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                                                <Button x:Name="AgMicBtn" Content="🎤 Voice" Style="{StaticResource GhostBtnStyle}" Padding="8,5" FontSize="11.5" Click="OnAgVoiceInputClick" Margin="0,0,4,0" ToolTip="Push-to-Talk voice command (Windows Speech Recognition)"/>
                                                                 <Button Content="Attach" Style="{StaticResource GhostBtnStyle}" Padding="8,5" FontSize="11.5" Click="OnAgAttachFileClick" Margin="0,0,4,0" ToolTip="Attach an image or text file to your message"/>
                                                                 <Button Content="Clear" Style="{StaticResource GhostBtnStyle}" Padding="8,5" FontSize="11.5" Click="OnAgNewChatClick" Margin="0,0,6,0"/>
                                                                 <Button x:Name="AgSendBtn" Content="Send ↑" Style="{StaticResource PrimaryBtnStyle}" Padding="14,6" FontSize="12" Click="OnAgSendChatClick"/>

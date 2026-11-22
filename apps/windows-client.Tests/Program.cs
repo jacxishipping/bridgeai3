@@ -819,5 +819,14 @@ await RunTest("AgentGuiConfig: EnableMicaBackdrop defaults to true", () =>
     return Task.CompletedTask;
 });
 
+// 31. VoiceInputService Push-to-Talk script builder
+await RunTest("VoiceInputService: builds offline System.Speech recognition script cleanly", () =>
+{
+    var script = VoiceInputService.BuildRecognitionScript(8);
+    Assert(script.Contains("SpeechRecognitionEngine") && script.Contains("DictationGrammar") && script.Contains("FromSeconds(8)"),
+        "Expected valid Windows SpeechRecognitionEngine script");
+    return Task.CompletedTask;
+});
+
 Console.WriteLine($"\nSummary: {passed} passed, {failed} failed ({passed + failed} total)");
 return failed > 0 ? 1 : 0;
