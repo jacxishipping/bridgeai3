@@ -2823,6 +2823,30 @@ public partial class MainWindow : Window
         ShowToast(detail);
     }
 
+    private void OnAgCopyMessageClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is System.Windows.Controls.Button btn && btn.Tag is string txt && !string.IsNullOrWhiteSpace(txt))
+        {
+            System.Windows.Clipboard.SetText(txt);
+            ShowToast("Copied message to clipboard");
+        }
+    }
+
+    private void OnAgScreenshotClick(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is FrameworkElement fe && fe.Tag is ImageSource img)
+        {
+            LightboxImage.Source = img;
+            ScreenshotLightboxOverlay.Visibility = Visibility.Visible;
+        }
+    }
+
+    private void OnCloseLightboxClick(object sender, MouseButtonEventArgs e) =>
+        ScreenshotLightboxOverlay.Visibility = Visibility.Collapsed;
+
+    private void OnCloseLightboxBtnClick(object sender, RoutedEventArgs e) =>
+        ScreenshotLightboxOverlay.Visibility = Visibility.Collapsed;
+
     private void OnAgDrawerTabClick(object sender, RoutedEventArgs e)
     {
         if (sender is System.Windows.Controls.Button btn && btn.Tag is string tag)
@@ -3152,7 +3176,9 @@ public partial class MainWindow : Window
                         Role = "assistant",
                         Content = dReply,
                         ToolsSummary = dSummary,
+                        ToolDetails = progressLines.Count > 0 ? string.Join("\n", progressLines) : "",
                         Timestamp = DateTime.Now.ToString("HH:mm:ss"),
+                        ScreenshotBase64 = dShot,
                         ScreenshotImage = DecodeBase64Image(dShot),
                     });
                     _activeThread.Preview = dReply.Length > 48 ? dReply[..48] + "..." : dReply;

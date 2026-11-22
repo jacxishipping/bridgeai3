@@ -407,24 +407,37 @@ public sealed class AgentChatMessage
     public string Role { get; set; } = "assistant";
     public string Content { get; set; } = "";
     public string ToolsSummary { get; set; } = "";
+    public string ToolDetails { get; set; } = "";
     public string Timestamp { get; set; } = "";
+    public string? ScreenshotBase64 { get; set; }
+    [JsonIgnore]
     public System.Windows.Media.ImageSource? ScreenshotImage { get; set; }
 
+    [JsonIgnore]
     public System.Windows.Visibility UserBubbleVisibility =>
         string.Equals(Role, "user", StringComparison.OrdinalIgnoreCase)
             ? System.Windows.Visibility.Visible
             : System.Windows.Visibility.Collapsed;
 
+    [JsonIgnore]
     public System.Windows.Visibility AssistantBubbleVisibility =>
         !string.Equals(Role, "user", StringComparison.OrdinalIgnoreCase)
             ? System.Windows.Visibility.Visible
             : System.Windows.Visibility.Collapsed;
 
+    [JsonIgnore]
     public System.Windows.Visibility ToolsVisibility =>
         string.IsNullOrWhiteSpace(ToolsSummary)
             ? System.Windows.Visibility.Collapsed
             : System.Windows.Visibility.Visible;
 
+    [JsonIgnore]
+    public System.Windows.Visibility ToolDetailsVisibility =>
+        string.IsNullOrWhiteSpace(ToolDetails)
+            ? System.Windows.Visibility.Collapsed
+            : System.Windows.Visibility.Visible;
+
+    [JsonIgnore]
     public System.Windows.Visibility ScreenshotVisibility =>
         ScreenshotImage is not null
             ? System.Windows.Visibility.Visible

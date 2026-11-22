@@ -1490,15 +1490,25 @@
                                                                             <TextBlock Text="AI" FontSize="10" FontWeight="Bold" Foreground="#FFFFFF" HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                                                         </Border>
                                                                         <StackPanel Grid.Column="1">
-                                                                            <Border Visibility="{Binding ToolsVisibility}" Background="{DynamicResource BgElevated}" BorderBrush="{DynamicResource BorderHairline}" BorderThickness="1" CornerRadius="6" Padding="8,4" Margin="0,0,0,6" HorizontalAlignment="Left">
-                                                                                <TextBlock Text="{Binding ToolsSummary}" FontSize="10.5" FontFamily="Consolas" Foreground="{DynamicResource IndigoText}"/>
+                                                                            <Border Visibility="{Binding ToolsVisibility}" Background="{DynamicResource BgElevated}" BorderBrush="{DynamicResource BorderHairline}" BorderThickness="1" CornerRadius="8" Padding="8,5" Margin="0,0,0,6" HorizontalAlignment="Left">
+                                                                                <StackPanel>
+                                                                                    <TextBlock Text="{Binding ToolsSummary}" FontSize="10.5" FontFamily="Consolas" FontWeight="SemiBold" Foreground="{DynamicResource IndigoText}"/>
+                                                                                    <Expander Visibility="{Binding ToolDetailsVisibility}" Header="Inspect execution steps" FontSize="10.5" Foreground="{DynamicResource TextMuted}" Margin="0,4,0,0" IsExpanded="False">
+                                                                                        <TextBox Text="{Binding ToolDetails, Mode=OneWay}" IsReadOnly="True" BorderThickness="0" Background="{DynamicResource ConsoleCardBg}" Foreground="#CBD5E1"
+                                                                                                 FontFamily="Consolas" FontSize="10.5" Padding="8" Margin="0,4,0,0" TextWrapping="Wrap" MaxHeight="180" VerticalScrollBarVisibility="Auto"/>
+                                                                                    </Expander>
+                                                                                </StackPanel>
                                                                             </Border>
                                                                             <TextBox Text="{Binding Content, Mode=OneWay}" IsReadOnly="True" BorderThickness="0" Background="Transparent"
                                                                                      Foreground="{DynamicResource TextPrimary}" FontSize="13" TextWrapping="Wrap"/>
-                                                                            <Border Visibility="{Binding ScreenshotVisibility}" Background="{DynamicResource BgElevated}" BorderBrush="{DynamicResource BorderHairline}" BorderThickness="1" CornerRadius="10" Padding="6" Margin="0,8,0,0" HorizontalAlignment="Left">
+                                                                            <Border Visibility="{Binding ScreenshotVisibility}" Background="{DynamicResource BgElevated}" BorderBrush="{DynamicResource BorderHairline}" BorderThickness="1" CornerRadius="10" Padding="6" Margin="0,8,0,0" HorizontalAlignment="Left"
+                                                                                    Cursor="Hand" MouseLeftButtonUp="OnAgScreenshotClick" Tag="{Binding ScreenshotImage}" ToolTip="Click to view full-size screenshot">
                                                                                 <Image Source="{Binding ScreenshotImage}" MaxHeight="260" Stretch="Uniform"/>
                                                                             </Border>
-                                                                            <TextBlock Text="{Binding Timestamp}" FontSize="10" FontFamily="Consolas" Foreground="{DynamicResource TextMuted}" Margin="0,4,0,0"/>
+                                                                            <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
+                                                                                <TextBlock Text="{Binding Timestamp}" FontSize="10" FontFamily="Consolas" Foreground="{DynamicResource TextMuted}" VerticalAlignment="Center"/>
+                                                                                <Button Content="Copy" Style="{StaticResource GhostBtnStyle}" Padding="6,1" FontSize="10" Margin="8,0,0,0" Click="OnAgCopyMessageClick" Tag="{Binding Content}"/>
+                                                                            </StackPanel>
                                                                         </StackPanel>
                                                                     </Grid>
                                                                 </Grid>
@@ -1994,6 +2004,25 @@
                             <Button Content="Enroll &amp; Connect" Style="{StaticResource PrimaryBtnStyle}" Click="OnSubmitEnrollClick"/>
                         </StackPanel>
                     </StackPanel>
+                </Border>
+            </Grid>
+
+            <!-- SCREENSHOT LIGHTBOX MODAL -->
+            <Grid x:Name="ScreenshotLightboxOverlay" Grid.RowSpan="2" Visibility="Collapsed" Background="#CC000000" MouseLeftButtonUp="OnCloseLightboxClick">
+                <Border Margin="42" Background="{DynamicResource BgCard}" BorderBrush="{DynamicResource BorderHairline}" BorderThickness="1" CornerRadius="14" Padding="14">
+                    <DockPanel>
+                        <Grid DockPanel.Dock="Top" Margin="0,0,0,10">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Text="Screenshot Preview (click anywhere to close)" FontSize="12.5" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}" VerticalAlignment="Center"/>
+                            <Button Grid.Column="1" Content="✕ Close" Style="{StaticResource BtnStyle}" Padding="10,4" FontSize="11.5" Click="OnCloseLightboxBtnClick"/>
+                        </Grid>
+                        <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
+                            <Image x:Name="LightboxImage" Stretch="Uniform"/>
+                        </ScrollViewer>
+                    </DockPanel>
                 </Border>
             </Grid>
 

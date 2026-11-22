@@ -741,5 +741,21 @@ await RunTest("AgentActionTimelineService: records file edit and restores previo
     }
 });
 
+// 26. Rich Chat Tool Cards & AgentChatMessage visibility bindings
+await RunTest("AgentChatMessage: collapsible ToolDetails visibility & copy bindings", () =>
+{
+    var msg = new AgentChatMessage
+    {
+        Role = "assistant",
+        Content = "Drew a car in Paint.",
+        ToolsSummary = "Windows Copilot · Tools: desktop_open_application, mouse_draw_path",
+        ToolDetails = "▶ Executing desktop_open_application...\n✓ desktop_open_application completed",
+    };
+    Assert(msg.AssistantBubbleVisibility == System.Windows.Visibility.Visible, "Expected assistant bubble visible");
+    Assert(msg.ToolsVisibility == System.Windows.Visibility.Visible, "Expected tools summary visible");
+    Assert(msg.ToolDetailsVisibility == System.Windows.Visibility.Visible, "Expected collapsible tool details visible");
+    return Task.CompletedTask;
+});
+
 Console.WriteLine($"\nSummary: {passed} passed, {failed} failed ({passed + failed} total)");
 return failed > 0 ? 1 : 0;
