@@ -287,7 +287,8 @@ public sealed class DeviceAgentRuntimeService : IDisposable
         IEnumerable<(string Role, string Content)> history,
         Func<string, string, Task<bool>>? confirmMutatingToolAsync = null,
         CancellationToken ct = default,
-        Action<string>? onProgress = null)
+        Action<string>? onProgress = null,
+        string? attachedImageBase64 = null)
     {
         var agent = config.DeviceAgent ?? new DeviceAgentSettings();
         var provider = (agent.Provider ?? "openai").Trim().ToLowerInvariant();
@@ -304,8 +305,8 @@ public sealed class DeviceAgentRuntimeService : IDisposable
         }
 
         return provider == "anthropic"
-            ? await RunAnthropicLoopAsync(config, agent, baseUrl, model, apiKey, history, confirmMutatingToolAsync, onProgress, ct)
-            : await RunOpenAiCompatLoopAsync(config, agent, baseUrl, model, apiKey, history, confirmMutatingToolAsync, onProgress, ct);
+            ? await RunAnthropicLoopAsync(config, agent, baseUrl, model, apiKey, history, confirmMutatingToolAsync, onProgress, attachedImageBase64, ct)
+            : await RunOpenAiCompatLoopAsync(config, agent, baseUrl, model, apiKey, history, confirmMutatingToolAsync, onProgress, attachedImageBase64, ct);
     }
 
     private async Task<(bool Ok, string ReplyText, string ToolsSummary, string? ScreenshotBase64, string Error)> RunOpenAiCompatLoopAsync(
@@ -317,14 +318,35 @@ public sealed class DeviceAgentRuntimeService : IDisposable
         IEnumerable<(string Role, string Content)> history,
         Func<string, string, Task<bool>>? confirmMutatingToolAsync,
         Action<string>? onProgress,
+        string? attachedImageBase64,
         CancellationToken ct)
     {
         var messages = new List<object>
         {
             new { role = "system", content = BuildEffectiveSystemPrompt(config) },
         };
-        foreach (var (r, c) in history.TakeLast(16))
+        var histList = history.TakeLast(16).ToList();
+        for (int idx = 0; idx < histList.Count; idx++)
         {
+            var (r, c) = histList[idx];
+            bool isLastUser = idx == histList.Count - 1 && r.Equals("user", StringComparison.OrdinalIgnoreCase);
+            if (isLastUser && !string.IsNullOrWhiteSpace(attachedImageBase64))
+            {
+                var jpeg = CompressBase64PngToJpegForVision(attachedImageBase64);
+                if (!string.IsNullOrEmpty(jpeg))
+                {
+                    messages.Add(new
+                    {
+                        role = "user",
+                        content = new object[]
+                        {
+                            new { type = "text", text = c },
+                            new { type = "image_url", image_url = new { url = $"data:image/jpeg;base64,{jpeg}", detail = "auto" } },
+                        },
+                    });
+                    continue;
+                }
+            }
             messages.Add(new { role = r.Equals("user", StringComparison.OrdinalIgnoreCase) ? "user" : "assistant", content = c });
         }
 
@@ -541,11 +563,32 @@ public sealed class DeviceAgentRuntimeService : IDisposable
         IEnumerable<(string Role, string Content)> history,
         Func<string, string, Task<bool>>? confirmMutatingToolAsync,
         Action<string>? onProgress,
+        string? attachedImageBase64,
         CancellationToken ct)
     {
         var messages = new List<object>();
-        foreach (var (r, c) in history.TakeLast(16))
+        var histList = history.TakeLast(16).ToList();
+        for (int idx = 0; idx < histList.Count; idx++)
         {
+            var (r, c) = histList[idx];
+            bool isLastUser = idx == histList.Count - 1 && r.Equals("user", StringComparison.OrdinalIgnoreCase);
+            if (isLastUser && !string.IsNullOrWhiteSpace(attachedImageBase64))
+            {
+                var jpeg = CompressBase64PngToJpegForVision(attachedImageBase64);
+                if (!string.IsNullOrEmpty(jpeg))
+                {
+                    messages.Add(new
+                    {
+                        role = "user",
+                        content = new object[]
+                        {
+                            new { type = "image", source = new { type = "base64", media_type = "image/jpeg", data = jpeg } },
+                            new { type = "text", text = c },
+                        },
+                    });
+                    continue;
+                }
+            }
             messages.Add(new { role = r.Equals("user", StringComparison.OrdinalIgnoreCase) ? "user" : "assistant", content = c });
         }
 
@@ -850,6 +893,26 @@ public sealed class DeviceAgentRuntimeService : IDisposable
             }
         }
         return changed;
+    }
+
+    public static string FormatFileAttachmentContext(string filePath)
+    {
+        if (string.IsNullOrWhiteSpace(filePath) || !System.IO.File.Exists(filePath)) return "";
+        var name = System.IO.Path.GetFileName(filePath);
+        try
+        {
+            var info = new System.IO.FileInfo(filePath);
+            if (info.Length <= 32 * 1024)
+            {
+                var text = System.IO.File.ReadAllText(filePath);
+                return $"[Attached File: {name} ({filePath})]\n```\n{Truncate(text, 4000)}\n```";
+            }
+            return $"[Attached File: {name} ({filePath}, {info.Length / 1024} KB)]";
+        }
+        catch
+        {
+            return $"[Attached File: {name} ({filePath})]";
+        }
     }
 
     public void Dispose() => _http.Dispose();

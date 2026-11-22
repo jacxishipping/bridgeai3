@@ -1531,18 +1531,30 @@
 
                                             <!-- Floating Rounded Composer -->
                                             <Border Grid.Row="2" Padding="20,6,20,18">
-                                                <Border MaxWidth="780" Background="{DynamicResource BgElevated}" BorderBrush="{DynamicResource BorderHover}" BorderThickness="1" CornerRadius="16" Padding="14,10,12,10">
+                                                <Border MaxWidth="780" Background="{DynamicResource BgElevated}" BorderBrush="{DynamicResource BorderHover}" BorderThickness="1" CornerRadius="16" Padding="14,10,12,10"
+                                                        AllowDrop="True" PreviewDragOver="OnAgComposerDragOver" Drop="OnAgComposerDrop">
                                                     <StackPanel>
+                                                        <Border x:Name="AgAttachmentBar" Visibility="Collapsed" Background="{DynamicResource BgCard}" BorderBrush="{DynamicResource BorderHairline}" BorderThickness="1" CornerRadius="8" Padding="8,4" Margin="0,0,0,6">
+                                                            <Grid>
+                                                                <Grid.ColumnDefinitions>
+                                                                    <ColumnDefinition Width="*"/>
+                                                                    <ColumnDefinition Width="Auto"/>
+                                                                </Grid.ColumnDefinitions>
+                                                                <TextBlock x:Name="AgAttachmentLabelText" Text="" FontSize="11" FontFamily="Consolas" Foreground="{DynamicResource IndigoText}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+                                                                <Button Grid.Column="1" Content="✕" Style="{StaticResource GhostBtnStyle}" Padding="6,1" FontSize="10.5" Click="OnAgClearAttachmentClick"/>
+                                                            </Grid>
+                                                        </Border>
                                                         <TextBox x:Name="AgPromptBox" MinHeight="38" MaxHeight="130" AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
                                                                  Background="Transparent" BorderThickness="0" Foreground="{DynamicResource TextPrimary}" FontSize="13"
-                                                                 PreviewKeyDown="OnAgPromptKeyDown" ToolTip="Message agent for this Windows device (Enter to send, Shift+Enter for newline)"/>
+                                                                 PreviewKeyDown="OnAgPromptKeyDown" ToolTip="Message agent, drag-and-drop files, or press Ctrl+V to paste a screenshot (Enter to send)"/>
                                                         <Grid Margin="0,8,0,0">
                                                             <Grid.ColumnDefinitions>
                                                                 <ColumnDefinition Width="*"/>
                                                                 <ColumnDefinition Width="Auto"/>
                                                             </Grid.ColumnDefinitions>
-                                                            <TextBlock Grid.Column="0" Text="/ui · /som · /click · /type · /open · /dir · /ps · /screenshot · /sysinfo" FontSize="10.5" FontFamily="Consolas" Foreground="{DynamicResource TextMuted}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" Margin="0,0,10,0"/>
+                                                            <TextBlock Grid.Column="0" Text="Drop files · Ctrl+V image · /ui · /som · /screenshot · /sysinfo" FontSize="10.5" FontFamily="Consolas" Foreground="{DynamicResource TextMuted}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" Margin="0,0,10,0"/>
                                                             <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                                                <Button Content="Attach" Style="{StaticResource GhostBtnStyle}" Padding="8,5" FontSize="11.5" Click="OnAgAttachFileClick" Margin="0,0,4,0" ToolTip="Attach an image or text file to your message"/>
                                                                 <Button Content="Clear" Style="{StaticResource GhostBtnStyle}" Padding="8,5" FontSize="11.5" Click="OnAgNewChatClick" Margin="0,0,6,0"/>
                                                                 <Button x:Name="AgSendBtn" Content="Send ↑" Style="{StaticResource PrimaryBtnStyle}" Padding="14,6" FontSize="12" Click="OnAgSendChatClick"/>
                                                             </StackPanel>

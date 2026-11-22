@@ -781,5 +781,22 @@ await RunTest("ChatHistoryService: persists threads to disk and exports Markdown
     return Task.CompletedTask;
 });
 
+// 28. Drag-and-drop file attachment context formatting
+await RunTest("DeviceAgentRuntimeService: FormatFileAttachmentContext formats dropped text file", () =>
+{
+    var tmpFile = Path.Combine(Path.GetTempPath(), $"aib-drop-{Guid.NewGuid():N}.txt");
+    File.WriteAllText(tmpFile, "hello dropped file");
+    try
+    {
+        var ctx = DeviceAgentRuntimeService.FormatFileAttachmentContext(tmpFile);
+        Assert(ctx.Contains("hello dropped file") && ctx.Contains(Path.GetFileName(tmpFile)), "Expected formatted dropped file context");
+    }
+    finally
+    {
+        File.Delete(tmpFile);
+    }
+    return Task.CompletedTask;
+});
+
 Console.WriteLine($"\nSummary: {passed} passed, {failed} failed ({passed + failed} total)");
 return failed > 0 ? 1 : 0;

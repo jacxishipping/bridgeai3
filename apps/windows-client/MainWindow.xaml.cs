@@ -48,6 +48,8 @@ public partial class MainWindow : Window
     private AgentChatThread _activeThread = new() { Title = "New Chat", Preview = "Ready on this Windows PC" };
     private bool _isChatBusy;
     private System.Threading.CancellationTokenSource? _activeChatCts;
+    private string? _pendingAttachmentImageBase64;
+    private string _pendingAttachmentFileContext = "";
     private string _operatorToken = "";
     private bool _operatorIsAdminToken;
 
@@ -3109,16 +3111,99 @@ public partial class MainWindow : Window
 
     private async void OnAgPromptKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
     {
+        if (e.Key == Key.V && (Keyboard.Modifiers & ModifierKeys.Control) == ModifierKeys.Control &&
+            System.Windows.Clipboard.ContainsImage())
+        {
+            try
+            {
+                var bmpSrc = System.Windows.Clipboard.GetImage();
+                if (bmpSrc is not null)
+                {
+                    var enc = new PngBitmapEncoder();
+                    enc.Frames.Add(BitmapFrame.Create(bmpSrc));
+                    using var ms = new MemoryStream();
+                    enc.Save(ms);
+                    _pendingAttachmentImageBase64 = Convert.ToBase64String(ms.ToArray());
+                    AgAttachmentLabelText.Text = $"📷 Pasted screenshot ({bmpSrc.PixelWidth}x{bmpSrc.PixelHeight})";
+                    AgAttachmentBar.Visibility = Visibility.Visible;
+                    e.Handled = true;
+                    ShowToast("Attached pasted screenshot");
+                    return;
+                }
+            }
+            catch { }
+        }
         if (e.Key == Key.Enter && (Keyboard.Modifiers & ModifierKeys.Shift) == 0)
         {
             e.Handled = true;
             var text = AgPromptBox.Text.Trim();
-            if (!string.IsNullOrWhiteSpace(text))
+            if (!string.IsNullOrWhiteSpace(text) || _pendingAttachmentImageBase64 is not null || !string.IsNullOrWhiteSpace(_pendingAttachmentFileContext))
             {
                 AgPromptBox.Clear();
-                await SendAgentPromptAsync(text);
+                await SendAgentPromptAsync(string.IsNullOrWhiteSpace(text) ? "Inspect this attachment and help me with it." : text);
             }
         }
+    }
+
+    private void OnAgComposerDragOver(object sender, System.Windows.DragEventArgs e)
+    {
+        e.Effects = e.Data.GetDataPresent(System.Windows.DataFormats.FileDrop)
+            ? System.Windows.DragDropEffects.Copy
+            : System.Windows.DragDropEffects.None;
+        e.Handled = true;
+    }
+
+    private void OnAgComposerDrop(object sender, System.Windows.DragEventArgs e)
+    {
+        if (e.Data.GetDataPresent(System.Windows.DataFormats.FileDrop) &&
+            e.Data.GetData(System.Windows.DataFormats.FileDrop) is string[] files &&
+            files.Length > 0)
+        {
+            AttachFileToComposer(files[0]);
+        }
+    }
+
+    private void OnAgAttachFileClick(object sender, RoutedEventArgs e)
+    {
+        var dlg = new Microsoft.Win32.OpenFileDialog
+        {
+            Title = "Attach Image or File to Agent Prompt",
+            Filter = "All Supported|*.png;*.jpg;*.jpeg;*.bmp;*.txt;*.md;*.json;*.log;*.cs;*.py;*.csv|All files (*.*)|*.*",
+        };
+        if (dlg.ShowDialog() == true)
+        {
+            AttachFileToComposer(dlg.FileName);
+        }
+    }
+
+    private void AttachFileToComposer(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path)) return;
+        var ext = System.IO.Path.GetExtension(path).ToLowerInvariant();
+        if (ext is ".png" or ".jpg" or ".jpeg" or ".bmp" or ".webp")
+        {
+            _pendingAttachmentImageBase64 = Convert.ToBase64String(File.ReadAllBytes(path));
+            _pendingAttachmentFileContext = "";
+            AgAttachmentLabelText.Text = $"📷 Image: {System.IO.Path.GetFileName(path)}";
+            AgAttachmentBar.Visibility = Visibility.Visible;
+            ShowToast($"Attached image {System.IO.Path.GetFileName(path)}");
+        }
+        else
+        {
+            _pendingAttachmentImageBase64 = null;
+            _pendingAttachmentFileContext = DeviceAgentRuntimeService.FormatFileAttachmentContext(path);
+            AgAttachmentLabelText.Text = $"📄 File: {System.IO.Path.GetFileName(path)}";
+            AgAttachmentBar.Visibility = Visibility.Visible;
+            ShowToast($"Attached file {System.IO.Path.GetFileName(path)}");
+        }
+    }
+
+    private void OnAgClearAttachmentClick(object sender, RoutedEventArgs e)
+    {
+        _pendingAttachmentImageBase64 = null;
+        _pendingAttachmentFileContext = "";
+        AgAttachmentLabelText.Text = "";
+        AgAttachmentBar.Visibility = Visibility.Collapsed;
     }
 
     private async void OnAgSendChatClick(object sender, RoutedEventArgs e)
@@ -3144,6 +3229,14 @@ public partial class MainWindow : Window
         var chatCt = _activeChatCts.Token;
         AgSendBtn.Content = "Stop ■";
         AgSendBtn.Style = (Style)FindResource("DangerBtnStyle");
+
+        var attachedImg = _pendingAttachmentImageBase64;
+        var attachedFileCtx = _pendingAttachmentFileContext;
+        OnAgClearAttachmentClick(this, new RoutedEventArgs());
+        if (!string.IsNullOrWhiteSpace(attachedFileCtx))
+        {
+            prompt = $"{prompt}\n\n{attachedFileCtx}";
+        }
 
         AgentChatMessage? liveProgressMsg = null;
         try
@@ -3221,7 +3314,8 @@ public partial class MainWindow : Window
                     historyPayload,
                     confirmMutatingToolAsync: async (tool, argsJson) => await RequestLocalApprovalAsync(tool, "agent-chat", argsJson),
                     ct: chatCt,
-                    onProgress: OnStepProgress);
+                    onProgress: OnStepProgress,
+                    attachedImageBase64: attachedImg);
 
                 if (liveProgressMsg is not null)
                 {
