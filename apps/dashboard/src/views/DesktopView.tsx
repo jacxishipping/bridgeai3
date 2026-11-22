@@ -230,9 +230,17 @@ export function DesktopView({
       };
 
       pc.onconnectionstatechange = () => {
-        setWebrtcStatus(pc.connectionState || "connecting");
-        if (pc.connectionState === "failed" || pc.connectionState === "disconnected") {
-          setFrameError(`WebRTC ${pc.connectionState}`);
+        const state = pc.connectionState || "connecting";
+        setWebrtcStatus(state);
+        if (state === "failed" || state === "disconnected") {
+          setFrameError(`WebRTC ${state} — falling back to JPEG live view`);
+          // Production resilience: keep the session observable via JPEG poll.
+          void (async () => {
+            await stopWebrtc();
+            setTransport("jpeg");
+            setStreaming(true);
+            onToast("WebRTC ICE failed — switched to JPEG fallback");
+          })();
         }
       };
 
@@ -305,7 +313,7 @@ export function DesktopView({
       await stopWebrtc();
       throw err;
     }
-  }, [api, controlArmed, controlBlockedReason, deviceId, selectedMonitor, stopWebrtc]);
+  }, [api, controlArmed, controlBlockedReason, deviceId, selectedMonitor, stopWebrtc, onToast]);
 
   useEffect(() => {
     return () => {

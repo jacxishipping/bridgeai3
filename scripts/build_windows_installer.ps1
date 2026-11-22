@@ -32,8 +32,11 @@ if (-not (Get-Command dotnet -ErrorAction SilentlyContinue)) {
 $CppDir = Join-Path $RepoRoot "windows-agent"
 $CppBuildDir = Join-Path $CppDir "build"
 if (Get-Command cmake -ErrorAction SilentlyContinue) {
-    Write-Host "==> [0/4] Building Native C++20 Windows Agent (ai_bridge_native.dll, ai_bridge_desktop.exe, ai_bridge_service.exe)..." -ForegroundColor Cyan
-    cmake -S $CppDir -B $CppBuildDir
+    Write-Host "==> [0/4] Building Native C++20 Windows Agent with libdatachannel WebRTC (ai_bridge_native.dll, ai_bridge_desktop.exe, ai_bridge_service.exe)..." -ForegroundColor Cyan
+    # Production Windows releases must ship a real PeerConnection backend.
+    # Without -DAIBRIDGE_WITH_LIBDATACHANNEL=ON, ai_bridge_desktop exits
+    # no_cpp_webrtc_backend and Live Desktop falls back to JPEG only.
+    cmake -S $CppDir -B $CppBuildDir -DAIBRIDGE_WITH_LIBDATACHANNEL=ON -DCMAKE_BUILD_TYPE=Release
     if ($LASTEXITCODE -eq 0) {
         cmake --build $CppBuildDir --config Release
     }

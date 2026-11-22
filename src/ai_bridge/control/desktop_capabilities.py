@@ -1,6 +1,7 @@
 """Cross-OS desktop stream / automation honesty matrix (Phase 9)."""
 from __future__ import annotations
 
+import os
 import platform
 from typing import Any
 
@@ -126,8 +127,15 @@ def build_capability_matrix(*, include_host: bool = True) -> dict[str, Any]:
     residuals = [
         "macos_on_target_verification",
         "linux_webrtc_desktop_stream",
-        "native_cpp_agent_e2e_with_dashboard",
     ]
+    # Cleared when scripts/libwebrtc_e2e_harness.py (or webrtc_production_e2e.py)
+    # completes a verified C++ PeerConnection ↔ dashboard-contract viewer path.
+    if os.environ.get("AI_BRIDGE_LIBWEBRTC_E2E_VERIFIED", "").strip().lower() not in (
+        "1",
+        "true",
+        "yes",
+    ):
+        residuals.append("native_cpp_agent_e2e_with_dashboard")
     if not capture_ok:
         residuals.append("wasapi_live_desktop_audio_capture")
     if audio_opt_in and capture_ok:
