@@ -1437,6 +1437,7 @@
                                                     <Button x:Name="AgSettingsBtn" Content="Agent Settings" Style="{StaticResource PrimaryBtnStyle}" Padding="9,4" FontSize="11" Margin="0,2,6,2" Click="OnAgOpenSettingsDrawerClick"/>
                                                     <Button Content="Runtime" Style="{StaticResource BtnStyle}" Padding="9,4" FontSize="11" Margin="0,2,6,2" Click="OnAgOpenRuntimeDrawerClick"/>
                                                     <Button Content="Timeline" Style="{StaticResource BtnStyle}" Padding="9,4" FontSize="11" Margin="0,2,6,2" Click="OnAgShowTimelineClick" ToolTip="Inspect recent AI Agent actions"/>
+                                                    <Button Content="Memory" Style="{StaticResource BtnStyle}" Padding="9,4" FontSize="11" Margin="0,2,6,2" Click="OnAgShowMemoryClick" ToolTip="Inspect persistent AI Agent memory"/>
                                                     <Button Content="Save Playbook" Style="{StaticResource BtnStyle}" Padding="9,4" FontSize="11" Margin="0,2,6,2" Click="OnAgSavePlaybookClick" ToolTip="Save the last prompt as a 1-click reusable Playbook"/>
                                                     <Button Content="Undo Last" Style="{StaticResource BtnStyle}" Padding="9,4" FontSize="11" Margin="0,2,0,2" Click="OnAgUndoLastClick" ToolTip="Undo the most recent agent file edit or UI action (Ctrl+Z)"/>
                                                 </WrapPanel>

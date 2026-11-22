@@ -2862,6 +2862,15 @@ public partial class MainWindow : Window
         OpenDrawer("Agent Action Timeline", $"{items.Count} recorded step(s)", body);
     }
 
+    private void OnAgShowMemoryClick(object sender, RoutedEventArgs e)
+    {
+        var mem = AgentMemoryService.Load();
+        var body = mem.Count == 0
+            ? "No persistent memories saved yet.\n\nAsk the agent: \"Remember that my favorite browser is Chrome\" or \"Remember my workspace path\"."
+            : string.Join("\n", mem.Select(kv => $"• {kv.Key}: {kv.Value}"));
+        OpenDrawer("Persistent Agent Memory", $"{mem.Count} saved fact(s) · ~/.ai-bridge/agent_memory.json", body);
+    }
+
     private void OnAgUndoLastClick(object sender, RoutedEventArgs e)
     {
         var (ok, detail) = AgentActionTimelineService.UndoLastAction();

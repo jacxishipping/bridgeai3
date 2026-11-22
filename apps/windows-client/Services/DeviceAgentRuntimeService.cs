@@ -84,6 +84,9 @@ public sealed class DeviceAgentRuntimeService : IDisposable
         new("run_powershell", "shell", true, "Run a PowerShell command anywhere on the PC (requires Full PC Access & Shell permission).", new { type = "object", properties = new { command = new { type = "string" }, working_directory = new { type = "string" } }, required = new[] { "command" } }),
 
         new("kill_process", "kill", true, "Terminate a running process by PID or name (requires Process Termination & Full PC Access).", new { type = "object", properties = new { pid = new { type = "integer" }, name = new { type = "string" } } }),
+        new("remember_fact", "sys", false, "Persist a user preference or device fact into long-term agent memory (~/.ai-bridge/agent_memory.json).", new { type = "object", properties = new { key = new { type = "string" }, value = new { type = "string" } }, required = new[] { "key", "value" } }),
+        new("forget_fact", "sys", false, "Remove a stored key from long-term agent memory.", new { type = "object", properties = new { key = new { type = "string" } }, required = new[] { "key" } }),
+        new("list_memory", "sys", false, "List all saved user preferences and device facts from agent memory.", new { type = "object", properties = new { } }),
     };
 
     public DeviceAgentRuntimeService(NativeToolExecutor executor)
@@ -226,6 +229,11 @@ public sealed class DeviceAgentRuntimeService : IDisposable
             sb.AppendLine("System Instructions:");
             sb.AppendLine(agent.SystemPrompt.Trim());
             sb.AppendLine();
+        }
+        var memBlock = AgentMemoryService.BuildPromptBlock();
+        if (!string.IsNullOrWhiteSpace(memBlock))
+        {
+            sb.AppendLine(memBlock);
         }
         sb.AppendLine("Allowed Device Functions: " + (enabled.Count > 0 ? string.Join(", ", enabled) : "NONE"));
         if (disallowed.Count > 0)

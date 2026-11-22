@@ -849,5 +849,28 @@ await RunTest("AgentPlaybookService: loads defaults and persists custom playbook
     return Task.CompletedTask;
 });
 
+// 33. Persistent Agent Memory (remember / forget / prompt block)
+await RunTest("AgentMemoryService: persists facts, builds prompt block, and forgets cleanly", () =>
+{
+    var tmpFile = Path.Combine(Path.GetTempPath(), $"aib-mem-{Guid.NewGuid():N}.json");
+    try
+    {
+        AgentMemoryService.Remember("favorite_browser", "Chrome", tmpFile);
+        var mem = AgentMemoryService.Load(tmpFile);
+        Assert(mem.TryGetValue("favorite_browser", out var val) && val == "Chrome", "Expected remembered fact");
+
+        var block = AgentMemoryService.BuildPromptBlock(tmpFile);
+        Assert(block.Contains("favorite_browser: Chrome"), "Expected prompt block to include saved fact");
+
+        Assert(AgentMemoryService.Forget("favorite_browser", tmpFile), "Expected Forget to return true");
+        Assert(AgentMemoryService.Load(tmpFile).Count == 0, "Expected memory empty after Forget");
+    }
+    finally
+    {
+        if (File.Exists(tmpFile)) File.Delete(tmpFile);
+    }
+    return Task.CompletedTask;
+});
+
 Console.WriteLine($"\nSummary: {passed} passed, {failed} failed ({passed + failed} total)");
 return failed > 0 ? 1 : 0;

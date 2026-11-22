@@ -134,6 +134,9 @@ public sealed class NativeToolExecutor
                 "press_hotkey" => PressHotkey(config, args),
                 "run_shell" or "desktop_execute_command" => await RunShellAsync(config, args, ct, usePowerShell: false),
                 "run_powershell" or "powershell" => await RunShellAsync(config, args, ct, usePowerShell: true),
+                "remember_fact" => RememberFact(args),
+                "forget_fact" => ForgetFact(args),
+                "list_memory" => new { memories = AgentMemoryService.Load() },
                 _ => throw new InvalidOperationException($"Tool '{tool}' is not supported by native C# executor."),
             };
 
@@ -168,6 +171,21 @@ public sealed class NativeToolExecutor
             bitrate_kbps = kbps,
             applied_live = applied,
         };
+    }
+
+    private static object RememberFact(JsonElement args)
+    {
+        var key = args.TryGetProperty("key", out var kEl) ? kEl.GetString() ?? "" : "";
+        var val = args.TryGetProperty("value", out var vEl) ? vEl.GetString() ?? "" : "";
+        AgentMemoryService.Remember(key, val);
+        return new { status = "remembered", key = key.Trim(), value = val.Trim() };
+    }
+
+    private static object ForgetFact(JsonElement args)
+    {
+        var key = args.TryGetProperty("key", out var kEl) ? kEl.GetString() ?? "" : "";
+        bool removed = AgentMemoryService.Forget(key);
+        return new { status = removed ? "forgotten" : "not_found", key = key.Trim() };
     }
 
     private static object GetSystemInfo()
