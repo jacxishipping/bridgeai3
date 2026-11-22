@@ -177,6 +177,16 @@ int main() {
         input_ctrl.SetPermissions(denied);
         CHECK(!input_ctrl.MoveMouse(0.5, 0.5, true));
         CHECK(!input_ctrl.KeyEvent(VK_SHIFT, true, false));
+
+        // Clipboard sync requires allow_clipboard + session_active.
+        std::wstring clip_out;
+        CHECK(!input_ctrl.GetClipboardText(clip_out));
+        CHECK(!input_ctrl.SetClipboardText(L"blocked"));
+        aibridge::input::SessionInputPermissions clip_perms{false, false, true, true};
+        input_ctrl.SetPermissions(clip_perms);
+        CHECK(input_ctrl.SetClipboardText(L"ai-bridge-clip-test"));
+        CHECK(input_ctrl.GetClipboardText(clip_out));
+        CHECK(clip_out == L"ai-bridge-clip-test");
     }
 
     std::cout << "[4/7] Testing DXGI Desktop Duplication & Multi-Monitor Enumeration..." << std::endl;

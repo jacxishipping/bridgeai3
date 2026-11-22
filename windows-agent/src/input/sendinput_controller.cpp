@@ -310,6 +310,64 @@ bool WindowsInputController::TypeUnicodeText(const std::wstring& text) {
     return SendInput(static_cast<UINT>(inputs.size()), inputs.data(), sizeof(INPUT)) == inputs.size();
 }
 
+bool WindowsInputController::GetClipboardText(std::wstring& out_text) {
+    out_text.clear();
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!permissions_.session_active || !permissions_.allow_clipboard) {
+            return false;
+        }
+    }
+    if (!OpenClipboard(nullptr)) {
+        return false;
+    }
+    bool ok = false;
+    HANDLE handle = GetClipboardData(CF_UNICODETEXT);
+    if (handle) {
+        const wchar_t* locked = static_cast<const wchar_t*>(GlobalLock(handle));
+        if (locked) {
+            out_text.assign(locked);
+            GlobalUnlock(handle);
+            ok = true;
+        }
+    }
+    CloseClipboard();
+    return ok;
+}
+
+bool WindowsInputController::SetClipboardText(const std::wstring& text) {
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!permissions_.session_active || !permissions_.allow_clipboard) {
+            return false;
+        }
+    }
+    if (!OpenClipboard(nullptr)) {
+        return false;
+    }
+    EmptyClipboard();
+    size_t bytes = (text.size() + 1) * sizeof(wchar_t);
+    HGLOBAL mem = GlobalAlloc(GMEM_MOVEABLE, bytes);
+    if (!mem) {
+        CloseClipboard();
+        return false;
+    }
+    void* locked = GlobalLock(mem);
+    if (!locked) {
+        GlobalFree(mem);
+        CloseClipboard();
+        return false;
+    }
+    memcpy(locked, text.c_str(), bytes);
+    GlobalUnlock(mem);
+    bool ok = SetClipboardData(CF_UNICODETEXT, mem) != nullptr;
+    if (!ok) {
+        GlobalFree(mem);
+    }
+    CloseClipboard();
+    return ok;
+}
+
 int WindowsInputController::ReleaseAllHeldKeys() {
     std::vector<WORD> keys_to_release;
     uint32_t mouse_mask = 0;

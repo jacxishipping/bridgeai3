@@ -938,6 +938,16 @@ export class ApiClient {
     });
   }
 
+  async sessionClipboard(
+    sessionId: string,
+    payload: { action: "get" | "set"; text?: string; paste?: boolean },
+  ): Promise<{ ok: boolean; action: string; text?: string; length?: number }> {
+    return this.request(`/api/v1/sessions/${encodeURIComponent(sessionId)}/clipboard`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  }
+
   async listMemorySnippets(workspace?: string): Promise<{ items: MemorySnippetRecord[]; count: number }> {
     const q = workspace ? `?workspace=${encodeURIComponent(workspace)}` : "";
     return this.request(`/api/memory/snippets${q}`);

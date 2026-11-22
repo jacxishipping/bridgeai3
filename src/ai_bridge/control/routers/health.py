@@ -49,7 +49,13 @@ def create_health_router(ctx: ControlContext) -> APIRouter:
 
     @router.get("/health", summary="Health check", description="Returns basic health status of the control plane including version and emergency stop state.")
     def health():
-        return {"status": "ok", "version": "0.3.0", "emergency_stop": app.state.emergency_stop}
+        # Refresh durable e-stop so multi-worker /health stays consistent.
+        plane_state.sync_emergency_stop_to_app(conn, app.state)
+        return {
+            "status": "ok",
+            "version": "0.3.0",
+            "emergency_stop": plane_state.is_emergency_stop(conn, app.state),
+        }
 
     @router.get("/health/live", summary="Liveness probe", description="Verifies the process is alive and responsive.")
     def health_live():

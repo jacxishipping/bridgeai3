@@ -221,6 +221,20 @@ export function DesktopView({
       pc.ondatachannel = (ev) => {
         if (ev.channel.label === "input") {
           inputDcRef.current = ev.channel;
+          ev.channel.onmessage = (msgEv) => {
+            try {
+              const raw = typeof msgEv.data === "string" ? msgEv.data : "";
+              const parsed = JSON.parse(raw) as { type?: string; text?: string; ok?: boolean };
+              if (parsed.type === "clipboard_data" && typeof parsed.text === "string") {
+                void navigator.clipboard?.writeText(parsed.text).then(
+                  () => onToast("Agent clipboard copied to local clipboard"),
+                  () => onToast(`Agent clipboard: ${parsed.text?.slice(0, 120) || "(empty)"}`),
+                );
+              }
+            } catch {
+              // ignore non-JSON input-channel chatter (pong, etc.)
+            }
+          };
         }
       };
 
@@ -774,6 +788,60 @@ export function DesktopView({
               }}
             >
               Send Hotkey
+            </Button>
+
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={async () => {
+                try {
+                  const dc = inputDcRef.current;
+                  if (transport === "webrtc" && dc && dc.readyState === "open") {
+                    dc.send(JSON.stringify({ type: "clipboard_sync", direction: "from_agent" }));
+                    onToast("Requested agent clipboard");
+                    return;
+                  }
+                  const sid = sessionIdRef.current;
+                  if (sid) {
+                    const res = await api.sessionClipboard(sid, { action: "get" });
+                    const text = typeof res?.text === "string" ? res.text : "";
+                    await navigator.clipboard?.writeText(text);
+                    onToast("Agent clipboard copied");
+                  } else {
+                    onToast("Start a live session to sync clipboard");
+                  }
+                } catch (err) {
+                  onToast(err instanceof Error ? err.message : "Clipboard get denied");
+                }
+              }}
+            >
+              Get Clipboard
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={async () => {
+                try {
+                  const text = (await navigator.clipboard?.readText()) || "";
+                  const dc = inputDcRef.current;
+                  if (transport === "webrtc" && dc && dc.readyState === "open") {
+                    dc.send(JSON.stringify({ type: "clipboard_sync", direction: "to_agent", text }));
+                    onToast("Local clipboard sent to agent");
+                    return;
+                  }
+                  const sid = sessionIdRef.current;
+                  if (sid) {
+                    await api.sessionClipboard(sid, { action: "set", text });
+                    onToast("Local clipboard sent to agent");
+                  } else {
+                    onToast("Start a live session to sync clipboard");
+                  }
+                } catch (err) {
+                  onToast(err instanceof Error ? err.message : "Clipboard set denied");
+                }
+              }}
+            >
+              Send Clipboard
             </Button>
           </div>
         </SurfaceCard>

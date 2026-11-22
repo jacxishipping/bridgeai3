@@ -12,8 +12,8 @@ AI Bridge is a multi-platform MCP server, FastAPI control plane, web management 
 | :--- | :--- | :--- | :--- |
 | **Core Package & Control Plane** | `src/ai_bridge/` | Python 3.11+, FastAPI, MCP | MCP server (`server.py`), policy engine (`policy.py`), tool registry, WebRTC streaming, and FastAPI control plane (`control/`). |
 | **Management Dashboard** | `apps/dashboard/` | React, TypeScript, Vite | Web UI for fleet management, live screen viewing, device policy sync, and audit logs. |
-| **Windows Client App** | `apps/windows-client/` | .NET 8 WPF (C#) | Desktop client with embedded autonomous AI Agent, Screen Takeover HUD, Vision-in-the-Loop, offline OCR, Voice input, Playbooks, Memory, and Action Timeline/Undo. |
-| **Windows Client Tests** | `apps/windows-client.Tests/` | .NET 8 C# | Unit test runner covering agent runtime, takeover lock, native pipe framing, and tool execution (`35/35` passing). |
+| **Windows Client App** | `apps/windows-client/` | .NET 9 WPF (C#) | Desktop client with embedded autonomous AI Agent, Screen Takeover HUD, Vision-in-the-Loop, offline OCR, Voice input, Playbooks, Memory, and Action Timeline/Undo. |
+| **Windows Client Tests** | `apps/windows-client.Tests/` | .NET 9 C# | Unit test runner covering agent runtime, takeover lock, native pipe framing, and tool execution (`40/40` passing). |
 | **Native Windows Agent** | `windows-agent/` | C++20, CMake, DXGI, Media Foundation | Native DLL (`ai_bridge_native.dll`), background service (`ai_bridge_service.exe`), desktop helper (`ai_bridge_desktop.exe`), and C++ unit tests (`ai_bridge_tests.exe`) for hardware H.264 capture and named-pipe IPC. |
 | **Platform Polling Agents** | `agents/{linux,macos,windows}/` | Python / Platform scripts | Host-specific polling agents isolated by OS. |
 | **Tests & Migrations** | `tests/`, `migrations/` | pytest, SQL | Unit, integration, security, and E2E suites plus DB migrations. |
@@ -72,7 +72,7 @@ npm --prefix apps/dashboard run build
 # Build Release
 dotnet build apps/windows-client/AIBridgeClient.csproj -c Release
 
-# Run C# Unit Tests (35 tests)
+# Run C# Unit Tests
 dotnet run --project apps/windows-client.Tests/AIBridgeClient.Tests.csproj -c Release
 
 # Publish to local install directory

@@ -2209,11 +2209,26 @@ public partial class MainWindow : Window
             cur.AllowUnrestrictedApps != serverPol.AllowUnrestrictedApps ||
             cur.RequireLocalApproval != serverPol.RequireLocalApproval ||
             cur.MaxTierUnattended != serverPol.MaxTierUnattended;
-        if (!changed) return;
 
+        // Always realign Device Functions with effective policy (even when Policy
+        // fields look unchanged) so IsToolAllowed cannot drift from NativeToolExecutor.
         _config.Policy = serverPol;
+        _config.DeviceAgent ??= new DeviceAgentSettings();
+        var prevDisabled = _config.DeviceAgent.Functions?.DisabledTools;
+        _config.DeviceAgent.Functions = AgentFunctionPermissions.SyncFromEffectivePolicy(
+            serverPol, prevDisabled);
+        CppNativeBridge.SyncInputPermissions(serverPol.AllowDesktopControl, serverPol.AllowClipboard);
+
+        if (!changed)
+        {
+            _configService.SaveConfig(_config);
+            LoadDeviceAgentSettingsIntoUi();
+            return;
+        }
+
         _configService.SaveConfig(_config);
         LoadPolicyIntoUi();
+        LoadDeviceAgentSettingsIntoUi();
         UpdateSecurityPostureSummary();
         RefreshLocalAgentsSummary();
         if (NamedPipeBridge.IsDesktopAgentAvailable())
@@ -2284,9 +2299,7 @@ public partial class MainWindow : Window
         var (ok, policy, detail) = await _client.FetchPolicyAsync(_config.ControlUrl, _deviceToken, _config.Policy);
         if (ok && policy is not null)
         {
-            _config.Policy = policy;
-            _configService.SaveConfig(_config);
-            LoadPolicyIntoUi();
+            ApplyServerSyncedPolicy(policy);
             RecordPolicyAudit("Fetched policy from Control Plane");
             AppendLog("ok", detail);
             ShowToast("Fetched policy from Control Plane");

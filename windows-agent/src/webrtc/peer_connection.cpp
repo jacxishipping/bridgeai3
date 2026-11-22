@@ -4,6 +4,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdio>
 #include <cstring>
 #include <fstream>
 #include <future>
@@ -249,6 +250,62 @@ public:
                         std::wstring wtext(wlen, L'\0');
                         MultiByteToWideChar(CP_UTF8, 0, chars.data(), static_cast<int>(chars.size()), wtext.data(), wlen);
                         input_ctrl.TypeUnicodeText(wtext);
+                    }
+                }
+            } else if (mtype == "clipboard_sync") {
+                // shared/protocols/input_protocol.json: direction to_agent | from_agent
+                // Also accept Python webrtc_stream aliases get/set.
+                std::string direction = ExtractJsonStr(text, "direction");
+                if (direction.empty()) direction = "to_agent";
+                auto utf8_from_wide = [](const std::wstring& w) -> std::string {
+                    if (w.empty()) return {};
+                    int n = WideCharToMultiByte(CP_UTF8, 0, w.data(), static_cast<int>(w.size()), nullptr, 0, nullptr, nullptr);
+                    if (n <= 0) return {};
+                    std::string out(n, '\0');
+                    WideCharToMultiByte(CP_UTF8, 0, w.data(), static_cast<int>(w.size()), out.data(), n, nullptr, nullptr);
+                    return out;
+                };
+                auto wide_from_utf8 = [](const std::string& s) -> std::wstring {
+                    if (s.empty()) return {};
+                    int n = MultiByteToWideChar(CP_UTF8, 0, s.data(), static_cast<int>(s.size()), nullptr, 0);
+                    if (n <= 0) return {};
+                    std::wstring out(n, L'\0');
+                    MultiByteToWideChar(CP_UTF8, 0, s.data(), static_cast<int>(s.size()), out.data(), n);
+                    return out;
+                };
+                auto json_escape = [](const std::string& s) -> std::string {
+                    std::string out;
+                    out.reserve(s.size() + 8);
+                    for (unsigned char c : s) {
+                        if (c == '\\' || c == '"') {
+                            out.push_back('\\');
+                            out.push_back(static_cast<char>(c));
+                        } else if (c < 0x20) {
+                            char buf[8];
+                            std::snprintf(buf, sizeof(buf), "\\u%04x", c);
+                            out += buf;
+                        } else {
+                            out.push_back(static_cast<char>(c));
+                        }
+                    }
+                    return out;
+                };
+                if (direction == "from_agent" || direction == "get") {
+                    std::wstring clip;
+                    bool ok = input_ctrl.GetClipboardText(clip);
+                    std::string payload = std::string("{\"type\":\"clipboard_data\",\"ok\":") +
+                        (ok ? "true" : "false") + ",\"text\":\"" + json_escape(utf8_from_wide(clip)) + "\"}";
+                    try {
+                        input_dc->send(payload);
+                    } catch (...) {
+                    }
+                } else if (direction == "to_agent" || direction == "set") {
+                    std::string clip_text = ExtractJsonStr(text, "text");
+                    bool ok = input_ctrl.SetClipboardText(wide_from_utf8(clip_text));
+                    try {
+                        input_dc->send(std::string("{\"type\":\"clipboard_data\",\"ok\":") +
+                            (ok ? "true" : "false") + ",\"action\":\"set\"}");
+                    } catch (...) {
                     }
                 }
             }

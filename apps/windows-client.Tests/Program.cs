@@ -992,5 +992,62 @@ await RunTest("CppNativeBridge: SyncInputPermissions deny blocks TryMoveMouse wi
     return Task.CompletedTask;
 });
 
+// 40. Device Functions stay aligned with server effective policy
+await RunTest("AgentFunctionPermissions: SyncFromEffectivePolicy aligns IsToolAllowed with Policy", () =>
+{
+    var locked = ControlPlaneClient.ParsePolicyFromJsonElement(
+        JsonDocument.Parse("""
+            {
+              "allow_writes": false,
+              "allow_tier3": false,
+              "allow_file_deletion": false,
+              "allow_shell": false,
+              "desktop_enabled": false,
+              "allow_clipboard": false,
+              "allow_full_pc_access": false,
+              "max_tier_unattended": 2
+            }
+            """).RootElement);
+    var lockedFns = AgentFunctionPermissions.SyncFromEffectivePolicy(locked);
+    Assert(!lockedFns.AllowUiInputAutomation && !lockedFns.AllowShellAndPowerShell && !lockedFns.AllowClipboard,
+        "Locked policy must disable desktop/shell/clipboard functions");
+
+    var open = ControlPlaneClient.ParsePolicyFromJsonElement(
+        JsonDocument.Parse("""
+            {
+              "allow_writes": true,
+              "allow_tier3": true,
+              "allow_file_deletion": true,
+              "allow_shell": true,
+              "desktop_enabled": true,
+              "allow_clipboard": true,
+              "allow_full_pc_access": true,
+              "allow_unrestricted_apps": true,
+              "max_tier_unattended": 4
+            }
+            """).RootElement);
+    var openFns = AgentFunctionPermissions.SyncFromEffectivePolicy(open, new[] { "close_window" });
+    Assert(openFns.AllowUiInputAutomation && openFns.AllowShellAndPowerShell && openFns.AllowClipboard,
+        "Open tier-4 policy must enable desktop/shell/clipboard functions");
+    Assert(openFns.DisabledTools.Contains("close_window"), "Must preserve explicit DisabledTools");
+
+    var cfg = new AgentGuiConfig
+    {
+        DeviceAgent = new DeviceAgentSettings { Functions = openFns },
+        Policy = open,
+    };
+    Assert(DeviceAgentRuntimeService.IsToolAllowed("mouse_click", cfg, out _), "mouse_click allowed after sync");
+    Assert(DeviceAgentRuntimeService.IsToolAllowed("get_clipboard", cfg, out _), "get_clipboard allowed after sync");
+    Assert(DeviceAgentRuntimeService.IsToolAllowed("run_shell", cfg, out _), "run_shell allowed after sync");
+    Assert(!DeviceAgentRuntimeService.IsToolAllowed("close_window", cfg, out _), "DisabledTools still deny close_window");
+
+    cfg.DeviceAgent.Functions = lockedFns;
+    cfg.Policy = locked;
+    Assert(!DeviceAgentRuntimeService.IsToolAllowed("mouse_click", cfg, out _), "mouse_click denied after locked sync");
+    Assert(!DeviceAgentRuntimeService.IsToolAllowed("get_clipboard", cfg, out _), "get_clipboard denied after locked sync");
+    Assert(!DeviceAgentRuntimeService.IsToolAllowed("run_shell", cfg, out _), "run_shell denied after locked sync");
+    return Task.CompletedTask;
+});
+
 Console.WriteLine($"\nSummary: {passed} passed, {failed} failed ({passed + failed} total)");
 return failed > 0 ? 1 : 0;

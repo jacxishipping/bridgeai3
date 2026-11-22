@@ -56,6 +56,10 @@ public:
     bool KeyTokenEvent(const std::string& key_token, const std::string& state);
     bool TypeUnicodeText(const std::wstring& text);
 
+    // Clipboard sync (Win32 CF_UNICODETEXT). Guarded by allow_clipboard + session_active.
+    bool GetClipboardText(std::wstring& out_text);
+    bool SetClipboardText(const std::wstring& text);
+
     // Releases all currently held keyboard keys and mouse buttons (critical on session disconnect)
     int ReleaseAllHeldKeys();
     size_t GetHeldKeyCount() const;

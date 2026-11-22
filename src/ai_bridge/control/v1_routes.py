@@ -475,7 +475,9 @@ def attach_v1_routes(
         authorization: str | None = Header(default=None),
     ):
         require_role("operator", x_admin_token, x_session_token, authorization)
-        if getattr(app.state, "emergency_stop", False):
+        from . import plane_state as _ps
+
+        if _ps.is_emergency_stop(conn, app.state):
             raise HTTPException(status_code=403, detail="Emergency stop is active; file uploads are disabled.")
         _ensure_v1_device_exists(device_id)
         filename = str(body.get("filename") or f"upload_{int(time.time())}.bin")
@@ -577,10 +579,12 @@ def attach_v1_routes(
                 elif isinstance(metrics, dict) and metrics.get(k) is not None:
                     entry[k] = metrics[k]
             meta_store[device_id] = entry
+        from . import plane_state as _ps
+
         return {
             "device_id": device_id,
             "status": "online",
-            "emergency_stop": app.state.emergency_stop,
+            "emergency_stop": _ps.is_emergency_stop(conn, app.state),
             "human_takeover_active": is_device_human_takeover_active(device_id),
             "token_expires_at": row["token_expires_at"],
         }
@@ -858,7 +862,9 @@ def attach_v1_routes(
         if not perms.get("clipboard_sync", False):
             raise HTTPException(status_code=403, detail="Clipboard synchronization is disabled for this session.")
         action = str(body.get("action") or "get").lower()
-        if action != "get" and getattr(app.state, "emergency_stop", False):
+        from . import plane_state as _ps
+
+        if action != "get" and _ps.is_emergency_stop(conn, app.state):
             raise HTTPException(status_code=403, detail="Emergency stop is active; clipboard write denied.")
         from .. import tools
 

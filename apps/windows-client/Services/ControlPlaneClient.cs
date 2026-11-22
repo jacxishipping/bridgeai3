@@ -510,10 +510,13 @@ public sealed class ControlPlaneClient : IDisposable
         var baseUrl = NormalizeUrl(config.ControlUrl);
         int intervalSec = Math.Clamp(config.HeartbeatIntervalSeconds, 5, 120);
         int reqTimeoutSec = Math.Clamp(config.HttpTimeoutSeconds, 5, 120);
-        // Push local device policy on initial connect so the online panel immediately reflects all 11 device controls
+        // Pull server effective policy on connect (do not push local overrides that fight the plane).
+        // Operators push via dashboard; the client Sync Policy button remains for explicit upload.
         try
         {
-            await SyncPolicyAsync(config.ControlUrl, token, config.Policy, ct);
+            var (fetched, serverPolicy, _) = await FetchPolicyAsync(config.ControlUrl, token, config.Policy, ct);
+            if (fetched && serverPolicy is not null)
+                ServerPolicyReceived?.Invoke(serverPolicy);
         }
         catch
         {
@@ -569,9 +572,9 @@ public sealed class ControlPlaneClient : IDisposable
                     {
                         UpdateEmergencyStop(esEl.GetBoolean());
                     }
-                    if (hbRoot.TryGetProperty("has_custom_policy", out var hcpEl) &&
-                        hcpEl.ValueKind == JsonValueKind.True &&
-                        hbRoot.TryGetProperty("effective_policy", out var effEl) &&
+                    // Always apply effective_policy when present so Device Functions stay
+                    // aligned even when the device has no custom_policy override.
+                    if (hbRoot.TryGetProperty("effective_policy", out var effEl) &&
                         effEl.ValueKind == JsonValueKind.Object)
                     {
                         var serverPolicy = ParsePolicyFromJsonElement(effEl, config.Policy);
