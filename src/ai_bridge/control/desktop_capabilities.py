@@ -13,7 +13,7 @@ _STATIC_MATRIX: dict[str, dict[str, Any]] = {
         "ocr_som": True,
         "native_capture_dll": True,
         "verified_on_target_ci": False,
-        "notes": "Primary fleet path; optional ai_bridge_native.dll for DXGI/input.",
+        "notes": "Primary fleet path; prefers ai_bridge_desktop WebRTC when present; optional ai_bridge_native.dll for DXGI/input.",
     },
     "Linux": {
         "agent_entrypoint": "agents/linux/agent_main.py",

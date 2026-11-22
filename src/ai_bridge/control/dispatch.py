@@ -20,12 +20,16 @@ from .task_runtime import current_device_id, raise_if_cancelled
 def _start_webrtc_from_task(a: dict) -> dict:
     """Start an agent-side WebRTC stream. The poller registers the
     control URL + device token as agent context at startup; without it
-    the task cannot signal and fails with a clear message."""
+    the task cannot signal and fails with a clear message.
+
+    On Windows, prefer ``ai_bridge_desktop.exe`` (libdatachannel) when
+    present — see ``ai_bridge.native_webrtc``. Falls back to Python
+    aiortc otherwise.
+    """
     ctx = webrtc_stream._AGENT_CONTEXT
     if not ctx.get("control_url") or not ctx.get("device_token"):
         raise RuntimeError("Agent context (control URL / device token) is not set; cannot start WebRTC stream.")
     session_id = a["session_id"]
-    signaling = webrtc_stream.HttpSignaling(ctx["control_url"], ctx["device_token"], session_id)
     monitor_index = a.get("monitor_index")
     if monitor_index is not None:
         try:
@@ -38,14 +42,49 @@ def _start_webrtc_from_task(a: dict) -> dict:
             bitrate_kbps = int(bitrate_kbps)
         except (TypeError, ValueError):
             bitrate_kbps = None
+    fps = int(a.get("fps", 30))
+    kbps = int(bitrate_kbps) if bitrate_kbps is not None else 4500
+
+    from .. import native_webrtc
+
+    native = native_webrtc.try_start_native_stream(
+        control_url=str(ctx["control_url"]),
+        device_token=str(ctx["device_token"]),
+        session_id=str(session_id),
+        monitor_index=int(monitor_index or 0),
+        fps=fps,
+        bitrate_kbps=kbps,
+    )
+    if native is not None:
+        return native
+
+    signaling = webrtc_stream.HttpSignaling(ctx["control_url"], ctx["device_token"], session_id)
     return webrtc_stream.start_stream(
         session_id,
         signaling,
         scale=float(a.get("scale", 0.75)),
-        fps=int(a.get("fps", 30)),
+        fps=fps,
         monitor_index=monitor_index,
-        bitrate_kbps=int(bitrate_kbps) if bitrate_kbps is not None else 4500,
+        bitrate_kbps=kbps,
     )
+
+
+def _stop_webrtc_from_task(a: dict) -> dict:
+    from .. import native_webrtc
+
+    session_id = str(a.get("session_id") or "")
+    native = native_webrtc.stop_managed_native_stream(session_id or None)
+    py = (
+        webrtc_stream.stop_stream(session_id)
+        if session_id
+        else {"session_id": "", "status": "not_running"}
+    )
+    py_stopped = str(py.get("status") or "") == "stopped"
+    return {
+        "native": native,
+        "python": py,
+        "ok": bool(native.get("stopped") or py_stopped),
+    }
 
 
 def _supervisor_enqueue_handoff(a: dict) -> dict:
@@ -536,7 +575,7 @@ def dispatch(tool: str, args: dict, *, policy: Policy | None = None, approval_gr
         ),
         "start_webrtc_stream": lambda a: _start_webrtc_from_task(a),
         "get_system_monitors": lambda a: {"monitors": tools.get_system_monitors()},
-        "stop_webrtc_stream": lambda a: webrtc_stream.stop_stream(a["session_id"]),
+        "stop_webrtc_stream": lambda a: _stop_webrtc_from_task(a),
         "read_file": lambda a: tools.read_file(a["path"], int(a.get("max_chars", 100000)), is_admin=is_admin, policy=policy),
         "write_file": lambda a: tools.write_file(
             a["path"],

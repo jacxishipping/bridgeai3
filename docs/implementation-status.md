@@ -64,8 +64,9 @@ Honest residuals / gated paths:
   SM secrets, Linux netns/gVisor wrappers, and WORM SIEM sinks are in-tree
   (env-gated). C++ PeerConnection path (libdatachannel) is verified by
   `windows-native-webrtc` + `scripts/libwebrtc_e2e_harness.py` (offer/answer,
-  ICE connected, track, input datachannel). Fleet Live Desktop still defaults
-  to Python aiortc until devices run `ai_bridge_desktop`.
+  ICE connected, track, input datachannel). Fleet Live Desktop prefers
+  `ai_bridge_desktop` (libdatachannel) when the exe is present on Windows
+  (`AI_BRIDGE_NATIVE_WEBRTC=auto`); otherwise Python aiortc.
 
 ## WebRTC / desktop streaming (Phases 2–9, current)
 - Dispatch defaults **fps=30** and forwards `monitor_index` / `bitrate_kbps` (`dispatch._start_webrtc_from_task`).
