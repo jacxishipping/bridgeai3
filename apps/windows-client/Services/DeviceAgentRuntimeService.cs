@@ -759,7 +759,36 @@ public sealed class DeviceAgentRuntimeService : IDisposable
         }
         catch { }
 
+        if (shot is null && ok && agent.EnableVisionInLoop && agent.AutoVerifyVisualActions &&
+            IsVisualMutatingTool(toolName) &&
+            config.Policy.AllowTier3 && config.Policy.MaxTierUnattended >= 3)
+        {
+            try
+            {
+                await Task.Delay(180, ct);
+                var monIdx = agent.PinnedMonitorIndex >= 0 ? agent.PinnedMonitorIndex : 0;
+                var dir = string.IsNullOrWhiteSpace(config.ScreenshotDirectory)
+                    ? System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".ai-bridge", "screenshots")
+                    : config.ScreenshotDirectory;
+                var verifyShot = ScreenCaptureService.CapturePrimaryScreen(dir, monIdx);
+                shot = verifyShot.Base64Png;
+            }
+            catch
+            {
+                // Auto-verify screenshot is best-effort
+            }
+        }
+
         return (resultJson, shot);
+    }
+
+    public static bool IsVisualMutatingTool(string toolName)
+    {
+        var t = toolName.Trim().ToLowerInvariant();
+        return t is "mouse_draw_path" or "draw_path" or "mouse_drag" or "mouse_click" or "desktop_click"
+            or "click_element" or "click_text" or "click_text_ocr" or "invoke_element" or "set_element_value"
+            or "desktop_open_application" or "launch_approved_application" or "open_application"
+            or "maximize_window" or "focus_window" or "keyboard_type" or "press_hotkey";
     }
 
     private static string StripBase64ForLlm(string json)

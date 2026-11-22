@@ -888,5 +888,16 @@ await RunTest("NativeToolExecutor: PinnedWindowTitle blocks desktop input when t
     Assert(prompt.Contains("SCOPED WINDOW PIN ACTIVE") && prompt.Contains("SCOPED MONITOR PIN ACTIVE"), "Expected pinning notices in system prompt");
 });
 
+// 35. Auto-Verify Visual Loop classification & defaults
+await RunTest("DeviceAgentRuntimeService: AutoVerifyVisualActions defaults true and classifies UI mutations", () =>
+{
+    var cfg = new AgentGuiConfig();
+    Assert(cfg.DeviceAgent.AutoVerifyVisualActions, "Expected AutoVerifyVisualActions to default to true");
+    Assert(DeviceAgentRuntimeService.IsVisualMutatingTool("mouse_draw_path"), "Expected mouse_draw_path to be visual mutating");
+    Assert(DeviceAgentRuntimeService.IsVisualMutatingTool("desktop_open_application"), "Expected desktop_open_application to be visual mutating");
+    Assert(!DeviceAgentRuntimeService.IsVisualMutatingTool("get_system_info"), "Expected get_system_info to NOT be visual mutating");
+    return Task.CompletedTask;
+});
+
 Console.WriteLine($"\nSummary: {passed} passed, {failed} failed ({passed + failed} total)");
 return failed > 0 ? 1 : 0;

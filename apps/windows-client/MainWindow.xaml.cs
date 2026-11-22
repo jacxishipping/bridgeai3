@@ -3044,6 +3044,8 @@ public partial class MainWindow : Window
             AgFnFullPcFilesChk.IsChecked = f.AllowFullPcFilesAndDrives;
             AgFnShellPsChk.IsChecked = f.AllowShellAndPowerShell;
             AgFnKillProcChk.IsChecked = f.AllowProcessTermination;
+            AgFnVisionLoopChk.IsChecked = a.EnableVisionInLoop;
+            AgFnAutoVerifyChk.IsChecked = a.AutoVerifyVisualActions;
             AgFnConfirmMutateChk.IsChecked = a.ConfirmMutatingFunctions;
             AgSetDisabledToolsBox.Text = string.Join(", ", f.DisabledTools ?? new List<string>());
         }
@@ -3074,6 +3076,8 @@ public partial class MainWindow : Window
         a.BaseUrl = AgSetBaseUrlBox.Text.Trim();
         a.Model = AgSetModelBox.Text.Trim();
         a.ConfirmMutatingFunctions = AgFnConfirmMutateChk.IsChecked == true;
+        a.EnableVisionInLoop = AgFnVisionLoopChk.IsChecked == true;
+        a.AutoVerifyVisualActions = AgFnAutoVerifyChk.IsChecked == true;
 
         _agentApiKey = AgSetApiKeyBox.Password.Trim();
         _configService.SaveAgentApiKey(_agentApiKey);

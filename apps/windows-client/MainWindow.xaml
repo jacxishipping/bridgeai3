@@ -1699,6 +1699,8 @@
                                                                     <CheckBox x:Name="AgFnFullPcFilesChk" Style="{StaticResource ToggleSwitchStyle}" Content="Full PC Drives, Directories &amp; Files (if allowed)"/>
                                                                     <CheckBox x:Name="AgFnShellPsChk" Style="{StaticResource ToggleSwitchStyle}" Content="CMD Shell &amp; PowerShell Execution (if allowed)"/>
                                                                     <CheckBox x:Name="AgFnKillProcChk" Style="{StaticResource ToggleSwitchStyle}" Content="Terminate Running Processes (kill_process)"/>
+                                                                    <CheckBox x:Name="AgFnVisionLoopChk" Style="{StaticResource ToggleSwitchStyle}" Content="Vision-in-the-Loop (attach compressed screenshots for AI)"/>
+                                                                    <CheckBox x:Name="AgFnAutoVerifyChk" Style="{StaticResource ToggleSwitchStyle}" Content="Auto-Verify Visual Loop (verify UI state after actions)"/>
                                                                     <CheckBox x:Name="AgFnConfirmMutateChk" Style="{StaticResource ToggleSwitchStyle}" Content="Ask confirmation popup before every mutating function"/>
 
                                                                     <TextBlock Text="Disallowed Function Names (comma-separated blocklist)" FontSize="10.5" Foreground="{DynamicResource TextMuted}" Margin="0,8,0,3"/>
