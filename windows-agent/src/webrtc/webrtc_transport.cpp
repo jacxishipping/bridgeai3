@@ -60,10 +60,13 @@ bool NativeWebRtcPipeline::StartSession(
     stats_.target_fps = cfg.fps;
     stats_.target_bitrate_kbps = bitrate_kbps > 0 ? bitrate_kbps : 4500;
 
+    // Deny-by-default: capture/encode pipeline must NOT silently enable
+    // SendInput. PeerConnection / WPF / pipe UPDATE_SESSION_PERMISSIONS
+    // explicitly grant input when policy allows.
     input::SessionInputPermissions perms{};
-    perms.session_active = true;
-    perms.allow_mouse = true;
-    perms.allow_keyboard = true;
+    perms.session_active = false;
+    perms.allow_mouse = false;
+    perms.allow_keyboard = false;
     perms.allow_clipboard = false;
     input_controller_.SetPermissions(perms);
 

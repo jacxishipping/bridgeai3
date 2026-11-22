@@ -278,12 +278,12 @@ public partial class MainWindow : Window
             ? NamedPipeBridge.PipeName
             : _config.DesktopPipeName.Trim();
         var hmac = _configService.LoadPipeHmacSecret();
-        if (string.IsNullOrWhiteSpace(hmac))
+        if (string.IsNullOrWhiteSpace(hmac) || NamedPipeBridge.IsInsecureDefaultSecret(hmac))
         {
             hmac = Convert.ToHexStringLower(System.Security.Cryptography.RandomNumberGenerator.GetBytes(24));
             _configService.SavePipeHmacSecret(hmac);
         }
-        NamedPipeBridge.ActiveHmacSecret = hmac;
+        NamedPipeBridge.ActiveHmacSecret = NamedPipeBridge.RequireHmacSecret(hmac);
         CppNativeBridge.SyncInputPermissions(_config.Policy.AllowDesktopControl, _config.Policy.AllowClipboard);
         var cppCfg = _config.CppAgent;
         _ = Task.Run(() => NamedPipeBridge.EnsureCppSupervisorRunning(

@@ -23,6 +23,11 @@ struct SessionSnapshot {
     std::string answer_sdp;
     std::string answer_type;
     std::vector<IceCandidateJson> viewer_candidates;
+    std::string mode;
+    bool human_takeover_active = false;
+    bool control_mouse = false;
+    bool control_keyboard = false;
+    bool permissions_present = false;
 };
 
 // WinHTTP client for /api/agent/webrtc/* (same contract as Python HttpSignaling).

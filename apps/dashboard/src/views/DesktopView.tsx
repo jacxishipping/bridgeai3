@@ -1,8 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Eye, Keyboard, Monitor, MousePointerClick, Pause, Play, RefreshCw, ShieldAlert } from "lucide-react";
+import { Eye, Keyboard, Monitor, MousePointerClick, Pause, Play, RefreshCw, ShieldAlert, Wifi } from "lucide-react";
 import type { ApiClient } from "../api";
 import type { DeviceDesktopCapabilities, DeviceRecord, MonitorDescriptor, PolicyState } from "../types";
 import { Button, Chip, StateBanner, StatusBadge, SurfaceCard } from "../components/ui";
+
+type TransportMode = "jpeg" | "webrtc";
 
 export function DesktopView({
   api,
@@ -18,6 +20,7 @@ export function DesktopView({
   const [selectedMonitor, setSelectedMonitor] = useState(0);
   const [streaming, setStreaming] = useState(false);
   const [controlArmed, setControlArmed] = useState(false);
+  const [transport, setTransport] = useState<TransportMode>("jpeg");
   const [frameUrl, setFrameUrl] = useState<string | null>(null);
   const [frameError, setFrameError] = useState<string>("");
   const [retryCount, setRetryCount] = useState(0);
@@ -25,7 +28,14 @@ export function DesktopView({
   const [deviceCaps, setDeviceCaps] = useState<DeviceDesktopCapabilities | null>(null);
   const [typeText, setTypeText] = useState("");
   const [hotkey, setHotkey] = useState("ctrl+c");
+  const [webrtcStatus, setWebrtcStatus] = useState<string>("idle");
   const lastObjectUrl = useRef<string | null>(null);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const pcRef = useRef<RTCPeerConnection | null>(null);
+  const inputDcRef = useRef<RTCDataChannel | null>(null);
+  const sessionIdRef = useRef<string | null>(null);
+  const seenAgentIce = useRef(0);
+  const pollTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     api
@@ -62,6 +72,12 @@ export function DesktopView({
     selectedDevice && (selectedDevice.revoked || selectedDevice.status !== "online"),
   );
 
+  const webrtcAvailable = Boolean(
+    deviceCaps?.webrtc_stream_supported ||
+      (selectedDevice?.os || "").toLowerCase().includes("win") ||
+      deviceId === "local",
+  );
+
   const effectiveDesktopEnabled = useMemo(() => {
     if (deviceCaps) {
       return Boolean(deviceCaps.interactive_input_supported);
@@ -93,7 +109,6 @@ export function DesktopView({
     }
   }, [controlBlockedReason, controlArmed]);
 
-  // Keyboard safety: Escape immediately disarms interactive control
   useEffect(() => {
     if (!controlArmed) return;
     const onKeyDown = (e: KeyboardEvent) => {
@@ -131,6 +146,34 @@ export function DesktopView({
     };
   }, [api, deviceId]);
 
+  const stopWebrtc = useCallback(async () => {
+    if (pollTimerRef.current) {
+      window.clearInterval(pollTimerRef.current);
+      pollTimerRef.current = null;
+    }
+    const sid = sessionIdRef.current;
+    sessionIdRef.current = null;
+    seenAgentIce.current = 0;
+    inputDcRef.current = null;
+    try {
+      pcRef.current?.close();
+    } catch {
+      // ignore
+    }
+    pcRef.current = null;
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
+    if (sid) {
+      try {
+        await api.terminateWebRtcSession(sid);
+      } catch {
+        // Session may already be gone
+      }
+    }
+    setWebrtcStatus("idle");
+  }, [api]);
+
   const pullFrame = useCallback(async () => {
     try {
       const url = await api.fetchLiveFrameUrl(deviceId, 0.75, 75);
@@ -145,38 +188,206 @@ export function DesktopView({
     }
   }, [api, deviceId]);
 
+  const startWebrtc = useCallback(async () => {
+    setWebrtcStatus("connecting");
+    setFrameError("");
+    try {
+      const iceServers = await api.getWebRtcIceServers();
+      const mode = controlArmed && !controlBlockedReason ? "ai_assisted" : "view_only";
+      const sess = await api.createWebRtcSession({
+        device_id: deviceId,
+        mode,
+        fps: 30,
+        scale: 1.0,
+        monitor_index: selectedMonitor,
+        bitrate_kbps: 4500,
+      });
+      const sessionId = sess.session_id;
+      sessionIdRef.current = sessionId;
+
+      const pc = new RTCPeerConnection({ iceServers: iceServers.length ? iceServers : [{ urls: "stun:stun.l.google.com:19302" }] });
+      pcRef.current = pc;
+
+      pc.ontrack = (ev) => {
+        const stream = ev.streams[0] || new MediaStream([ev.track]);
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          void videoRef.current.play().catch(() => undefined);
+        }
+        setWebrtcStatus("connected");
+        setFrameError("");
+      };
+
+      pc.ondatachannel = (ev) => {
+        if (ev.channel.label === "input") {
+          inputDcRef.current = ev.channel;
+        }
+      };
+
+      pc.onicecandidate = (ev) => {
+        if (!ev.candidate || !sessionIdRef.current) return;
+        void api.postWebRtcIce(sessionIdRef.current, ev.candidate.toJSON(), "viewer").catch(() => undefined);
+      };
+
+      pc.onconnectionstatechange = () => {
+        setWebrtcStatus(pc.connectionState || "connecting");
+        if (pc.connectionState === "failed" || pc.connectionState === "disconnected") {
+          setFrameError(`WebRTC ${pc.connectionState}`);
+        }
+      };
+
+      const waitForOffer = async () => {
+        const deadline = Date.now() + 45000;
+        while (Date.now() < deadline) {
+          const live = await api.getWebRtcSession(sessionId);
+          if (live.error) throw new Error(live.error);
+          const offer = live.offer;
+          const sdp = offer?.sdp || (live as { offer_sdp?: string }).offer_sdp;
+          if (sdp) {
+            return live;
+          }
+          await new Promise((r) => setTimeout(r, 500));
+        }
+        throw new Error("Timed out waiting for agent WebRTC offer (is the Windows agent online?)");
+      };
+
+      const live = await waitForOffer();
+      const offerSdp = live.offer?.sdp || (live as { offer_sdp?: string }).offer_sdp;
+      const offerType = live.offer?.type || (live as { offer_type?: string }).offer_type || "offer";
+      if (!offerSdp) throw new Error("Agent offer missing SDP");
+
+      await pc.setRemoteDescription({ type: offerType as RTCSdpType, sdp: offerSdp });
+      for (const cand of live.agent_candidates || []) {
+        if (cand?.candidate) {
+          try {
+            await pc.addIceCandidate(cand as RTCIceCandidateInit);
+          } catch {
+            // ignore bad candidates
+          }
+        }
+      }
+      seenAgentIce.current = (live.agent_candidates || []).length;
+
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      await api.postWebRtcAnswer(sessionId, answer.sdp || "", answer.type || "answer");
+
+      pollTimerRef.current = window.setInterval(() => {
+        void (async () => {
+          if (!sessionIdRef.current || !pcRef.current) return;
+          try {
+            const snap = await api.getWebRtcSession(sessionIdRef.current);
+            const agents = snap.agent_candidates || [];
+            for (let i = seenAgentIce.current; i < agents.length; i++) {
+              const c = agents[i];
+              if (c?.candidate) {
+                try {
+                  await pcRef.current.addIceCandidate(c as RTCIceCandidateInit);
+                } catch {
+                  // ignore
+                }
+              }
+            }
+            seenAgentIce.current = agents.length;
+            if (snap.status === "ended" || snap.status === "error") {
+              setFrameError(snap.error || `Session ${snap.status}`);
+              setStreaming(false);
+            }
+          } catch {
+            // transient
+          }
+        })();
+      }, 2000);
+    } catch (err) {
+      setFrameError(err instanceof Error ? err.message : "WebRTC start failed");
+      setWebrtcStatus("failed");
+      setRetryCount((c) => c + 1);
+      await stopWebrtc();
+      throw err;
+    }
+  }, [api, controlArmed, controlBlockedReason, deviceId, selectedMonitor, stopWebrtc]);
+
   useEffect(() => {
     return () => {
       if (lastObjectUrl.current) URL.revokeObjectURL(lastObjectUrl.current);
+      void stopWebrtc();
     };
-  }, []);
+  }, [stopWebrtc]);
 
   useEffect(() => {
-    if (!streaming) return;
-    void pullFrame();
-    const timer = window.setInterval(() => {
-      void pullFrame();
-    }, 1200);
-    return () => window.clearInterval(timer);
-  }, [streaming, pullFrame]);
+    if (!streaming) {
+      void stopWebrtc();
+      return;
+    }
 
-  async function handleImageClick(e: React.MouseEvent<HTMLImageElement>) {
+    let cancelled = false;
+    if (transport === "jpeg") {
+      void pullFrame();
+      const timer = window.setInterval(() => {
+        void pullFrame();
+      }, 1200);
+      return () => {
+        cancelled = true;
+        window.clearInterval(timer);
+      };
+    }
+
+    void startWebrtc().catch((err) => {
+      if (!cancelled) {
+        onToast(err instanceof Error ? err.message : "WebRTC failed — falling back to JPEG");
+        setTransport("jpeg");
+      }
+    });
+    return () => {
+      cancelled = true;
+      void stopWebrtc();
+    };
+  }, [streaming, transport, pullFrame, startWebrtc, stopWebrtc, onToast]);
+
+  useEffect(() => {
+    if (!streaming || transport !== "webrtc" || !sessionIdRef.current) return;
+    const mode = controlArmed && !controlBlockedReason ? "ai_assisted" : "view_only";
+    void api.setWebRtcSessionMode(sessionIdRef.current, mode).catch(() => undefined);
+  }, [api, controlArmed, controlBlockedReason, streaming, transport]);
+
+  async function dispatchClick(nx: number, ny: number, button: "left" | "right") {
+    if (!controlArmed || controlBlockedReason) return;
+    const activeMon = monitors[selectedMonitor];
+    const dc = inputDcRef.current;
+    if (transport === "webrtc" && dc && dc.readyState === "open") {
+      dc.send(
+        JSON.stringify({
+          type: "click",
+          action: "click",
+          x: nx,
+          y: ny,
+          button,
+        }),
+      );
+      onToast(`Click via WebRTC (${Math.round(nx * 100)}%, ${Math.round(ny * 100)}%)`);
+      return;
+    }
+    await api.sendDesktopInput(deviceId, {
+      action: button === "right" ? "right_click" : "click",
+      x: nx,
+      y: ny,
+      normalized: true,
+      screen_width: activeMon?.width ?? 1920,
+      screen_height: activeMon?.height ?? 1080,
+    });
+    onToast(`Click dispatched (${Math.round(nx * 100)}%, ${Math.round(ny * 100)}%)`);
+    if (transport === "jpeg") {
+      window.setTimeout(() => void pullFrame(), 300);
+    }
+  }
+
+  async function handleImageClick(e: React.MouseEvent<HTMLImageElement | HTMLVideoElement>) {
     if (!controlArmed || controlBlockedReason) return;
     const rect = e.currentTarget.getBoundingClientRect();
     const nx = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
     const ny = Math.max(0, Math.min(1, (e.clientY - rect.top) / rect.height));
-    const activeMon = monitors[selectedMonitor];
     try {
-      await api.sendDesktopInput(deviceId, {
-        action: e.button === 2 ? "right_click" : "click",
-        x: nx,
-        y: ny,
-        normalized: true,
-        screen_width: activeMon?.width ?? 1920,
-        screen_height: activeMon?.height ?? 1080,
-      });
-      onToast(`Click dispatched (${Math.round(nx * 100)}%, ${Math.round(ny * 100)}%)`);
-      window.setTimeout(() => void pullFrame(), 300);
+      await dispatchClick(nx, ny, e.button === 2 ? "right" : "left");
     } catch (err) {
       onToast(err instanceof Error ? err.message : "Input rejected by policy");
     }
@@ -200,7 +411,7 @@ export function DesktopView({
             Live Desktop Studio
           </h1>
           <p style={{ margin: "4px 0 0", fontSize: 13, color: "var(--text-secondary)" }}>
-            Policy-gated live desktop view and dual-control input for interactive sessions.
+            Policy-gated live desktop view — JPEG poll or low-latency WebRTC H.264 dual-control.
           </p>
         </div>
 
@@ -221,7 +432,9 @@ export function DesktopView({
                 : streaming && frameError
                   ? `Degraded · Retrying (${retryCount})`
                   : streaming
-                    ? "Connected · Live Feed"
+                    ? transport === "webrtc"
+                      ? `WebRTC · ${webrtcStatus}`
+                      : "Connected · JPEG Live"
                     : "Feed Idle"
             }
           />
@@ -249,8 +462,8 @@ export function DesktopView({
           <Button
             size="icon"
             aria-label="Capture single frame"
-            title="Capture single frame"
-            disabled={isOffline}
+            title="Capture single JPEG frame"
+            disabled={isOffline || transport === "webrtc"}
             onClick={() => void pullFrame()}
           >
             <RefreshCw size={14} />
@@ -258,7 +471,6 @@ export function DesktopView({
         </div>
       </div>
 
-      {/* Consent & Interruption Banners */}
       {(streaming || controlArmed) && (
         <div
           role="status"
@@ -302,14 +514,18 @@ export function DesktopView({
         <StateBanner
           kind="degraded"
           title={`Stream interrupted (attempt ${retryCount})`}
-          detail={`${frameError}. Automatic retry is running every 1.2s.`}
+          detail={`${frameError}. ${transport === "jpeg" ? "Automatic JPEG retry is running every 1.2s." : "Check agent WebRTC / TURN."}`}
           action={
             <Button
               size="sm"
               onClick={() => {
                 setFrameError("");
                 setRetryCount(0);
-                void pullFrame();
+                if (transport === "jpeg") void pullFrame();
+                else {
+                  setStreaming(false);
+                  window.setTimeout(() => setStreaming(true), 50);
+                }
               }}
             >
               Reconnect Now
@@ -318,7 +534,6 @@ export function DesktopView({
         />
       )}
 
-      {/* Controls Bar */}
       <SurfaceCard
         style={{
           padding: 14,
@@ -373,6 +588,21 @@ export function DesktopView({
             </span>
           )}
 
+          <select
+            aria-label="Stream transport"
+            className="field mono"
+            style={{ width: 160 }}
+            value={transport}
+            disabled={streaming}
+            onChange={(e) => setTransport(e.target.value as TransportMode)}
+            title={webrtcAvailable ? "JPEG poll (~1.2s) or WebRTC H.264" : "WebRTC requires a Windows desktop agent"}
+          >
+            <option value="jpeg">JPEG · ~1.2s</option>
+            <option value="webrtc" disabled={!webrtcAvailable}>
+              WebRTC · H.264
+            </option>
+          </select>
+
           {activeMonitor && (
             <span className="mono" style={{ fontSize: 11.5, color: "var(--text-secondary)" }}>
               Active: {activeMonitor.width}×{activeMonitor.height}
@@ -403,7 +633,6 @@ export function DesktopView({
         </div>
       </SurfaceCard>
 
-      {/* Viewport */}
       <SurfaceCard
         style={{
           overflow: "hidden",
@@ -415,7 +644,30 @@ export function DesktopView({
           position: "relative",
         }}
       >
-        {frameUrl ? (
+        {transport === "webrtc" && streaming ? (
+          <video
+            ref={videoRef}
+            autoPlay
+            playsInline
+            muted
+            aria-label={`Live WebRTC desktop for ${selectedDevice?.name || deviceId}`}
+            onClick={(e) => void handleImageClick(e)}
+            onContextMenu={(e) => {
+              if (controlArmed && !controlBlockedReason) {
+                e.preventDefault();
+                void handleImageClick(e);
+              }
+            }}
+            style={{
+              width: "100%",
+              maxHeight: "68vh",
+              objectFit: "contain",
+              cursor: controlArmed ? "crosshair" : "default",
+              display: "block",
+              background: "#000",
+            }}
+          />
+        ) : frameUrl ? (
           <img
             src={frameUrl}
             alt={`Live remote desktop frame for ${selectedDevice?.name || deviceId}`}
@@ -442,13 +694,17 @@ export function DesktopView({
             </div>
             <div style={{ fontSize: 12, lineHeight: 1.55 }}>
               {frameError ||
-                "Press Start Live View or Refresh to capture frames. Sessions start in View-Only mode by default."}
+                "Press Start Live View. Choose JPEG for compatibility or WebRTC for low-latency H.264 on Windows agents."}
             </div>
+            {transport === "webrtc" && (
+              <div style={{ marginTop: 10, fontSize: 11.5, display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
+                <Wifi size={12} /> WebRTC status: {webrtcStatus}
+              </div>
+            )}
           </div>
         )}
       </SurfaceCard>
 
-      {/* Keyboard Dispatch Bar: ONLY rendered when interactive control is explicitly armed and permitted */}
       {controlArmed && !controlBlockedReason ? (
         <SurfaceCard style={{ padding: 14 }}>
           <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 10 }}>
@@ -467,7 +723,12 @@ export function DesktopView({
               disabled={!typeText}
               onClick={async () => {
                 try {
-                  await api.sendDesktopInput(deviceId, { action: "type", text: typeText });
+                  const dc = inputDcRef.current;
+                  if (transport === "webrtc" && dc && dc.readyState === "open") {
+                    dc.send(JSON.stringify({ type: "type", action: "type", text: typeText }));
+                  } else {
+                    await api.sendDesktopInput(deviceId, { action: "type", text: typeText });
+                  }
                   onToast("Text sent to desktop");
                   setTypeText("");
                 } catch (err) {
@@ -490,7 +751,14 @@ export function DesktopView({
               size="sm"
               onClick={async () => {
                 try {
-                  await api.sendDesktopInput(deviceId, { action: "hotkey", key: hotkey });
+                  const dc = inputDcRef.current;
+                  if (transport === "webrtc" && dc && dc.readyState === "open") {
+                    // Approximate hotkey as key_down/key_up sequence for simple single keys
+                    dc.send(JSON.stringify({ type: "key_down", key: hotkey }));
+                    dc.send(JSON.stringify({ type: "key_up", key: hotkey }));
+                  } else {
+                    await api.sendDesktopInput(deviceId, { action: "hotkey", key: hotkey });
+                  }
                   onToast(`Hotkey ${hotkey} sent`);
                 } catch (err) {
                   onToast(err instanceof Error ? err.message : "Hotkey denied");

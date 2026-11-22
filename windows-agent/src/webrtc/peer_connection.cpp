@@ -5,10 +5,12 @@
 #include <atomic>
 #include <chrono>
 #include <cstring>
+#include <fstream>
 #include <future>
 #include <iostream>
 #include <memory>
 #include <mutex>
+#include <random>
 #include <string>
 #include <thread>
 
@@ -132,7 +134,16 @@ public:
         }
 
         aibridge::input::WindowsInputController input_ctrl;
-        input_ctrl.SetPermissions(aibridge::input::SessionInputPermissions{true, true, false, true});
+        // Deny-by-default; grant from PeerConnectionConfig + plane poll + session_permissions.json.
+        auto apply_input_permissions = [&](bool mouse, bool keyboard, bool clipboard) {
+            aibridge::input::SessionInputPermissions perms{};
+            perms.allow_mouse = mouse;
+            perms.allow_keyboard = keyboard;
+            perms.allow_clipboard = clipboard;
+            perms.session_active = mouse || keyboard || clipboard;
+            input_ctrl.SetPermissions(perms);
+        };
+        apply_input_permissions(cfg_.allow_mouse, cfg_.allow_keyboard, cfg_.allow_clipboard);
 
         auto pc = std::make_shared<rtc::PeerConnection>(rtc_cfg);
         pc->onStateChange([this, &input_ctrl](rtc::PeerConnection::State state) {
@@ -173,6 +184,16 @@ public:
         auto video = rtc::Description::Video("video", rtc::Description::Direction::SendOnly);
         video.addH264Codec(96);
         auto track = pc->addTrack(std::move(video));
+
+        // Annex-B NALs from Media Foundation must be RTP-packetized for browsers.
+        // Raw track->send(annexb) is not interoperable with Chromium/aiortc.
+        std::mt19937 rng{std::random_device{}()};
+        uint32_t ssrc = 1 + (rng() % 0x7ffffffe);
+        auto rtpConfig = std::make_shared<rtc::RtpPacketizationConfig>(
+            ssrc, "video", /*payloadType=*/96, rtc::H264RtpPacketizer::defaultClockRate);
+        auto packetizer = std::make_shared<rtc::H264RtpPacketizer>(
+            rtc::H264RtpPacketizer::Separator::LongStartSequence, rtpConfig);
+        track->setMediaHandler(packetizer);
 
         // Same contract as Python webrtc_stream: agent-offerred "input" datachannel.
         auto input_dc = pc->createDataChannel("input");
@@ -314,6 +335,46 @@ public:
                 if (snap && (snap->status == "ended" || snap->status == "error")) {
                     break;
                 }
+                // Keep input permissions aligned with plane session mode + local sidecar.
+                bool mouse = cfg_.allow_mouse;
+                bool keyboard = cfg_.allow_keyboard;
+                bool clipboard = cfg_.allow_clipboard;
+                if (snap && snap->permissions_present) {
+                    mouse = snap->control_mouse && !snap->human_takeover_active && snap->mode != "view_only";
+                    keyboard = snap->control_keyboard && !snap->human_takeover_active && snap->mode != "view_only";
+                }
+                // Sidecar written by WPF NamedPipeBridge.UpdateSessionPermissionsAsync
+                try {
+                    std::ifstream ifs;
+                    // Prefer beside config via USERPROFILE\.ai-bridge\session_permissions.json
+                    const char* home = std::getenv("USERPROFILE");
+                    if (home && *home) {
+                        std::string path = std::string(home) + "\\.ai-bridge\\session_permissions.json";
+                        ifs.open(path);
+                    }
+                    if (ifs) {
+                        std::ostringstream ss;
+                        ss << ifs.rdbuf();
+                        std::string body = ss.str();
+                        if (body.find("\"allow_desktop_control\":false") != std::string::npos ||
+                            body.find("\"allow_desktop_control\": false") != std::string::npos) {
+                            mouse = false;
+                            keyboard = false;
+                        } else if (body.find("\"allow_desktop_control\":true") != std::string::npos ||
+                                   body.find("\"allow_desktop_control\": true") != std::string::npos) {
+                            // Only raise if plane has not forced view_only / takeover
+                            if (!(snap && (snap->mode == "view_only" || snap->human_takeover_active))) {
+                                mouse = true;
+                                keyboard = true;
+                            }
+                        }
+                        clipboard = body.find("\"allow_clipboard\":true") != std::string::npos ||
+                                    body.find("\"allow_clipboard\": true") != std::string::npos;
+                    }
+                } catch (...) {
+                }
+                apply_input_permissions(mouse, keyboard, clipboard);
+
                 if (snap && !answer_applied && !snap->answer_sdp.empty()) {
                     try {
                         // Reject truncated/empty-looking answers before libdatachannel throws.
@@ -358,6 +419,7 @@ public:
                     // Count encoded frames even before ICE opens the track; send when open.
                     frames_sent_.fetch_add(1);
                     if (track->isOpen() && !au.annexb_nal_bytes.empty()) {
+                        // H264RtpPacketizer (setMediaHandler above) converts Annex-B → RTP.
                         rtc::binary payload(au.annexb_nal_bytes.size());
                         std::memcpy(
                             payload.data(),

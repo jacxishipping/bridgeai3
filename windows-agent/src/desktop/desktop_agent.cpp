@@ -160,6 +160,9 @@ int main(int argc, char* argv[]) {
         }
     }
 
+    bool allow_mouse = false;
+    bool allow_keyboard = false;
+    bool allow_clipboard = false;
     if (!config_path.empty()) {
         std::ifstream ifs(config_path);
         if (ifs) {
@@ -173,6 +176,11 @@ int main(int argc, char* argv[]) {
             if (turn_url.empty()) turn_url = ExtractJsonField(body, "turn_url");
             if (turn_username.empty()) turn_username = ExtractJsonField(body, "turn_username");
             if (turn_credential.empty()) turn_credential = ExtractJsonField(body, "turn_credential");
+            allow_mouse = body.find("\"allow_desktop_control\":true") != std::string::npos ||
+                          body.find("\"allow_desktop_control\": true") != std::string::npos;
+            allow_keyboard = allow_mouse;
+            allow_clipboard = body.find("\"allow_clipboard\":true") != std::string::npos ||
+                              body.find("\"allow_clipboard\": true") != std::string::npos;
         }
     }
     // F13-05: environment fallback for TURN (same names as the Python
@@ -254,6 +262,9 @@ int main(int argc, char* argv[]) {
         cfg.turn_url = turn_url;
         cfg.turn_username = turn_username;
         cfg.turn_credential = turn_credential;
+        cfg.allow_mouse = allow_mouse;
+        cfg.allow_keyboard = allow_keyboard;
+        cfg.allow_clipboard = allow_clipboard;
 
         auto backend = aibridge::webrtc::DescribeAvailablePeerBackend();
         auto session = aibridge::webrtc::CreatePeerConnectionSession(cfg);

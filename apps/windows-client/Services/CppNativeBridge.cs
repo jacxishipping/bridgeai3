@@ -151,6 +151,14 @@ public static class CppNativeBridge
     private static readonly object _sync = new();
     public static AIBridgeCaptureMetrics LastMetrics { get; private set; }
     public static bool PreferDxgiCapture { get; set; } = true;
+
+    /// <summary>
+    /// Last permissions pushed via <see cref="SyncInputPermissions"/>. Input helpers must NOT
+    /// silently re-enable mouse/keyboard — that bypassed deny-by-default and desynced the DLL
+    /// from the named-pipe / WebRTC permission state.
+    /// </summary>
+    public static bool InputDesktopAllowed { get; private set; }
+    public static bool InputClipboardAllowed { get; private set; }
     public static int DefaultH264Fps { get; set; } = 30;
     public static int DefaultH264BitrateKbps { get; set; } = 4500;
 
@@ -240,19 +248,21 @@ public static class CppNativeBridge
         }
     }
 
-    public static bool TryCaptureMonitor(
-        string outputDir,
+    public static bool TryCaptureMonitorBgra(
         int monitorIndex,
-        out ScreenshotResult? result,
+        out byte[]? bgra,
+        out int width,
+        out int height,
         out AIBridgeCaptureMetrics metrics)
     {
-        result = null;
+        bgra = null;
+        width = 0;
+        height = 0;
         metrics = default;
         if (!PreferDxgiCapture || !IsAvailable()) return false;
 
         try
         {
-            // Probe dimensions first or allocate 4K BGRA buffer (3840x2160x4 = ~33 MB)
             var monitors = TryEnumerateMonitors();
             int estW = 3840;
             int estH = 2160;
@@ -268,6 +278,7 @@ public static class CppNativeBridge
 
             var buf = new byte[estW * estH * 4];
             int ok = aibridge_capture_frame(monitorIndex, buf, buf.Length, out metrics);
+            LastMetrics = metrics;
             if (ok == 0 || metrics.Valid == 0 || metrics.Width <= 0 || metrics.Height <= 0)
             {
                 return false;
@@ -278,17 +289,36 @@ public static class CppNativeBridge
             {
                 buf = new byte[needed];
                 ok = aibridge_capture_frame(monitorIndex, buf, buf.Length, out metrics);
+                LastMetrics = metrics;
                 if (ok == 0 || metrics.Valid == 0) return false;
             }
 
-            LastMetrics = metrics;
-            result = SaveBgraBufferToPng(outputDir, buf, metrics.Width, metrics.Height, monitorIndex, $"screenshot_dxgi_m{monitorIndex}");
-            return result is not null;
+            bgra = buf;
+            width = metrics.Width;
+            height = metrics.Height;
+            return true;
         }
         catch
         {
             return false;
         }
+    }
+
+    public static bool TryCaptureMonitor(
+        string outputDir,
+        int monitorIndex,
+        out ScreenshotResult? result,
+        out AIBridgeCaptureMetrics metrics)
+    {
+        result = null;
+        metrics = default;
+        if (!TryCaptureMonitorBgra(monitorIndex, out var buf, out var width, out var height, out metrics) || buf is null)
+        {
+            return false;
+        }
+
+        result = SaveBgraBufferToPng(outputDir, buf, width, height, monitorIndex, $"screenshot_dxgi_m{monitorIndex}");
+        return result is not null;
     }
 
     public static bool TryCaptureWindow(
@@ -365,6 +395,8 @@ public static class CppNativeBridge
 
     public static void SyncInputPermissions(bool allowDesktopControl, bool allowClipboard)
     {
+        InputDesktopAllowed = allowDesktopControl;
+        InputClipboardAllowed = allowClipboard;
         if (!IsAvailable()) return;
         try
         {
@@ -382,10 +414,9 @@ public static class CppNativeBridge
 
     public static bool TryMoveMouse(int x, int y)
     {
-        if (!IsAvailable()) return false;
+        if (!IsAvailable() || !InputDesktopAllowed) return false;
         try
         {
-            SyncInputPermissions(allowDesktopControl: true, allowClipboard: true);
             return aibridge_send_mouse_move(x, y, 0, 0, 0, 0, 0) != 0;
         }
         catch
@@ -396,10 +427,9 @@ public static class CppNativeBridge
 
     public static bool TryMouseButton(string button, string state, int x, int y)
     {
-        if (!IsAvailable()) return false;
+        if (!IsAvailable() || !InputDesktopAllowed) return false;
         try
         {
-            SyncInputPermissions(allowDesktopControl: true, allowClipboard: true);
             return aibridge_send_mouse_button(button, state, x, y, 0, 0, 0, 0, 0) != 0;
         }
         catch
@@ -410,10 +440,9 @@ public static class CppNativeBridge
 
     public static bool TryScrollMouse(int deltaY, int deltaX = 0)
     {
-        if (!IsAvailable()) return false;
+        if (!IsAvailable() || !InputDesktopAllowed) return false;
         try
         {
-            SyncInputPermissions(allowDesktopControl: true, allowClipboard: true);
             return aibridge_send_mouse_scroll(deltaY, deltaX) != 0;
         }
         catch
@@ -424,10 +453,9 @@ public static class CppNativeBridge
 
     public static bool TryKeyEvent(string keyToken, string state)
     {
-        if (!IsAvailable()) return false;
+        if (!IsAvailable() || !InputDesktopAllowed) return false;
         try
         {
-            SyncInputPermissions(allowDesktopControl: true, allowClipboard: true);
             return aibridge_send_key_event(keyToken, state) != 0;
         }
         catch

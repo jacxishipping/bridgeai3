@@ -88,6 +88,23 @@ constexpr std::chrono::seconds kRelaunchCooldown{120};
 constexpr std::chrono::seconds kHeartbeatInterval{30};
 constexpr std::chrono::seconds kStaleWarningInterval{60};
 
+int ExtractJsonIntField(const std::string& json, const std::string& key, int fallback = 0) {
+    std::string needle = "\"" + key + "\"";
+    size_t pos = json.find(needle);
+    if (pos == std::string::npos) return fallback;
+    pos = json.find(':', pos + needle.size());
+    if (pos == std::string::npos) return fallback;
+    ++pos;
+    while (pos < json.size() && (json[pos] == ' ' || json[pos] == '\t')) ++pos;
+    try {
+        size_t end = 0;
+        int v = std::stoi(json.substr(pos), &end);
+        return end > 0 ? v : fallback;
+    } catch (...) {
+        return fallback;
+    }
+}
+
 std::string ExtractJsonStringField(const std::string& json, const std::string& key) {
     // F08-15: hand-rolled JSON extraction — see the full justification
     // in windows-agent/src/webrtc/http_signaling.cpp (no JSON library
@@ -217,7 +234,7 @@ bool LoadServiceConfig(const std::string& config_path) {
 // directly; WTSQueryUserToken yields the logged-on user's token and
 // CreateProcessAsUserW starts the agent there. Best-effort: a failure
 // is logged and retried after the cooldown, never fatal.
-bool LaunchDesktopAgentInActiveSession() {
+bool LaunchDesktopAgentInActiveSession(const std::string& extra_args = "") {
     if (g_desktop_agent_path.empty()) return false;
     {
         std::ifstream probe(g_desktop_agent_path);
@@ -243,6 +260,10 @@ bool LaunchDesktopAgentInActiveSession() {
     if (!g_config_path.empty()) {
         cmdline += " --config \"" + g_config_path + "\"";
     }
+    if (!extra_args.empty()) {
+        cmdline += " ";
+        cmdline += extra_args;
+    }
     std::wstring cmdline_w = ToWide(cmdline);
     STARTUPINFOW si{};
     si.cb = sizeof(si);
@@ -264,6 +285,24 @@ bool LaunchDesktopAgentInActiveSession() {
     CloseHandle(pi.hProcess);
     std::cerr << "[AI Bridge] supervisor: relaunched desktop agent in session "
               << session_id << ".\n";
+    return true;
+}
+
+bool StopDesktopWebRtcProcesses() {
+    // Best-effort: terminate interactive-session desktop agents that were
+    // started for WebRTC. The single-instance mutex in ai_bridge_desktop
+    // prevents duplicates; stopping is done via taskkill filtered by image.
+    STARTUPINFOW si{};
+    si.cb = sizeof(si);
+    PROCESS_INFORMATION pi{};
+    std::wstring cmd = L"taskkill /F /IM ai_bridge_desktop.exe /T";
+    BOOL ok = CreateProcessW(
+        nullptr, cmd.data(), nullptr, nullptr, FALSE,
+        CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi);
+    if (!ok) return false;
+    WaitForSingleObject(pi.hProcess, 5000);
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
     return true;
 }
 
@@ -438,6 +477,44 @@ void HandleDesktopClient(HANDLE hPipe, aibridge::monitoring::WindowsSystemMonito
             std::string reply = "{\"status\":\"released\",\"released_count\":" + std::to_string(released) + "}";
             aibridge::security::SecureNamedPipe::SendAuthenticatedMessage(
                 hPipe, "INPUT_RELEASED", reply, pipe_secret);
+        } else if (msg_type == "START_WEBRTC_SESSION") {
+            std::string session_id = ExtractJsonStringField(payload, "session_id");
+            int monitor_index = ExtractJsonIntField(payload, "monitor_index", 0);
+            int fps = ExtractJsonIntField(payload, "fps", 30);
+            int bitrate = ExtractJsonIntField(payload, "bitrate_kbps", 4500);
+            if (fps < 1) fps = 1;
+            if (fps > 60) fps = 60;
+            if (bitrate < 250) bitrate = 250;
+            if (bitrate > 50000) bitrate = 50000;
+            if (session_id.empty() || g_control_url.empty() || g_device_token.empty()) {
+                aibridge::security::SecureNamedPipe::SendAuthenticatedMessage(
+                    hPipe, "ERROR",
+                    "{\"error\":\"webrtc_start_missing_args\",\"need\":\"session_id,control_url,device_token\"}",
+                    pipe_secret);
+            } else {
+                std::ostringstream args;
+                args << "--control-url \"" << g_control_url << "\""
+                     << " --device-token \"" << g_device_token << "\""
+                     << " --session-id \"" << session_id << "\""
+                     << " --monitor " << monitor_index
+                     << " --fps " << fps
+                     << " --bitrate-kbps " << bitrate;
+                bool launched = LaunchDesktopAgentInActiveSession(args.str());
+                std::ostringstream reply;
+                reply << "{\"status\":\"" << (launched ? "started" : "launch_failed")
+                      << "\",\"session_id\":\"" << JsonEscape(session_id)
+                      << "\",\"monitor_index\":" << monitor_index
+                      << ",\"fps\":" << fps
+                      << ",\"bitrate_kbps\":" << bitrate << "}";
+                aibridge::security::SecureNamedPipe::SendAuthenticatedMessage(
+                    hPipe, launched ? "WEBRTC_STARTED" : "ERROR", reply.str(), pipe_secret);
+            }
+        } else if (msg_type == "STOP_WEBRTC_SESSION") {
+            bool stopped = StopDesktopWebRtcProcesses();
+            g_input_controller.ReleaseAllHeldKeys();
+            std::string reply = std::string("{\"status\":\"") + (stopped ? "stopped" : "stop_attempted") + "\"}";
+            aibridge::security::SecureNamedPipe::SendAuthenticatedMessage(
+                hPipe, "WEBRTC_STOPPED", reply, pipe_secret);
         } else {
             aibridge::security::SecureNamedPipe::SendAuthenticatedMessage(
                 hPipe, "ERROR", "{\"error\":\"unknown_msg_type\",\"type\":\"" + JsonEscape(msg_type) + "\"}", pipe_secret
@@ -625,8 +702,11 @@ int main(int argc, char* argv[]) {
     }
 
     if (pipe_server_mode) {
-        if (g_pipe_secret.empty()) {
-            g_pipe_secret = "aibridge-local-pipe-hmac-v1";
+        if (g_pipe_secret.empty() || g_pipe_secret == "aibridge-local-pipe-hmac-v1") {
+            std::cerr << "[AI Bridge] FATAL: refusing insecure/empty pipe HMAC secret. "
+                      << "Pass --config with a DPAPI-sealed pipe_secret (or AI_BRIDGE_PIPE_SECRET). "
+                      << "The legacy default aibridge-local-pipe-hmac-v1 is no longer accepted.\n";
+            return 2;
         }
         if (g_stop_event == INVALID_HANDLE_VALUE) {
             g_stop_event = CreateEventW(nullptr, TRUE, FALSE, nullptr);

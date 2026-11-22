@@ -64,10 +64,19 @@ public sealed class NativeToolExecutor
                     pipe_available = NamedPipeBridge.IsDesktopAgentAvailable(config.DesktopPipeName),
                     pipe_name = string.IsNullOrWhiteSpace(config.DesktopPipeName) ? NamedPipeBridge.PipeName : config.DesktopPipeName,
                     cpp_native_dll_loaded = CppNativeBridge.IsAvailable(),
+                    interactive_session = Environment.UserInteractive,
+                    session_id = NativeToolExecutor.GetCurrentSessionId(),
+                    secure_desktop = CppNativeBridge.LastMetrics.SecureDesktop != 0,
+                    input_permissions = new
+                    {
+                        allow_desktop_control = CppNativeBridge.InputDesktopAllowed,
+                        allow_clipboard = CppNativeBridge.InputClipboardAllowed,
+                    },
                     cpp_capture_metrics = new
                     {
                         valid = CppNativeBridge.LastMetrics.Valid != 0,
                         from_dxgi = CppNativeBridge.LastMetrics.FromDxgi != 0,
+                        secure_desktop = CppNativeBridge.LastMetrics.SecureDesktop != 0,
                         width = CppNativeBridge.LastMetrics.Width,
                         height = CppNativeBridge.LastMetrics.Height,
                         capture_time_ms = Math.Round(CppNativeBridge.LastMetrics.CaptureTimeMs, 2),
@@ -81,6 +90,11 @@ public sealed class NativeToolExecutor
                     max_tier_unattended = config.Policy.MaxTierUnattended,
                     allowed_apps = config.Policy.AllowedApps,
                     active_window = WindowManagementService.GetActiveWindowInfo(),
+                    note = !Environment.UserInteractive
+                        ? "Non-interactive session (Session 0 / SYSTEM): DXGI desktop capture and SendInput will fail. Run the WPF client or desktop helper in the logged-on user session."
+                        : (CppNativeBridge.LastMetrics.SecureDesktop != 0
+                            ? "Secure desktop active (UAC/login). Capture/input blocked until Default desktop returns."
+                            : null),
                 },
                 "get_native_encode_status" or "probe_cpp_agent" or "cpp_agent_status" => new
                 {
@@ -119,7 +133,8 @@ public sealed class NativeToolExecutor
                 "desktop_verify_action" or "verify_screen_contains" => VerifyUiCondition(args),
                 "start_webrtc_stream" => await SendPipeStreamCommandAsync(config, "START_WEBRTC_SESSION", args, ct),
                 "stop_webrtc_stream" => await SendPipeStreamCommandAsync(config, "STOP_WEBRTC_SESSION", args, ct),
-                "capture_desktop_screenshot" or "take_screenshot" or "capture_desktop_frame" or "desktop_get_screenshot" => CaptureScreenshot(config, args),
+                "capture_desktop_frame" => CaptureDesktopFrame(config, args),
+                "capture_desktop_screenshot" or "take_screenshot" or "desktop_get_screenshot" => CaptureScreenshot(config, args),
                 "set_of_marks_screenshot" => CaptureSetOfMarksScreenshot(config, args),
                 "desktop_get_window_screenshot" => CaptureWindowScreenshot(config, args),
                 "ocr_screen" => await OcrScreenAsync(config, args, ct),
@@ -705,6 +720,45 @@ public sealed class NativeToolExecutor
     private string ResolveScreenshotDir(AgentGuiConfig config) =>
         string.IsNullOrWhiteSpace(config.ScreenshotDirectory) ? _screenshotDir : config.ScreenshotDirectory;
 
+    private object CaptureDesktopFrame(AgentGuiConfig config, JsonElement args)
+    {
+        if (!config.Policy.AllowTier3 || config.Policy.MaxTierUnattended < 3)
+        {
+            throw new UnauthorizedAccessException("Policy denied: Tier 3 sensitive operations are disabled.");
+        }
+        var dir = ResolveScreenshotDir(config);
+        int defaultMon = (config.DeviceAgent?.PinnedMonitorIndex ?? -1) >= 0 ? config.DeviceAgent!.PinnedMonitorIndex : 0;
+        int monitorIdx = args.TryGetProperty("monitor_index", out var mEl) && mEl.TryGetInt32(out var m) ? m : defaultMon;
+        double scale = 0.75;
+        if (args.TryGetProperty("scale", out var sEl) && sEl.TryGetDouble(out var sv)) scale = sv;
+        int quality = 70;
+        if (args.TryGetProperty("quality", out var qEl) && qEl.TryGetInt32(out var qv)) quality = qv;
+
+        var frame = ScreenCaptureService.CaptureLiveFrame(dir, monitorIdx, scale, quality);
+        return new
+        {
+            available = frame.Available,
+            path = frame.FilePath,
+            monitor_index = frame.MonitorIndex,
+            width = frame.Width,
+            height = frame.Height,
+            image_width = frame.Width,
+            image_height = frame.Height,
+            orig_width = frame.OrigWidth,
+            orig_height = frame.OrigHeight,
+            scale = frame.Scale,
+            quality = frame.Quality,
+            mime_type = frame.MimeType,
+            size_bytes = frame.SizeBytes,
+            base64_data = frame.Base64Data,
+            image_base64 = frame.Base64Data,
+            from_dxgi = frame.FromDxgi,
+            secure_desktop = frame.SecureDesktop,
+            timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() / 1000.0,
+            note = frame.Note,
+        };
+    }
+
     private object CaptureScreenshot(AgentGuiConfig config, JsonElement args)
     {
         if (!config.Policy.AllowTier3 || config.Policy.MaxTierUnattended < 3)
@@ -725,9 +779,26 @@ public sealed class NativeToolExecutor
             width = shot.Width,
             height = shot.Height,
             size_bytes = shot.SizeBytes,
+            mime_type = "image/png",
             base64_data = shot.Base64Png,
             image_base64 = shot.Base64Png,
         };
+    }
+
+    [System.Runtime.InteropServices.DllImport("kernel32.dll")]
+    private static extern uint WTSGetActiveConsoleSessionId();
+
+    private static int GetCurrentSessionId()
+    {
+        try
+        {
+            return System.Diagnostics.Process.GetCurrentProcess().SessionId;
+        }
+        catch
+        {
+            try { return unchecked((int)WTSGetActiveConsoleSessionId()); }
+            catch { return -1; }
+        }
     }
 
     private object CaptureWindowScreenshot(AgentGuiConfig config, JsonElement args)

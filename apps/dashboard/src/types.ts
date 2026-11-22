@@ -541,6 +541,28 @@ export interface DeviceDesktopCapabilities {
   reason: string;
 }
 
+export interface WebRtcIceServer {
+  urls: string | string[];
+  username?: string;
+  credential?: string;
+}
+
+export interface WebRtcSessionV1 {
+  id?: string;
+  session_id: string;
+  device_id: string;
+  mode: "view_only" | "human_control" | "ai_assisted" | string;
+  status: string;
+  offer?: { sdp?: string; type?: string } | null;
+  answer?: { sdp?: string; type?: string } | null;
+  agent_candidates?: Array<{ candidate?: string; sdpMid?: string; sdpMLineIndex?: number }>;
+  viewer_candidates?: Array<{ candidate?: string; sdpMid?: string; sdpMLineIndex?: number }>;
+  permissions?: Record<string, unknown>;
+  human_takeover_active?: boolean;
+  error?: string | null;
+  video?: { codec?: string; width?: number; height?: number; fps?: number; bitrate_kbps?: number };
+}
+
 export interface MemorySnippetRecord {
   id: string;
   tenant: string;

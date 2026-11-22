@@ -386,6 +386,7 @@ std::optional<SessionSnapshot> HttpSignalingClient::PollSession(std::string* err
     SessionSnapshot snap;
     snap.status = JsonGetString(resp, "status");
     snap.error = JsonGetString(resp, "error");
+    snap.mode = JsonGetString(resp, "mode");
     // Nested answer.sdp — best-effort parse
     auto answer_pos = resp.find("\"answer\"");
     if (answer_pos != std::string::npos) {
@@ -398,6 +399,31 @@ std::optional<SessionSnapshot> HttpSignalingClient::PollSession(std::string* err
     // PollSession read the answer SDP only. Parse them so the peer
     // connection can apply them (see peer_connection.cpp).
     snap.viewer_candidates = ParseViewerCandidates(resp);
+
+    auto takeover_pos = resp.find("\"human_takeover_active\"");
+    if (takeover_pos != std::string::npos) {
+        auto sub = resp.substr(takeover_pos);
+        snap.human_takeover_active = sub.find("true") != std::string::npos &&
+            (sub.find("true") < sub.find("false") || sub.find("false") == std::string::npos);
+    }
+    auto perms_pos = resp.find("\"permissions\"");
+    if (perms_pos != std::string::npos) {
+        auto sub = resp.substr(perms_pos, 400);
+        snap.permissions_present = true;
+        // Accept both v1 keys (control_mouse) and legacy (control).
+        snap.control_mouse =
+            sub.find("\"control_mouse\":true") != std::string::npos ||
+            sub.find("\"control_mouse\": true") != std::string::npos ||
+            (sub.find("\"control\":true") != std::string::npos && sub.find("control_mouse") == std::string::npos);
+        snap.control_keyboard =
+            sub.find("\"control_keyboard\":true") != std::string::npos ||
+            sub.find("\"control_keyboard\": true") != std::string::npos ||
+            snap.control_mouse;
+        if (snap.mode == "view_only") {
+            snap.control_mouse = false;
+            snap.control_keyboard = false;
+        }
+    }
     return snap;
 }
 
