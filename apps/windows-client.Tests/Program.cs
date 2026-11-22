@@ -811,5 +811,13 @@ await RunTest("AgentTakeoverService: TogglePause, UpdateStep & TriggerClickRippl
     return Task.CompletedTask;
 });
 
+// 30. Windows 11 Mica backdrop config default
+await RunTest("AgentGuiConfig: EnableMicaBackdrop defaults to true", () =>
+{
+    var cfg = new AgentGuiConfig();
+    Assert(cfg.EnableMicaBackdrop, "Expected EnableMicaBackdrop to default to true");
+    return Task.CompletedTask;
+});
+
 Console.WriteLine($"\nSummary: {passed} passed, {failed} failed ({passed + failed} total)");
 return failed > 0 ? 1 : 0;

@@ -153,6 +153,9 @@ public sealed class AgentGuiConfig
     [JsonPropertyName("compact_sidebar")]
     public bool CompactSidebar { get; set; } = false;
 
+    [JsonPropertyName("enable_mica_backdrop")]
+    public bool EnableMicaBackdrop { get; set; } = true;
+
     // Advanced & Pipe IPC settings
     [JsonPropertyName("desktop_pipe_name")]
     public string DesktopPipeName { get; set; } = "AIBridgeDesktopPipe";

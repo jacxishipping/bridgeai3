@@ -256,6 +256,9 @@ public partial class MainWindow : Window
         DwmSetWindowAttribute(hwnd, 20, ref dark, sizeof(int));
         int round = 2;
         DwmSetWindowAttribute(hwnd, 33, ref round, sizeof(int));
+        // DWMWA_SYSTEMBACKDROP_TYPE (38): 2 = DWMSBT_MAINWINDOW (Mica), 1 = DWMSBT_NONE
+        int backdrop = _config.EnableMicaBackdrop ? 2 : 1;
+        DwmSetWindowAttribute(hwnd, 38, ref backdrop, sizeof(int));
     }
 
     private void ApplyRuntimeSettings()
@@ -426,10 +429,29 @@ public partial class MainWindow : Window
 
     private void OnWindowPreviewKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
     {
-        if (e.Key == Key.K && (Keyboard.Modifiers & ModifierKeys.Control) == ModifierKeys.Control)
+        bool ctrl = (Keyboard.Modifiers & ModifierKeys.Control) == ModifierKeys.Control;
+        bool shift = (Keyboard.Modifiers & ModifierKeys.Shift) == ModifierKeys.Shift;
+        if (ctrl && !shift && e.Key == Key.K)
         {
             e.Handled = true;
             OpenCommandPalette();
+        }
+        else if (ctrl && !shift && e.Key == Key.N)
+        {
+            e.Handled = true;
+            SelectTab(6);
+            OnAgNewChatClick(this, new RoutedEventArgs());
+        }
+        else if (ctrl && !shift && e.Key is >= Key.D1 and <= Key.D7)
+        {
+            int tabIdx = (int)(e.Key - Key.D1);
+            e.Handled = true;
+            SelectTab(tabIdx);
+        }
+        else if (e.Key == Key.Escape && ScreenshotLightboxOverlay.Visibility == Visibility.Visible)
+        {
+            e.Handled = true;
+            ScreenshotLightboxOverlay.Visibility = Visibility.Collapsed;
         }
         else if (e.Key == Key.Escape && CommandPaletteOverlay.Visibility == Visibility.Visible)
         {
@@ -757,6 +779,7 @@ public partial class MainWindow : Window
     private void SelectTab(int idx)
     {
         MainTabs.SelectedIndex = idx;
+        MainTabs.BeginAnimation(OpacityProperty, new DoubleAnimation(0.75, 1.0, TimeSpan.FromMilliseconds(140)));
         if (idx >= 0 && idx < TabMeta.Length)
         {
             PageTitleText.Text = TabMeta[idx].Title;
@@ -895,6 +918,7 @@ public partial class MainWindow : Window
         // Appearance
         SelectComboByTag(SetThemeCombo, _config.Theme, 0);
         SetCompactSidebarChk.IsChecked = _config.CompactSidebar;
+        SetMicaBackdropChk.IsChecked = _config.EnableMicaBackdrop;
 
         // Tags
         _deviceTags.Clear();
@@ -2434,6 +2458,7 @@ public partial class MainWindow : Window
             _config.Theme = th;
         }
         _config.CompactSidebar = SetCompactSidebarChk.IsChecked == true;
+        _config.EnableMicaBackdrop = SetMicaBackdropChk.IsChecked == true;
         _config.Tags = _deviceTags.ToList();
 
         // Advanced

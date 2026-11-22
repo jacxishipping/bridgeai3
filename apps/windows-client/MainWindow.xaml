@@ -1309,6 +1309,7 @@
                                                     </ComboBox>
 
                                                     <CheckBox x:Name="SetCompactSidebarChk" Style="{StaticResource ToggleSwitchStyle}" Content="Start with compact icon-only navigation sidebar"/>
+                                                    <CheckBox x:Name="SetMicaBackdropChk" Style="{StaticResource ToggleSwitchStyle}" Content="Enable Windows 11 native Mica backdrop (DWM)" Margin="0,4,0,0"/>
                                                 </StackPanel>
                                             </Border>
 
