@@ -120,12 +120,11 @@ public static class NamedPipeBridge
             {
                 var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
                 var cfgDir = Path.Combine(home, ".ai-bridge");
-                // Prefer plaintext companion config when present: C++ DPAPI unseal of
-                // sealed runtime JSON can fail even when C# CurrentUser unseal works,
-                // which previously made ai_bridge_desktop exit before posting an offer.
+                // Prefer sealed runtime JSON (DPAPI + \\uXXXX extract fixed);
+                // fall back to plaintext companion when sealed is missing.
                 var plainCfg = Path.Combine(cfgDir, "cpp_service_runtime.plain.json");
                 var sealedCfg = Path.Combine(cfgDir, "cpp_service_runtime.json");
-                var cfgPath = File.Exists(plainCfg) ? plainCfg : (File.Exists(sealedCfg) ? sealedCfg : null);
+                var cfgPath = File.Exists(sealedCfg) ? sealedCfg : (File.Exists(plainCfg) ? plainCfg : null);
                 var args = BuildCppWebRtcArguments(controlUrl, deviceToken, sessionId, monitorIndex, fps, bitrateKbps, cfgPath);
                 var psi = new ProcessStartInfo
                 {
@@ -135,13 +134,43 @@ public static class NamedPipeBridge
                     CreateNoWindow = true,
                     WindowStyle = ProcessWindowStyle.Hidden,
                     WorkingDirectory = Path.GetDirectoryName(desktopExe) ?? AppContext.BaseDirectory,
+                    RedirectStandardError = true,
+                    RedirectStandardOutput = true,
                 };
                 _managedWebRtcProcess = Process.Start(psi);
                 if (_managedWebRtcProcess is null)
                 {
                     return (false, "Failed to launch ai_bridge_desktop.exe.");
                 }
-                return (true, $"Started C++20 H.264 WebRTC agent (PID {_managedWebRtcProcess.Id}, {Math.Clamp(fps, 1, 60)} FPS @ {Math.Clamp(bitrateKbps, 250, 50_000)} kbps).");
+                var pid = _managedWebRtcProcess.Id;
+                // Drain a short window of stderr so early fatals (no backend,
+                // DPAPI, missing session) surface instead of a false "started".
+                var errBuf = new StringBuilder();
+                var outBuf = new StringBuilder();
+                _managedWebRtcProcess.ErrorDataReceived += (_, e) =>
+                {
+                    if (!string.IsNullOrEmpty(e.Data)) errBuf.AppendLine(e.Data);
+                };
+                _managedWebRtcProcess.OutputDataReceived += (_, e) =>
+                {
+                    if (!string.IsNullOrEmpty(e.Data)) outBuf.AppendLine(e.Data);
+                };
+                _managedWebRtcProcess.BeginErrorReadLine();
+                _managedWebRtcProcess.BeginOutputReadLine();
+                var exitedEarly = _managedWebRtcProcess.WaitForExit(1500);
+                if (exitedEarly || _managedWebRtcProcess.HasExited)
+                {
+                    var code = _managedWebRtcProcess.HasExited ? _managedWebRtcProcess.ExitCode : -1;
+                    var detail = (errBuf.ToString() + outBuf.ToString()).Trim();
+                    if (string.IsNullOrWhiteSpace(detail))
+                    {
+                        detail = $"ai_bridge_desktop.exe exited immediately (code {code}).";
+                    }
+                    try { _managedWebRtcProcess.Dispose(); } catch { }
+                    _managedWebRtcProcess = null;
+                    return (false, detail.Length > 500 ? detail[..500] : detail);
+                }
+                return (true, $"Started C++20 H.264 WebRTC agent (PID {pid}, {Math.Clamp(fps, 1, 60)} FPS @ {Math.Clamp(bitrateKbps, 250, 50_000)} kbps).");
             }
             catch (Exception ex)
             {

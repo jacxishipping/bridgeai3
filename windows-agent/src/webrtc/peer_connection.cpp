@@ -81,17 +81,49 @@ public:
     bool RunUntilStopped(std::atomic<bool>* stop_flag, std::string* error_out) override {
         HttpSignalingClient signaling(cfg_.control_url, cfg_.device_token, cfg_.session_id);
         rtc::Configuration rtc_cfg;
-        rtc_cfg.iceServers.emplace_back("stun:stun.l.google.com:19302");
-        // F13-05: TURN when configured (PeerConnectionConfig.turn_*,
-        // from the desktop agent's config file or AI_BRIDGE_TURN_*
-        // env). Without TURN the peer cannot connect behind symmetric
-        // NAT; with it, libdatachannel relays through the TURN server
-        // using these credentials.
-        if (!cfg_.turn_url.empty()) {
-            rtc_cfg.iceServers.emplace_back(cfg_.turn_url);
-            rtc::IceServer& turn = rtc_cfg.iceServers.back();
-            turn.username = cfg_.turn_username;
-            turn.password = cfg_.turn_credential;
+        // Prefer fresh ephemeral ICE from the plane so TURN credentials
+        // are not stale Settings leftovers. Fall back to config/env TURN,
+        // then STUN-only.
+        {
+            std::vector<IceServerConfig> plane_ice;
+            std::string ice_err;
+            if (signaling.FetchIceServers(&plane_ice, &ice_err) && !plane_ice.empty()) {
+                for (const auto& entry : plane_ice) {
+                    for (const auto& url : entry.urls) {
+                        if (url.empty()) continue;
+                        // Strip ?transport= query — libdatachannel IceServer
+                        // takes the base turn:/stun: URI.
+                        std::string clean = url;
+                        auto q = clean.find('?');
+                        if (q != std::string::npos) clean = clean.substr(0, q);
+                        rtc_cfg.iceServers.emplace_back(clean);
+                        if (!entry.username.empty() || !entry.credential.empty()) {
+                            rtc::IceServer& ice = rtc_cfg.iceServers.back();
+                            ice.username = entry.username;
+                            ice.password = entry.credential;
+                        }
+                    }
+                }
+                std::cout << "{\"event\":\"ice_servers_loaded\",\"source\":\"control_plane\",\"count\":"
+                          << rtc_cfg.iceServers.size() << "}\n";
+            } else {
+                rtc_cfg.iceServers.emplace_back("stun:stun.l.google.com:19302");
+                // F13-05: TURN when configured (PeerConnectionConfig.turn_*,
+                // from the desktop agent's config file or AI_BRIDGE_TURN_*
+                // env). Without TURN the peer cannot connect behind symmetric
+                // NAT; with it, libdatachannel relays through the TURN server
+                // using these credentials.
+                if (!cfg_.turn_url.empty()) {
+                    rtc_cfg.iceServers.emplace_back(cfg_.turn_url);
+                    rtc::IceServer& turn = rtc_cfg.iceServers.back();
+                    turn.username = cfg_.turn_username;
+                    turn.password = cfg_.turn_credential;
+                }
+                if (!ice_err.empty()) {
+                    std::cerr << "[AI Bridge] WARNING: plane ICE fetch failed (" << ice_err
+                              << "); using local TURN/STUN config.\n";
+                }
+            }
         }
 
         // F08-10: monitor geometry for input, enumerated ONCE per
@@ -330,10 +362,14 @@ public:
         // version names these differently, the build will fail here —
         // do not silently drop the gate to make it compile.
         if (pc->gatheringState() != rtc::PeerConnection::GatheringState::Complete) {
-            if (gathering_future.wait_for(std::chrono::seconds(5)) != std::future_status::ready) {
-                if (error_out) *error_out = "ice_gathering_incomplete";
-                signaling.PostError("ice_gathering_incomplete");
-                return false;
+            // Plane TURN (ephemeral) often needs >5s to finish gathering.
+            // Prefer Complete, but fall through to trickle ICE: local SDP +
+            // onLocalCandidate posts already cover restrictive networks.
+            if (gathering_future.wait_for(std::chrono::seconds(15)) != std::future_status::ready) {
+                std::cerr << "[AI Bridge] WARNING: ICE gathering not complete after 15s; "
+                          << "posting trickle offer with current local SDP.\n";
+                std::cout << "{\"event\":\"ice_gathering_trickle\",\"sdp_bytes\":"
+                          << local_sdp.size() << "}\n";
             }
         }
         // F08-16: do not offer a session the pipeline cannot serve.

@@ -449,5 +449,102 @@ std::optional<SessionSnapshot> HttpSignalingClient::PollSession(std::string* err
     return snap;
 }
 
+namespace {
+
+std::vector<std::string> ParseUrlsField(const std::string& entry) {
+    std::vector<std::string> urls;
+    auto urls_pos = entry.find("\"urls\"");
+    if (urls_pos == std::string::npos) return urls;
+    auto after = entry.find(':', urls_pos + 6);
+    if (after == std::string::npos) return urls;
+    ++after;
+    while (after < entry.size() && (entry[after] == ' ' || entry[after] == '\t' || entry[after] == '\n' || entry[after] == '\r')) {
+        ++after;
+    }
+    if (after >= entry.size()) return urls;
+    if (entry[after] == '"') {
+        std::string one = JsonGetString(entry, "urls");
+        if (!one.empty()) urls.push_back(one);
+        return urls;
+    }
+    if (entry[after] != '[') return urls;
+    ++after;
+    while (after < entry.size() && entry[after] != ']') {
+        while (after < entry.size() && (entry[after] == ' ' || entry[after] == '\t' || entry[after] == '\n' || entry[after] == '\r' || entry[after] == ',')) {
+            ++after;
+        }
+        if (after >= entry.size() || entry[after] == ']') break;
+        if (entry[after] != '"') break;
+        ++after;
+        std::string u;
+        while (after < entry.size()) {
+            char c = entry[after++];
+            if (c == '"') break;
+            if (c == '\\' && after < entry.size()) {
+                u.push_back(entry[after++]);
+                continue;
+            }
+            u.push_back(c);
+        }
+        if (!u.empty()) urls.push_back(u);
+    }
+    return urls;
+}
+
+std::vector<IceServerConfig> ParseIceServersPayload(const std::string& body) {
+    std::vector<IceServerConfig> out;
+    auto arr_pos = body.find("\"ice_servers\"");
+    if (arr_pos == std::string::npos) return out;
+    auto bracket = body.find('[', arr_pos);
+    if (bracket == std::string::npos) return out;
+    size_t pos = bracket + 1;
+    while (pos < body.size()) {
+        while (pos < body.size() && (body[pos] == ' ' || body[pos] == '\t' || body[pos] == '\n' || body[pos] == '\r' || body[pos] == ',')) {
+            ++pos;
+        }
+        if (pos >= body.size() || body[pos] == ']') break;
+        if (body[pos] != '{') break;
+        int depth = 0;
+        size_t start = pos;
+        for (; pos < body.size(); ++pos) {
+            if (body[pos] == '{') ++depth;
+            else if (body[pos] == '}') {
+                --depth;
+                if (depth == 0) {
+                    ++pos;
+                    break;
+                }
+            }
+        }
+        std::string entry = body.substr(start, pos - start);
+        IceServerConfig cfg;
+        cfg.urls = ParseUrlsField(entry);
+        cfg.username = JsonGetString(entry, "username");
+        cfg.credential = JsonGetString(entry, "credential");
+        if (!cfg.urls.empty()) out.push_back(std::move(cfg));
+    }
+    return out;
+}
+
+} // namespace
+
+bool HttpSignalingClient::FetchIceServers(std::vector<IceServerConfig>* out, std::string* error_out) {
+    if (!out) {
+        if (error_out) *error_out = "null ice_servers out";
+        return false;
+    }
+    out->clear();
+    std::string resp;
+    if (!RequestJson("GET", "/api/agent/webrtc/ice-servers", "", &resp, error_out)) {
+        return false;
+    }
+    *out = ParseIceServersPayload(resp);
+    if (out->empty()) {
+        if (error_out) *error_out = "ice_servers empty or unparseable";
+        return false;
+    }
+    return true;
+}
+
 } // namespace webrtc
 } // namespace aibridge

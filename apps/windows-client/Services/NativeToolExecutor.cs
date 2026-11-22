@@ -1369,10 +1369,41 @@ public sealed class NativeToolExecutor
             int monIdx = args.TryGetProperty("monitor_index", out var mEl) && mEl.TryGetInt32(out var mv) ? mv : 0;
             int fps = args.TryGetProperty("fps", out var fEl) && fEl.TryGetInt32(out var fv) ? fv : (config.CppAgent?.H264TargetFps ?? 30);
             int kbps = args.TryGetProperty("bitrate_kbps", out var bEl) && bEl.TryGetInt32(out var bv) ? bv : (config.CppAgent?.H264BitrateKbps ?? 4500);
-            var token = new ConfigService().LoadToken();
+            var cfgService = new ConfigService();
+            var token = cfgService.LoadToken();
+            // Refresh ephemeral TURN into config/runtime before launch so the
+            // desktop agent has credentials even if plane ICE fetch is slow.
+            try
+            {
+                // SendPipeStreamCommandAsync is static; spin a short-lived client for ICE only.
+                var iceMonitor = new SystemMonitorService();
+                using var iceClient = new ControlPlaneClient(
+                    iceMonitor,
+                    new NativeToolExecutor(iceMonitor, Path.GetTempPath()));
+                var (iceOk, ice, _) = await iceClient.FetchIceServersAsync(config.ControlUrl, token, ct: ct);
+                if (iceOk && ControlPlaneClient.TryExtractTurnSettings(ice, out var turnUrl, out var turnUser, out var turnCred))
+                {
+                    config.CppAgent ??= new CppAgentSettings();
+                    config.CppAgent.TurnUrl = turnUrl;
+                    config.CppAgent.TurnUsername = turnUser;
+                    config.CppAgent.TurnCredential = turnCred;
+                    cfgService.SaveConfig(config);
+                    NamedPipeBridge.EnsureCppSupervisorRunning(
+                        config.DesktopPipeName,
+                        NamedPipeBridge.ActiveHmacSecret,
+                        config.ControlUrl,
+                        token,
+                        config.CppAgent);
+                }
+            }
+            catch
+            {
+                // Non-fatal: C++ peer still fetches ICE itself at session start.
+            }
             var (webOk, webDetail) = NamedPipeBridge.StartCppWebRtcSession(config.ControlUrl, token, sessId, monIdx, fps, kbps);
             var (pipeOk, pipeReply) = await NamedPipeBridge.SendCommandAsync(msgType, args, ct: ct);
-            return new { status = (webOk || pipeOk) ? "ok" : "error", webrtc_started = webOk, webrtc_detail = webDetail, pipe_response = pipeReply };
+            // Desktop process must stay up; pipe WEBRTC_STARTED alone is not enough.
+            return new { status = webOk ? "ok" : "error", webrtc_started = webOk, webrtc_detail = webDetail, pipe_ok = pipeOk, pipe_response = pipeReply };
         }
         if (string.Equals(msgType, "STOP_WEBRTC_SESSION", StringComparison.OrdinalIgnoreCase))
         {

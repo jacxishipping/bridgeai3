@@ -30,6 +30,12 @@ struct SessionSnapshot {
     bool permissions_present = false;
 };
 
+struct IceServerConfig {
+    std::vector<std::string> urls;
+    std::string username;
+    std::string credential;
+};
+
 // WinHTTP client for /api/agent/webrtc/* (same contract as Python HttpSignaling).
 //
 // F13-05: ONE persistent WinHTTP session + connection, reused for every
@@ -50,6 +56,8 @@ public:
     bool PostCandidate(const IceCandidateJson& candidate, std::string* error_out = nullptr);
     bool PostError(const std::string& message);
     std::optional<SessionSnapshot> PollSession(std::string* error_out = nullptr);
+    // Device-authenticated ephemeral STUN/TURN list from the control plane.
+    bool FetchIceServers(std::vector<IceServerConfig>* out, std::string* error_out = nullptr);
     void Close();
 
 private:
