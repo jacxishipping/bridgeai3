@@ -301,6 +301,12 @@ public sealed class DeviceAgentSettings
     [JsonPropertyName("enable_vision_in_loop")]
     public bool EnableVisionInLoop { get; set; } = true;
 
+    [JsonPropertyName("pinned_window_title")]
+    public string PinnedWindowTitle { get; set; } = "";
+
+    [JsonPropertyName("pinned_monitor_index")]
+    public int PinnedMonitorIndex { get; set; } = -1;
+
     [JsonPropertyName("functions")]
     public AgentFunctionPermissions Functions { get; set; } = new();
 }

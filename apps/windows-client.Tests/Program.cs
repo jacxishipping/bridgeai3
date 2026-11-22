@@ -872,5 +872,21 @@ await RunTest("AgentMemoryService: persists facts, builds prompt block, and forg
     return Task.CompletedTask;
 });
 
+// 34. Window / Monitor Pinning (Scoped Focus Mode)
+await RunTest("NativeToolExecutor: PinnedWindowTitle blocks desktop input when target window is not open", async () =>
+{
+    var exec = new NativeToolExecutor(new SystemMonitorService(), Path.GetTempPath());
+    var cfg = new AgentGuiConfig
+    {
+        Workspace = Path.GetTempPath(),
+        Policy = new AgentPolicyConfig { AllowTier3 = true, MaxTierUnattended = 3, AllowDesktopControl = true },
+        DeviceAgent = new DeviceAgentSettings { PinnedWindowTitle = "NonExistentPinnedWindow_XYZ_999", PinnedMonitorIndex = 0 },
+    };
+    var (ok, res) = await exec.ExecuteAsync("mouse_click", "{\"x\":50,\"y\":50}", cfg, CancellationToken.None);
+    Assert(!ok && res.Contains("Scoped Focus Mode"), $"Expected Scoped Focus Mode block, got: {res}");
+    var prompt = DeviceAgentRuntimeService.BuildEffectiveSystemPrompt(cfg);
+    Assert(prompt.Contains("SCOPED WINDOW PIN ACTIVE") && prompt.Contains("SCOPED MONITOR PIN ACTIVE"), "Expected pinning notices in system prompt");
+});
+
 Console.WriteLine($"\nSummary: {passed} passed, {failed} failed ({passed + failed} total)");
 return failed > 0 ? 1 : 0;

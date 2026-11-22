@@ -3011,6 +3011,8 @@ public partial class MainWindow : Window
             AgSetSystemPromptBox.Text = a.SystemPrompt;
             AgSetTempBox.Text = a.Temperature.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
             AgSetMaxStepsBox.Text = a.MaxToolSteps.ToString();
+            AgSetPinnedWindowBox.Text = a.PinnedWindowTitle ?? "";
+            AgSetPinnedMonitorBox.Text = a.PinnedMonitorIndex.ToString();
             AgSetModelBox.Text = a.Model;
             AgSetBaseUrlBox.Text = a.BaseUrl;
             AgSetApiKeyBox.Password = _agentApiKey;
@@ -3064,7 +3066,9 @@ public partial class MainWindow : Window
         a.Temperature = double.TryParse(AgSetTempBox.Text.Trim(), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var tv)
             ? Math.Clamp(tv, 0.0, 2.0)
             : 0.2;
-        a.MaxToolSteps = int.TryParse(AgSetMaxStepsBox.Text.Trim(), out var ms) ? Math.Clamp(ms, 1, 20) : 8;
+        a.MaxToolSteps = int.TryParse(AgSetMaxStepsBox.Text.Trim(), out var ms) ? Math.Clamp(ms, 1, 30) : 16;
+        a.PinnedWindowTitle = AgSetPinnedWindowBox.Text.Trim();
+        a.PinnedMonitorIndex = int.TryParse(AgSetPinnedMonitorBox.Text.Trim(), out var pm) ? Math.Clamp(pm, -1, 15) : -1;
         a.ConnectionMode = (AgSetConnModeCombo.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "direct_or_local";
         a.Provider = (AgSetProviderCombo.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "openai";
         a.BaseUrl = AgSetBaseUrlBox.Text.Trim();

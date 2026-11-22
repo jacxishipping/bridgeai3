@@ -1607,14 +1607,24 @@
                                                                     </UniformGrid>
                                                                     <TextBlock Text="System Prompt" FontSize="10.5" Foreground="{DynamicResource TextMuted}" Margin="0,2,0,3"/>
                                                                     <TextBox x:Name="AgSetSystemPromptBox" Style="{StaticResource FieldStyle}" Height="92" AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" Margin="0,0,0,6"/>
-                                                                    <UniformGrid Columns="2">
+                                                                    <UniformGrid Columns="2" Margin="0,0,0,6">
                                                                         <StackPanel Margin="0,0,4,0">
                                                                             <TextBlock Text="Temperature (0.0 - 2.0)" FontSize="10.5" Foreground="{DynamicResource TextMuted}" Margin="0,0,0,3"/>
                                                                             <TextBox x:Name="AgSetTempBox" Style="{StaticResource FieldStyle}" FontFamily="Consolas" Text="0.2"/>
                                                                         </StackPanel>
                                                                         <StackPanel Margin="4,0,0,0">
-                                                                            <TextBlock Text="Max Tool Steps (1 - 20)" FontSize="10.5" Foreground="{DynamicResource TextMuted}" Margin="0,0,0,3"/>
-                                                                            <TextBox x:Name="AgSetMaxStepsBox" Style="{StaticResource FieldStyle}" FontFamily="Consolas" Text="8"/>
+                                                                            <TextBlock Text="Max Tool Steps (1 - 30)" FontSize="10.5" Foreground="{DynamicResource TextMuted}" Margin="0,0,0,3"/>
+                                                                            <TextBox x:Name="AgSetMaxStepsBox" Style="{StaticResource FieldStyle}" FontFamily="Consolas" Text="16"/>
+                                                                        </StackPanel>
+                                                                    </UniformGrid>
+                                                                    <UniformGrid Columns="2">
+                                                                        <StackPanel Margin="0,0,4,0">
+                                                                            <TextBlock Text="Pin to Window (optional)" FontSize="10.5" Foreground="{DynamicResource TextMuted}" Margin="0,0,0,3"/>
+                                                                            <TextBox x:Name="AgSetPinnedWindowBox" Style="{StaticResource FieldStyle}" ToolTip="Restrict desktop input strictly to a window title (e.g. Paint)"/>
+                                                                        </StackPanel>
+                                                                        <StackPanel Margin="4,0,0,0">
+                                                                            <TextBlock Text="Pin Monitor (-1 = All)" FontSize="10.5" Foreground="{DynamicResource TextMuted}" Margin="0,0,0,3"/>
+                                                                            <TextBox x:Name="AgSetPinnedMonitorBox" Style="{StaticResource FieldStyle}" FontFamily="Consolas" Text="-1"/>
                                                                         </StackPanel>
                                                                     </UniformGrid>
                                                                 </StackPanel>

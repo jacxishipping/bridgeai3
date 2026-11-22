@@ -713,7 +713,8 @@ public sealed class NativeToolExecutor
         }
         var dir = ResolveScreenshotDir(config);
         bool fullDesktop = args.TryGetProperty("full_desktop", out var fdEl) && fdEl.ValueKind == JsonValueKind.True;
-        int monitorIdx = args.TryGetProperty("monitor_index", out var mEl) && mEl.TryGetInt32(out var m) ? m : 0;
+        int defaultMon = (config.DeviceAgent?.PinnedMonitorIndex ?? -1) >= 0 ? config.DeviceAgent!.PinnedMonitorIndex : 0;
+        int monitorIdx = args.TryGetProperty("monitor_index", out var mEl) && mEl.TryGetInt32(out var m) ? m : defaultMon;
         var shot = fullDesktop
             ? ScreenCaptureService.CaptureVirtualDesktop(dir)
             : ScreenCaptureService.CapturePrimaryScreen(dir, monitorIdx);
@@ -756,7 +757,8 @@ public sealed class NativeToolExecutor
         {
             throw new UnauthorizedAccessException("Policy denied: Tier 3 sensitive operations are disabled.");
         }
-        int monitorIdx = args.TryGetProperty("monitor_index", out var mEl) && mEl.TryGetInt32(out var m) ? m : 0;
+        int defaultMon = (config.DeviceAgent?.PinnedMonitorIndex ?? -1) >= 0 ? config.DeviceAgent!.PinnedMonitorIndex : 0;
+        int monitorIdx = args.TryGetProperty("monitor_index", out var mEl) && mEl.TryGetInt32(out var m) ? m : defaultMon;
         string? query = args.TryGetProperty("query", out var qEl) ? qEl.GetString() : null;
         var res = await OcrService.RecognizeScreenAsync(ResolveScreenshotDir(config), monitorIdx, query, ct);
         return new
@@ -778,7 +780,8 @@ public sealed class NativeToolExecutor
         {
             throw new ArgumentException("Target 'text' is required for click_text_ocr.");
         }
-        int monitorIdx = args.TryGetProperty("monitor_index", out var mEl) && mEl.TryGetInt32(out var m) ? m : 0;
+        int defaultMon = (config.DeviceAgent?.PinnedMonitorIndex ?? -1) >= 0 ? config.DeviceAgent!.PinnedMonitorIndex : 0;
+        int monitorIdx = args.TryGetProperty("monitor_index", out var mEl) && mEl.TryGetInt32(out var m) ? m : defaultMon;
         string button = args.TryGetProperty("button", out var bEl) ? bEl.GetString() ?? "left" : "left";
         bool dbl = args.TryGetProperty("double_click", out var dEl) && dEl.ValueKind == JsonValueKind.True;
 
@@ -965,6 +968,25 @@ public sealed class NativeToolExecutor
         if (AgentTakeoverService.IsUserInControl)
         {
             throw new UnauthorizedAccessException("Human takeover is active: click 'Return Control to Agent' to resume agent desktop input.");
+        }
+        var pinnedTitle = config.DeviceAgent?.PinnedWindowTitle?.Trim();
+        if (!string.IsNullOrWhiteSpace(pinnedTitle))
+        {
+            var active = WindowManagementService.GetActiveWindowInfo();
+            bool matches = active is not null &&
+                           ((active.Title?.Contains(pinnedTitle, StringComparison.OrdinalIgnoreCase) ?? false) ||
+                            (active.ProcessName?.Contains(pinnedTitle, StringComparison.OrdinalIgnoreCase) ?? false));
+            if (!matches)
+            {
+                try
+                {
+                    WindowManagementService.FocusWindow(pinnedTitle, null);
+                }
+                catch
+                {
+                    throw new UnauthorizedAccessException($"Scoped Focus Mode: Agent input is pinned to window '{pinnedTitle}', which is not currently open.");
+                }
+            }
         }
         AgentTakeoverService.NotifyAgentActivity();
     }

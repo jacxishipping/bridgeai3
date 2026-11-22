@@ -215,6 +215,14 @@ public sealed class DeviceAgentRuntimeService : IDisposable
         }
         sb.AppendLine($"Target Device: {config.DeviceId} (Windows host: {Environment.MachineName}, user: {Environment.UserName})");
         sb.AppendLine($"Policy State: Interactive UI={(config.Policy.AllowDesktopControl ? "ON" : "OFF")}, Full PC Access={(config.Policy.AllowFullPcAccess ? "ALLOWED" : "OFF")}.");
+        if (!string.IsNullOrWhiteSpace(agent.PinnedWindowTitle))
+        {
+            sb.AppendLine($"SCOPED WINDOW PIN ACTIVE: You are restricted to interacting ONLY with window '{agent.PinnedWindowTitle}'.");
+        }
+        if (agent.PinnedMonitorIndex >= 0)
+        {
+            sb.AppendLine($"SCOPED MONITOR PIN ACTIVE: Target display index {agent.PinnedMonitorIndex} for captures and coordinates.");
+        }
         sb.AppendLine();
         sb.AppendLine("OPERATING RULES (CRITICAL):");
         sb.AppendLine("- You are an AUTONOMOUS WINDOWS DESKTOP OPERATOR with real, live tools on this PC — NEVER act like a passive text chatbot.");
