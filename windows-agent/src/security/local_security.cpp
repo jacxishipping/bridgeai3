@@ -128,6 +128,79 @@ bool DpapiSecretStore::UnsealIfSealed(const std::string& value, std::string& out
     return UnprotectSecret(encrypted, out_plaintext);
 }
 
+namespace {
+
+int HexNibble(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+bool DecodeJsonStringContent(const std::string& json, size_t& pos, std::string& out) {
+    // pos is at the first character inside the opening quote.
+    while (pos < json.size()) {
+        char c = json[pos++];
+        if (c == '"') return true;
+        if (c != '\\' || pos >= json.size()) {
+            out.push_back(c);
+            continue;
+        }
+        char e = json[pos++];
+        switch (e) {
+            case '"': out.push_back('"'); break;
+            case '\\': out.push_back('\\'); break;
+            case '/': out.push_back('/'); break;
+            case 'b': out.push_back('\b'); break;
+            case 'f': out.push_back('\f'); break;
+            case 'n': out.push_back('\n'); break;
+            case 'r': out.push_back('\r'); break;
+            case 't': out.push_back('\t'); break;
+            case 'u': {
+                if (pos + 4 > json.size()) return false;
+                int cp = 0;
+                for (int i = 0; i < 4; ++i) {
+                    int n = HexNibble(json[pos++]);
+                    if (n < 0) return false;
+                    cp = (cp << 4) | n;
+                }
+                // BMP only (enough for \\u002B '+' inside DPAPI base64).
+                if (cp <= 0x7F) {
+                    out.push_back(static_cast<char>(cp));
+                } else if (cp <= 0x7FF) {
+                    out.push_back(static_cast<char>(0xC0 | ((cp >> 6) & 0x1F)));
+                    out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+                } else {
+                    out.push_back(static_cast<char>(0xE0 | ((cp >> 12) & 0x0F)));
+                    out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
+                    out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+                }
+                break;
+            }
+            default:
+                out.push_back(e);
+                break;
+        }
+    }
+    return false;
+}
+
+} // namespace
+
+std::string ExtractJsonStringField(const std::string& json, const std::string& key) {
+    std::string needle = "\"" + key + "\"";
+    size_t pos = json.find(needle);
+    if (pos == std::string::npos) return {};
+    pos = json.find(':', pos + needle.size());
+    if (pos == std::string::npos) return {};
+    pos = json.find('"', pos + 1);
+    if (pos == std::string::npos) return {};
+    ++pos;
+    std::string out;
+    if (!DecodeJsonStringContent(json, pos, out)) return {};
+    return out;
+}
+
 bool DpapiSecretStore::ProtectSecret(const std::string& plaintext, std::vector<uint8_t>& out_encrypted, bool machine_scope) {
     DATA_BLOB in_blob{};
     in_blob.pbData = reinterpret_cast<BYTE*>(const_cast<char*>(plaintext.data()));

@@ -80,9 +80,31 @@ std::string JsonGetString(const std::string& json, const std::string& key) {
                     case '"': out.push_back('"'); break;
                     case '\\': out.push_back('\\'); break;
                     case '/': out.push_back('/'); break;
-                    case 'u':
-                        if (after + 4 <= json.size()) after += 4;
+                    case 'u': {
+                        if (after + 4 > json.size()) return out;
+                        int cp = 0;
+                        bool ok = true;
+                        for (int i = 0; i < 4; ++i) {
+                            char h = json[after++];
+                            int n = -1;
+                            if (h >= '0' && h <= '9') n = h - '0';
+                            else if (h >= 'a' && h <= 'f') n = h - 'a' + 10;
+                            else if (h >= 'A' && h <= 'F') n = h - 'A' + 10;
+                            if (n < 0) { ok = false; break; }
+                            cp = (cp << 4) | n;
+                        }
+                        if (!ok) return out;
+                        if (cp <= 0x7F) out.push_back(static_cast<char>(cp));
+                        else if (cp <= 0x7FF) {
+                            out.push_back(static_cast<char>(0xC0 | ((cp >> 6) & 0x1F)));
+                            out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+                        } else {
+                            out.push_back(static_cast<char>(0xE0 | ((cp >> 12) & 0x0F)));
+                            out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
+                            out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+                        }
                         break;
+                    }
                     default: out.push_back(e); break;
                 }
             } else {

@@ -106,31 +106,8 @@ int ExtractJsonIntField(const std::string& json, const std::string& key, int fal
 }
 
 std::string ExtractJsonStringField(const std::string& json, const std::string& key) {
-    // F08-15: hand-rolled JSON extraction — see the full justification
-    // in windows-agent/src/webrtc/http_signaling.cpp (no JSON library
-    // is vendored in this tree; this extracts a fixed set of string
-    // fields from the service's own config file and must not grow into
-    // a general parser).
-    std::string needle = "\"" + key + "\"";
-    size_t pos = json.find(needle);
-    if (pos == std::string::npos) return {};
-    pos = json.find(':', pos + needle.size());
-    if (pos == std::string::npos) return {};
-    pos = json.find('"', pos + 1);
-    if (pos == std::string::npos) return {};
-    ++pos;
-    std::string out;
-    while (pos < json.size()) {
-        char c = json[pos++];
-        if (c == '\\' && pos < json.size()) {
-            char next = json[pos++];
-            out.push_back(next);
-            continue;
-        }
-        if (c == '"') break;
-        out.push_back(c);
-    }
-    return out;
+    // Shared implementation decodes \\uXXXX (needed for DPAPI base64 '+').
+    return aibridge::security::ExtractJsonStringField(json, key);
 }
 
 std::wstring ToWide(const std::string& s) {

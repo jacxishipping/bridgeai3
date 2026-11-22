@@ -425,6 +425,23 @@ def create_webrtc_router(ctx: ControlContext) -> APIRouter:
                 pass
         return {"ok": True, "status": "ended"}
 
+    @router.get("/api/agent/webrtc/ice-servers")
+    def agent_get_webrtc_ice_servers(
+        x_device_token: str | None = Header(default=None),
+        x_client_cert_fingerprint: str | None = Header(default=None),
+        x_ssl_client_fingerprint: str | None = Header(default=None),
+    ):
+        """Device-authenticated ICE/TURN list for the Windows C++ agent settings UI.
+
+        Literal path must stay ahead of ``/api/agent/webrtc/{session_id}`` so
+        Starlette does not treat ``ice-servers`` as a session id.
+        """
+        row = device_row(x_device_token)
+        _require_agent_mtls(None, row["id"], x_client_cert_fingerprint, x_ssl_client_fingerprint)
+        from ai_bridge import webrtc_stream
+
+        return {"ice_servers": webrtc_stream.get_configured_ice_servers()}
+
     @router.get("/api/agent/webrtc/{session_id}")
     def agent_get_webrtc_session(
         session_id: str, x_device_token: str | None = Header(default=None), x_client_cert_fingerprint: str | None = Header(default=None), x_ssl_client_fingerprint: str | None = Header(default=None)

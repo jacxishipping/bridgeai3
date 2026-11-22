@@ -5,6 +5,7 @@ using System.IO.Pipes;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -118,7 +119,13 @@ public static class NamedPipeBridge
             try
             {
                 var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-                var cfgPath = Path.Combine(home, ".ai-bridge", "cpp_service_runtime.json");
+                var cfgDir = Path.Combine(home, ".ai-bridge");
+                // Prefer plaintext companion config when present: C++ DPAPI unseal of
+                // sealed runtime JSON can fail even when C# CurrentUser unseal works,
+                // which previously made ai_bridge_desktop exit before posting an offer.
+                var plainCfg = Path.Combine(cfgDir, "cpp_service_runtime.plain.json");
+                var sealedCfg = Path.Combine(cfgDir, "cpp_service_runtime.json");
+                var cfgPath = File.Exists(plainCfg) ? plainCfg : (File.Exists(sealedCfg) ? sealedCfg : null);
                 var args = BuildCppWebRtcArguments(controlUrl, deviceToken, sessionId, monitorIndex, fps, bitrateKbps, cfgPath);
                 var psi = new ProcessStartInfo
                 {
@@ -700,9 +707,17 @@ public static class NamedPipeBridge
         // Seal secrets for on-disk config (idempotent if already aib-dpapi-v1:).
         var sealedSecret = SealIfNeeded(secret);
         var sealedToken = string.IsNullOrWhiteSpace(deviceToken) ? "" : SealIfNeeded(deviceToken);
+        var pipeName = $@"\\.\pipe\{targetPipe}";
+        // UnsafeRelaxedJsonEscaping keeps '+' '/' in DPAPI base64 as literals.
+        // The default encoder emits \\u002B which older C++ extractors corrupted.
+        var jsonOpts = new JsonSerializerOptions
+        {
+            WriteIndented = true,
+            Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+        };
         var cfgJson = JsonSerializer.Serialize(new
         {
-            pipe_name = $@"\\.\pipe\{targetPipe}",
+            pipe_name = pipeName,
             pipe_secret = sealedSecret,
             control_url = controlUrl ?? "",
             device_token = sealedToken,
@@ -718,8 +733,45 @@ public static class NamedPipeBridge
             adaptive_bitrate = adaptive,
             allow_desktop_control = allowDesktopControl,
             allow_clipboard = allowClipboard,
-        }, new JsonSerializerOptions { WriteIndented = true });
-        File.WriteAllText(cfgPath, cfgJson, Encoding.UTF8);
+        }, jsonOpts);
+        File.WriteAllText(cfgPath, cfgJson, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+
+        // Companion plaintext config for operators / fallback launches.
+        // ACL is left to the user profile directory permissions.
+        var plainPath = Path.Combine(
+            Path.GetDirectoryName(cfgPath) ?? "",
+            "cpp_service_runtime.plain.json");
+        if (!string.IsNullOrEmpty(plainPath))
+        {
+            var plainSecret = secret.StartsWith(DpapiTokenStore.DpapiMagic, StringComparison.Ordinal)
+                ? DpapiTokenStore.UnsealToken(secret)
+                : secret;
+            var plainToken = string.IsNullOrWhiteSpace(deviceToken)
+                ? ""
+                : (deviceToken.StartsWith(DpapiTokenStore.DpapiMagic, StringComparison.Ordinal)
+                    ? DpapiTokenStore.UnsealToken(deviceToken)
+                    : deviceToken);
+            var plainJson = JsonSerializer.Serialize(new
+            {
+                pipe_name = pipeName,
+                pipe_secret = plainSecret,
+                control_url = controlUrl ?? "",
+                device_token = plainToken,
+                desktop_agent_path = desktopExe,
+                turn_url = turnUrl,
+                turn_username = turnUser,
+                turn_credential = turnCred,
+                target_fps = fps,
+                bitrate_kbps = kbps,
+                keyframe_interval_sec = keyframe,
+                prefer_dxgi = preferDxgi,
+                prefer_hardware_h264 = preferHw,
+                adaptive_bitrate = adaptive,
+                allow_desktop_control = allowDesktopControl,
+                allow_clipboard = allowClipboard,
+            }, jsonOpts);
+            File.WriteAllText(plainPath, plainJson, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+        }
     }
 
     private static string ReadRuntimeString(string cfgPath, string key)

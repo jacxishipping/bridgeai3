@@ -904,12 +904,29 @@ public partial class MainWindow : Window
         SetCppFpsBox.Text = Math.Clamp(_config.CppAgent.H264TargetFps, 1, 60).ToString();
         SetCppBitrateBox.Text = Math.Clamp(_config.CppAgent.H264BitrateKbps, 250, 50_000).ToString();
         SetCppKeyframeBox.Text = Math.Clamp(_config.CppAgent.H264KeyframeIntervalSec, 1, 15).ToString();
+        // Seed TURN URL from the control-plane host when unset so the C++ Engine
+        // tab is never blank for a configured plane (credentials still come from ICE).
+        if (string.IsNullOrWhiteSpace(_config.CppAgent.TurnUrl))
+        {
+            var derived = ControlPlaneClient.DeriveTurnUrlFromControlPlane(_config.ControlUrl);
+            if (!string.IsNullOrWhiteSpace(derived))
+            {
+                _config.CppAgent.TurnUrl = derived;
+            }
+        }
         SetCppTurnUrlBox.Text = _config.CppAgent.TurnUrl ?? "";
         SetCppTurnUserBox.Text = _config.CppAgent.TurnUsername ?? "";
         SetCppTurnCredBox.Password = _config.CppAgent.TurnCredential ?? "";
+        if (SetCppTurnHintText is not null)
+        {
+            SetCppTurnHintText.Text = string.IsNullOrWhiteSpace(_config.CppAgent.TurnUsername)
+                ? "Username/credential empty — click Pull TURN from Control Plane."
+                : "TURN settings loaded (ephemeral credentials expire; re-pull as needed).";
+        }
         SetCppCursorHaloChk.IsChecked = _config.CppAgent.ShowAgentCursorHalo;
         SelectComboByTag(SetCppInputSpeedCombo, _config.CppAgent.InputSpeedProfile, 1);
         RefreshCppEngineStatusUi();
+        _ = HydrateTurnSettingsIfNeededAsync(force: false);
 
         // Logging
         SelectComboByTag(SetLogLevelCombo, _config.LogLevel, 1);
@@ -2396,6 +2413,10 @@ public partial class MainWindow : Window
         SetSectionSecurity.Visibility = tag is "ALL" or "SECURITY" ? Visibility.Visible : Visibility.Collapsed;
         SetSectionAppearance.Visibility = tag is "ALL" or "APPEARANCE" ? Visibility.Visible : Visibility.Collapsed;
         SetSectionAdvanced.Visibility = tag is "ALL" or "ADVANCED" ? Visibility.Visible : Visibility.Collapsed;
+        if (tag is "ALL" or "CPP_AGENT")
+        {
+            _ = HydrateTurnSettingsIfNeededAsync(force: false);
+        }
     }
 
     private async void OnSaveSettingsClick(object sender, RoutedEventArgs e)
@@ -4070,6 +4091,92 @@ public partial class MainWindow : Window
         };
         SetCppStatusBadge.Foreground = (System.Windows.Media.Brush)FindResource((dllUp && pipeUp) ? "SuccessText" : (dllUp || pipeUp ? "WarningText" : "ErrorText"));
         RefreshVisionCppMetricsUi();
+    }
+
+    private async void OnCppPullTurnClick(object sender, RoutedEventArgs e)
+    {
+        await HydrateTurnSettingsIfNeededAsync(force: true);
+    }
+
+    private async Task HydrateTurnSettingsIfNeededAsync(bool force)
+    {
+        _config.CppAgent ??= new CppAgentSettings();
+        if (!force &&
+            !string.IsNullOrWhiteSpace(_config.CppAgent.TurnUrl) &&
+            !string.IsNullOrWhiteSpace(_config.CppAgent.TurnUsername) &&
+            !string.IsNullOrWhiteSpace(_config.CppAgent.TurnCredential))
+        {
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(_config.ControlUrl))
+        {
+            if (SetCppTurnHintText is not null)
+            {
+                SetCppTurnHintText.Text = "Set a Control Plane URL first.";
+            }
+            return;
+        }
+
+        if (SetCppTurnHintText is not null)
+        {
+            SetCppTurnHintText.Text = "Pulling TURN from control plane…";
+        }
+
+        var (ok, ice, detail) = await _client.FetchIceServersAsync(
+            _config.ControlUrl,
+            string.IsNullOrWhiteSpace(_deviceToken) ? null : _deviceToken,
+            string.IsNullOrWhiteSpace(_operatorToken) ? null : _operatorToken,
+            _operatorIsAdminToken);
+
+        if (!ok || !ControlPlaneClient.TryExtractTurnSettings(ice, out var turnUrl, out var user, out var cred))
+        {
+            // Still seed the URL from the plane host so the fields aren't blank.
+            if (string.IsNullOrWhiteSpace(_config.CppAgent.TurnUrl))
+            {
+                var derived = ControlPlaneClient.DeriveTurnUrlFromControlPlane(_config.ControlUrl);
+                if (!string.IsNullOrWhiteSpace(derived))
+                {
+                    _config.CppAgent.TurnUrl = derived;
+                    if (SetCppTurnUrlBox is not null) SetCppTurnUrlBox.Text = derived;
+                }
+            }
+            if (SetCppTurnHintText is not null)
+            {
+                SetCppTurnHintText.Text = string.IsNullOrWhiteSpace(detail)
+                    ? "Could not pull TURN credentials."
+                    : detail;
+            }
+            if (force)
+            {
+                ShowToast("TURN pull failed — check operator login or plane deploy.");
+            }
+            return;
+        }
+
+        _config.CppAgent.TurnUrl = turnUrl;
+        _config.CppAgent.TurnUsername = user;
+        _config.CppAgent.TurnCredential = cred;
+        _configService.SaveConfig(_config);
+        if (SetCppTurnUrlBox is not null) SetCppTurnUrlBox.Text = turnUrl;
+        if (SetCppTurnUserBox is not null) SetCppTurnUserBox.Text = user;
+        if (SetCppTurnCredBox is not null) SetCppTurnCredBox.Password = cred;
+        if (SetCppTurnHintText is not null)
+        {
+            SetCppTurnHintText.Text = detail;
+        }
+
+        // Push into C++ runtime config so the next WebRTC launch uses TURN.
+        ApplyRuntimeSettings();
+        if (force)
+        {
+            ShowToast($"TURN loaded: {turnUrl}");
+            if (SetCppConsoleBox is not null)
+            {
+                SetCppConsoleBox.Text =
+                    $"[TURN FROM CONTROL PLANE]\nurl={turnUrl}\nusername={user}\ncredential=(set, {cred.Length} chars)\n{detail}";
+            }
+        }
     }
 
     private void OnCppApplyBitrateClick(object sender, RoutedEventArgs e)

@@ -1,6 +1,7 @@
 #include "peer_connection.hpp"
 #include "../capture/dxgi_capture.hpp"
 #include "../input/sendinput_controller.hpp"
+#include "../security/local_security.hpp"
 
 #include <atomic>
 #include <chrono>
@@ -48,25 +49,7 @@ namespace {
 // extract a fixed set of fields from the plane's own well-formed
 // messages and must not grow into a general parser).
 std::string ExtractJsonStr(const std::string& json, const std::string& key) {
-    std::string needle = "\"" + key + "\"";
-    size_t pos = json.find(needle);
-    if (pos == std::string::npos) return {};
-    pos = json.find(':', pos + needle.size());
-    if (pos == std::string::npos) return {};
-    pos = json.find('"', pos + 1);
-    if (pos == std::string::npos) return {};
-    ++pos;
-    std::string out;
-    while (pos < json.size()) {
-        char c = json[pos++];
-        if (c == '\\' && pos < json.size()) {
-            out.push_back(json[pos++]);
-            continue;
-        }
-        if (c == '"') break;
-        out.push_back(c);
-    }
-    return out;
+    return aibridge::security::ExtractJsonStringField(json, key);
 }
 
 double ExtractJsonNum(const std::string& json, const std::string& key, double fallback = 0.0) {

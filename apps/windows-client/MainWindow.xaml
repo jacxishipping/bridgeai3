@@ -1198,20 +1198,25 @@
                                                         </StackPanel>
                                                     </UniformGrid>
 
-                                                    <UniformGrid Columns="3" Margin="-6,0,-6,14">
+                                                    <UniformGrid Columns="3" Margin="-6,0,-6,8">
                                                         <StackPanel Margin="6,0">
-                                                            <TextBlock Text="C++ WebRTC TURN Server URL (optional)" FontSize="12" Foreground="{DynamicResource TextMuted}" Margin="0,0,0,6"/>
-                                                            <TextBox x:Name="SetCppTurnUrlBox" Style="{StaticResource FieldStyle}" FontFamily="Consolas" ToolTip="Example: turn:turn.example.com:3478"/>
+                                                            <TextBlock Text="C++ WebRTC TURN Server URL" FontSize="12" Foreground="{DynamicResource TextMuted}" Margin="0,0,0,6"/>
+                                                            <TextBox x:Name="SetCppTurnUrlBox" Style="{StaticResource FieldStyle}" FontFamily="Consolas" ToolTip="Example: turn:clideos.us:3478 — pulled from the control plane ICE list when empty"/>
                                                         </StackPanel>
                                                         <StackPanel Margin="6,0">
                                                             <TextBlock Text="TURN Username" FontSize="12" Foreground="{DynamicResource TextMuted}" Margin="0,0,0,6"/>
-                                                            <TextBox x:Name="SetCppTurnUserBox" Style="{StaticResource FieldStyle}" FontFamily="Consolas"/>
+                                                            <TextBox x:Name="SetCppTurnUserBox" Style="{StaticResource FieldStyle}" FontFamily="Consolas" ToolTip="Ephemeral TURN username from the control plane"/>
                                                         </StackPanel>
                                                         <StackPanel Margin="6,0">
-                                                            <TextBlock Text="TURN Credential / Secret" FontSize="12" Foreground="{DynamicResource TextMuted}" Margin="0,0,0,6"/>
-                                                            <PasswordBox x:Name="SetCppTurnCredBox" Style="{StaticResource PasswordFieldStyle}" FontFamily="Consolas"/>
+                                                            <TextBlock Text="TURN Credential" FontSize="12" Foreground="{DynamicResource TextMuted}" Margin="0,0,0,6"/>
+                                                            <PasswordBox x:Name="SetCppTurnCredBox" Style="{StaticResource PasswordFieldStyle}" FontFamily="Consolas" ToolTip="Ephemeral TURN credential from the control plane"/>
                                                         </StackPanel>
                                                     </UniformGrid>
+                                                    <WrapPanel Margin="0,0,0,14">
+                                                        <Button Content="Pull TURN from Control Plane" Style="{StaticResource BtnStyle}" Padding="10,6" FontSize="11.5" Click="OnCppPullTurnClick" Margin="0,0,6,0"
+                                                                ToolTip="Fetches ephemeral ICE/TURN from /api/agent/webrtc/ice-servers (or operator ice-servers)"/>
+                                                        <TextBlock x:Name="SetCppTurnHintText" Text="" FontSize="11.5" Foreground="{DynamicResource TextMuted}" VerticalAlignment="Center" TextWrapping="Wrap"/>
+                                                    </WrapPanel>
 
                                                     <WrapPanel Margin="0,0,0,10">
                                                         <Button Content="Apply H.264 Bitrate Live" Style="{StaticResource PrimaryBtnStyle}" Padding="10,6" FontSize="11.5" Click="OnCppApplyBitrateClick" Margin="0,2,6,2"/>
