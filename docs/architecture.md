@@ -1,5 +1,7 @@
 # AI Bridge Architecture (v1.0 & v2.0)
 
+**Updated:** 23 November 2026 · Status: [implementation-status.md](./implementation-status.md) · [PRODUCTION_READINESS.md](../analysis/PRODUCTION_READINESS.md)
+
 ```
 Browser Dashboard (React / TypeScript / WebRTC)
         │
@@ -60,3 +62,8 @@ Separate **video transport**, **input transport**, **AI execution**, and **devic
 - `src/ai_bridge/server.py` — MCP server (stdio + Streamable HTTP).
 - `src/ai_bridge/control/` — FastAPI control plane (`/api/*` and `/api/v1/*` routes).
 - `apps/dashboard/` — React/TypeScript enterprise dashboard with live WebRTC `<video>` viewer, DataChannel input, and real-time telemetry HUD.
+- `apps/windows-client/` — .NET 9 WPF operator/agent client (DPAPI, takeover, live desktop).
+- `agents/{linux,windows,macos}/` — outbound polling agents (macOS = Preview).
+- `integrations/chatgpt/actions/` — ChatGPT Custom GPT Actions OpenAPI pack.
+
+Platform support claims: [support-matrix.md](./support-matrix.md).

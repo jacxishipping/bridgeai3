@@ -1,3 +1,5 @@
+> **HISTORICAL analysis.** Current production assessment: [PRODUCTION_READINESS.md](./PRODUCTION_READINESS.md).
+
 # 19 — Feature Recommendations
 
 > **Method.** Each opportunity from Part 12 of the brief is evaluated against the **real** architecture found by the audits (reports 01–16, DEPLOYMENT, DISTRIBUTED), not the docs. **Value** = user/business value if it works. **Effort** = S/M/L relative to this codebase. **Risk** = what breaks if done badly. **Verdict** is one of: **Build** (architecture supports it now), **Build after prerequisite** (named), **Defer** (real value but the foundation is not there), **Reject** (architecture cannot support it yet, or it conflicts with the product's security model). No feature is recommended that would widen the attack surface before the P0/P1 bypasses in report 17 are closed — that ordering is stated explicitly per item.

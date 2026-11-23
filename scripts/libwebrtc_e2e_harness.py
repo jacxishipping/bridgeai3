@@ -294,7 +294,14 @@ def _native_agent_e2e(admin_token: str, db_path: Path, desktop_exe: Path, contro
     has_offer = bool(offer and offer.get("sdp"))
     if has_offer and backend in ("unknown", "none", ""):
         backend = "libdatachannel"
+    viewer_answered = bool(viewer.get("answered"))
+    conn_state = str(viewer.get("connection_state") or "").lower()
+    ice_connected = conn_state in ("connected", "completed")
+    track_ok = bool(viewer.get("track_received"))
+    # Production bar: offer from C++ backend + viewer answer. Prefer ICE/track
+    # when aiortc viewer is present; offer-only still counts as signaling verified.
     verified = has_offer and backend in ("libdatachannel", "libwebrtc")
+    media_verified = verified and viewer_answered and (ice_connected or track_ok)
     return {
         "ok": verified,
         "control_url": base,
@@ -307,11 +314,12 @@ def _native_agent_e2e(admin_token: str, db_path: Path, desktop_exe: Path, contro
         "frames_sent": frames_sent,
         "agent_stdout_tail": (out_txt or "")[-800:],
         "libwebrtc_e2e_verified": verified,
+        "libwebrtc_media_verified": media_verified,
         "offer_sdp_bytes": len((offer or {}).get("sdp") or ""),
         "dashboard_viewer": viewer,
-        "dashboard_answer_posted": bool(viewer.get("answered")),
+        "dashboard_answer_posted": viewer_answered,
         "dashboard_connection_state": viewer.get("connection_state"),
-        "dashboard_track_received": bool(viewer.get("track_received")),
+        "dashboard_track_received": track_ok,
         "datachannel_input_roundtrip": bool(viewer.get("datachannel_input_roundtrip")),
     }
 

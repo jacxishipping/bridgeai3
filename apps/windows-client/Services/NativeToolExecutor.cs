@@ -64,10 +64,19 @@ public sealed class NativeToolExecutor
                     pipe_available = NamedPipeBridge.IsDesktopAgentAvailable(config.DesktopPipeName),
                     pipe_name = string.IsNullOrWhiteSpace(config.DesktopPipeName) ? NamedPipeBridge.PipeName : config.DesktopPipeName,
                     cpp_native_dll_loaded = CppNativeBridge.IsAvailable(),
+                    interactive_session = Environment.UserInteractive,
+                    session_id = NativeToolExecutor.GetCurrentSessionId(),
+                    secure_desktop = CppNativeBridge.LastMetrics.SecureDesktop != 0,
+                    input_permissions = new
+                    {
+                        allow_desktop_control = CppNativeBridge.InputDesktopAllowed,
+                        allow_clipboard = CppNativeBridge.InputClipboardAllowed,
+                    },
                     cpp_capture_metrics = new
                     {
                         valid = CppNativeBridge.LastMetrics.Valid != 0,
                         from_dxgi = CppNativeBridge.LastMetrics.FromDxgi != 0,
+                        secure_desktop = CppNativeBridge.LastMetrics.SecureDesktop != 0,
                         width = CppNativeBridge.LastMetrics.Width,
                         height = CppNativeBridge.LastMetrics.Height,
                         capture_time_ms = Math.Round(CppNativeBridge.LastMetrics.CaptureTimeMs, 2),
@@ -81,6 +90,11 @@ public sealed class NativeToolExecutor
                     max_tier_unattended = config.Policy.MaxTierUnattended,
                     allowed_apps = config.Policy.AllowedApps,
                     active_window = WindowManagementService.GetActiveWindowInfo(),
+                    note = !Environment.UserInteractive
+                        ? "Non-interactive session (Session 0 / SYSTEM): DXGI desktop capture and SendInput will fail. Run the WPF client or desktop helper in the logged-on user session."
+                        : (CppNativeBridge.LastMetrics.SecureDesktop != 0
+                            ? "Secure desktop active (UAC/login). Capture/input blocked until Default desktop returns."
+                            : null),
                 },
                 "get_native_encode_status" or "probe_cpp_agent" or "cpp_agent_status" => new
                 {
@@ -119,7 +133,8 @@ public sealed class NativeToolExecutor
                 "desktop_verify_action" or "verify_screen_contains" => VerifyUiCondition(args),
                 "start_webrtc_stream" => await SendPipeStreamCommandAsync(config, "START_WEBRTC_SESSION", args, ct),
                 "stop_webrtc_stream" => await SendPipeStreamCommandAsync(config, "STOP_WEBRTC_SESSION", args, ct),
-                "capture_desktop_screenshot" or "take_screenshot" or "capture_desktop_frame" or "desktop_get_screenshot" => CaptureScreenshot(config, args),
+                "capture_desktop_frame" => CaptureDesktopFrame(config, args),
+                "capture_desktop_screenshot" or "take_screenshot" or "desktop_get_screenshot" => CaptureScreenshot(config, args),
                 "set_of_marks_screenshot" => CaptureSetOfMarksScreenshot(config, args),
                 "desktop_get_window_screenshot" => CaptureWindowScreenshot(config, args),
                 "ocr_screen" => await OcrScreenAsync(config, args, ct),
@@ -705,6 +720,45 @@ public sealed class NativeToolExecutor
     private string ResolveScreenshotDir(AgentGuiConfig config) =>
         string.IsNullOrWhiteSpace(config.ScreenshotDirectory) ? _screenshotDir : config.ScreenshotDirectory;
 
+    private object CaptureDesktopFrame(AgentGuiConfig config, JsonElement args)
+    {
+        if (!config.Policy.AllowTier3 || config.Policy.MaxTierUnattended < 3)
+        {
+            throw new UnauthorizedAccessException("Policy denied: Tier 3 sensitive operations are disabled.");
+        }
+        var dir = ResolveScreenshotDir(config);
+        int defaultMon = (config.DeviceAgent?.PinnedMonitorIndex ?? -1) >= 0 ? config.DeviceAgent!.PinnedMonitorIndex : 0;
+        int monitorIdx = args.TryGetProperty("monitor_index", out var mEl) && mEl.TryGetInt32(out var m) ? m : defaultMon;
+        double scale = 0.75;
+        if (args.TryGetProperty("scale", out var sEl) && sEl.TryGetDouble(out var sv)) scale = sv;
+        int quality = 70;
+        if (args.TryGetProperty("quality", out var qEl) && qEl.TryGetInt32(out var qv)) quality = qv;
+
+        var frame = ScreenCaptureService.CaptureLiveFrame(dir, monitorIdx, scale, quality);
+        return new
+        {
+            available = frame.Available,
+            path = frame.FilePath,
+            monitor_index = frame.MonitorIndex,
+            width = frame.Width,
+            height = frame.Height,
+            image_width = frame.Width,
+            image_height = frame.Height,
+            orig_width = frame.OrigWidth,
+            orig_height = frame.OrigHeight,
+            scale = frame.Scale,
+            quality = frame.Quality,
+            mime_type = frame.MimeType,
+            size_bytes = frame.SizeBytes,
+            base64_data = frame.Base64Data,
+            image_base64 = frame.Base64Data,
+            from_dxgi = frame.FromDxgi,
+            secure_desktop = frame.SecureDesktop,
+            timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() / 1000.0,
+            note = frame.Note,
+        };
+    }
+
     private object CaptureScreenshot(AgentGuiConfig config, JsonElement args)
     {
         if (!config.Policy.AllowTier3 || config.Policy.MaxTierUnattended < 3)
@@ -725,9 +779,26 @@ public sealed class NativeToolExecutor
             width = shot.Width,
             height = shot.Height,
             size_bytes = shot.SizeBytes,
+            mime_type = "image/png",
             base64_data = shot.Base64Png,
             image_base64 = shot.Base64Png,
         };
+    }
+
+    [System.Runtime.InteropServices.DllImport("kernel32.dll")]
+    private static extern uint WTSGetActiveConsoleSessionId();
+
+    private static int GetCurrentSessionId()
+    {
+        try
+        {
+            return System.Diagnostics.Process.GetCurrentProcess().SessionId;
+        }
+        catch
+        {
+            try { return unchecked((int)WTSGetActiveConsoleSessionId()); }
+            catch { return -1; }
+        }
     }
 
     private object CaptureWindowScreenshot(AgentGuiConfig config, JsonElement args)
@@ -1298,10 +1369,41 @@ public sealed class NativeToolExecutor
             int monIdx = args.TryGetProperty("monitor_index", out var mEl) && mEl.TryGetInt32(out var mv) ? mv : 0;
             int fps = args.TryGetProperty("fps", out var fEl) && fEl.TryGetInt32(out var fv) ? fv : (config.CppAgent?.H264TargetFps ?? 30);
             int kbps = args.TryGetProperty("bitrate_kbps", out var bEl) && bEl.TryGetInt32(out var bv) ? bv : (config.CppAgent?.H264BitrateKbps ?? 4500);
-            var token = new ConfigService().LoadToken();
+            var cfgService = new ConfigService();
+            var token = cfgService.LoadToken();
+            // Refresh ephemeral TURN into config/runtime before launch so the
+            // desktop agent has credentials even if plane ICE fetch is slow.
+            try
+            {
+                // SendPipeStreamCommandAsync is static; spin a short-lived client for ICE only.
+                var iceMonitor = new SystemMonitorService();
+                using var iceClient = new ControlPlaneClient(
+                    iceMonitor,
+                    new NativeToolExecutor(iceMonitor, Path.GetTempPath()));
+                var (iceOk, ice, _) = await iceClient.FetchIceServersAsync(config.ControlUrl, token, ct: ct);
+                if (iceOk && ControlPlaneClient.TryExtractTurnSettings(ice, out var turnUrl, out var turnUser, out var turnCred))
+                {
+                    config.CppAgent ??= new CppAgentSettings();
+                    config.CppAgent.TurnUrl = turnUrl;
+                    config.CppAgent.TurnUsername = turnUser;
+                    config.CppAgent.TurnCredential = turnCred;
+                    cfgService.SaveConfig(config);
+                    NamedPipeBridge.EnsureCppSupervisorRunning(
+                        config.DesktopPipeName,
+                        NamedPipeBridge.ActiveHmacSecret,
+                        config.ControlUrl,
+                        token,
+                        config.CppAgent);
+                }
+            }
+            catch
+            {
+                // Non-fatal: C++ peer still fetches ICE itself at session start.
+            }
             var (webOk, webDetail) = NamedPipeBridge.StartCppWebRtcSession(config.ControlUrl, token, sessId, monIdx, fps, kbps);
             var (pipeOk, pipeReply) = await NamedPipeBridge.SendCommandAsync(msgType, args, ct: ct);
-            return new { status = (webOk || pipeOk) ? "ok" : "error", webrtc_started = webOk, webrtc_detail = webDetail, pipe_response = pipeReply };
+            // Desktop process must stay up; pipe WEBRTC_STARTED alone is not enough.
+            return new { status = webOk ? "ok" : "error", webrtc_started = webOk, webrtc_detail = webDetail, pipe_ok = pipeOk, pipe_response = pipeReply };
         }
         if (string.Equals(msgType, "STOP_WEBRTC_SESSION", StringComparison.OrdinalIgnoreCase))
         {

@@ -1,3 +1,5 @@
+> **HISTORICAL analysis.** Current production assessment: [PRODUCTION_READINESS.md](./PRODUCTION_READINESS.md).
+
 # 10 — AI Integrations Analysis
 
 **Scope:** `integrations/` (all 7 subdirectories), the client SDK they depend

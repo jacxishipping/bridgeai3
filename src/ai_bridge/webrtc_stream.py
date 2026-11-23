@@ -279,7 +279,12 @@ def set_agent_context(control_url: str, device_token: str) -> None:
     _AGENT_CONTEXT["device_token"] = device_token
 
 
-def _set_dll_input_permissions(dll: Any, allow_mouse: bool, allow_keyboard: bool) -> None:
+def _set_dll_input_permissions(
+    dll: Any,
+    allow_mouse: bool,
+    allow_keyboard: bool,
+    allow_clipboard: bool = False,
+) -> None:
     """Push the session's input permissions into the native DLL.
 
     F08-07 (Wave 5A): the DLL input surface is deny-by-default, so
@@ -298,8 +303,8 @@ def _set_dll_input_permissions(dll: Any, allow_mouse: bool, allow_keyboard: bool
         setter(
             1 if allow_mouse else 0,
             1 if allow_keyboard else 0,
-            0,
-            1 if (allow_mouse or allow_keyboard) else 0,
+            1 if allow_clipboard else 0,
+            1 if (allow_mouse or allow_keyboard or allow_clipboard) else 0,
         )
     except Exception:
         pass
@@ -1333,15 +1338,18 @@ class AgentStreamer:
             if action == "clipboard_sync":
                 if not self._session_allows_input(require_clipboard=True):
                     return {"ok": False, "error": "clipboard_sync_denied"}
-                direction = str(data.get("direction") or "set").lower()
+                # Protocol: to_agent | from_agent (shared/protocols/input_protocol.json).
+                # Accept legacy get/set aliases used by older viewers.
+                direction = str(data.get("direction") or "to_agent").lower()
                 from ai_bridge.tools import perform_approved_ui_action
 
-                if direction == "get":
+                if direction in ("from_agent", "get"):
                     res = perform_approved_ui_action("clipboard_get", approval_granted=True)
                     if self.input_channel and getattr(self.input_channel, "readyState", "") == "open":
                         try:
                             self.input_channel.send(json.dumps({
                                 "type": "clipboard_data",
+                                "ok": True,
                                 "text": res.get("text", ""),
                             }))
                         except Exception:
@@ -1396,6 +1404,7 @@ class AgentStreamer:
                 dll,
                 self._session_allows_input(is_mouse=True),
                 self._session_allows_input(is_keyboard=True),
+                self._session_allows_input(require_clipboard=True),
             )
 
             # Mouse actions

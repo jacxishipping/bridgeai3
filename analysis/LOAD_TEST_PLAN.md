@@ -1,3 +1,5 @@
+> **HISTORICAL analysis.** Current production assessment: [PRODUCTION_READINESS.md](./PRODUCTION_READINESS.md).
+
 # Load-Test Phase Plan — AI Bridge Staging on Render
 
 **Date:** 17 Nov 2026

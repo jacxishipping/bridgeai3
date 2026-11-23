@@ -54,6 +54,42 @@ def test_webrtc_clipboard_requires_explicit_permission():
     assert streamer._session_allows_input(require_clipboard=True) is True
 
 
+def test_webrtc_clipboard_sync_accepts_protocol_directions(monkeypatch):
+    """input_protocol.json uses to_agent/from_agent; get/set remain aliases."""
+    signaling = DictSignaling(
+        {
+            "mode": "human_control",
+            "permissions": {
+                "control_mouse": True,
+                "control_keyboard": True,
+                "clipboard_sync": True,
+            },
+        }
+    )
+    streamer = AgentStreamer("sess-clip", signaling)
+    calls: list[tuple[str, dict]] = []
+
+    def _fake_ui(action, **kwargs):
+        calls.append((action, kwargs))
+        if action == "clipboard_get":
+            return {"ok": True, "text": "from-agent"}
+        return {"ok": True}
+
+    monkeypatch.setattr("ai_bridge.tools.perform_approved_ui_action", _fake_ui)
+
+    got = streamer._handle_input_payload(
+        '{"type":"clipboard_sync","direction":"from_agent"}'
+    )
+    assert got.get("ok") is True and got.get("action") == "clipboard_get"
+    assert calls and calls[0][0] == "clipboard_get"
+
+    set_res = streamer._handle_input_payload(
+        '{"type":"clipboard_sync","direction":"to_agent","text":"hello"}'
+    )
+    assert set_res.get("ok") is True and set_res.get("action") == "clipboard_set"
+    assert any(a == "clipboard_set" for a, _ in calls)
+
+
 def test_desktop_session_state_shape():
     state = screen_capture.get_desktop_session_state()
     for key in (

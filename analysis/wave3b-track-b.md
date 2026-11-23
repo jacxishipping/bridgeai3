@@ -1,3 +1,5 @@
+> **HISTORICAL analysis.** Current production assessment: [PRODUCTION_READINESS.md](./PRODUCTION_READINESS.md).
+
 # Wave 3B Track B — tools split, one registry, one limiter
 
 Status: DONE. No commits made. `src/ai_bridge/tools.py` was removed with

@@ -1,14 +1,18 @@
 #include "peer_connection.hpp"
 #include "../capture/dxgi_capture.hpp"
 #include "../input/sendinput_controller.hpp"
+#include "../security/local_security.hpp"
 
 #include <atomic>
 #include <chrono>
+#include <cstdio>
 #include <cstring>
+#include <fstream>
 #include <future>
 #include <iostream>
 #include <memory>
 #include <mutex>
+#include <random>
 #include <string>
 #include <thread>
 
@@ -45,25 +49,7 @@ namespace {
 // extract a fixed set of fields from the plane's own well-formed
 // messages and must not grow into a general parser).
 std::string ExtractJsonStr(const std::string& json, const std::string& key) {
-    std::string needle = "\"" + key + "\"";
-    size_t pos = json.find(needle);
-    if (pos == std::string::npos) return {};
-    pos = json.find(':', pos + needle.size());
-    if (pos == std::string::npos) return {};
-    pos = json.find('"', pos + 1);
-    if (pos == std::string::npos) return {};
-    ++pos;
-    std::string out;
-    while (pos < json.size()) {
-        char c = json[pos++];
-        if (c == '\\' && pos < json.size()) {
-            out.push_back(json[pos++]);
-            continue;
-        }
-        if (c == '"') break;
-        out.push_back(c);
-    }
-    return out;
+    return aibridge::security::ExtractJsonStringField(json, key);
 }
 
 double ExtractJsonNum(const std::string& json, const std::string& key, double fallback = 0.0) {
@@ -95,17 +81,49 @@ public:
     bool RunUntilStopped(std::atomic<bool>* stop_flag, std::string* error_out) override {
         HttpSignalingClient signaling(cfg_.control_url, cfg_.device_token, cfg_.session_id);
         rtc::Configuration rtc_cfg;
-        rtc_cfg.iceServers.emplace_back("stun:stun.l.google.com:19302");
-        // F13-05: TURN when configured (PeerConnectionConfig.turn_*,
-        // from the desktop agent's config file or AI_BRIDGE_TURN_*
-        // env). Without TURN the peer cannot connect behind symmetric
-        // NAT; with it, libdatachannel relays through the TURN server
-        // using these credentials.
-        if (!cfg_.turn_url.empty()) {
-            rtc_cfg.iceServers.emplace_back(cfg_.turn_url);
-            rtc::IceServer& turn = rtc_cfg.iceServers.back();
-            turn.username = cfg_.turn_username;
-            turn.password = cfg_.turn_credential;
+        // Prefer fresh ephemeral ICE from the plane so TURN credentials
+        // are not stale Settings leftovers. Fall back to config/env TURN,
+        // then STUN-only.
+        {
+            std::vector<IceServerConfig> plane_ice;
+            std::string ice_err;
+            if (signaling.FetchIceServers(&plane_ice, &ice_err) && !plane_ice.empty()) {
+                for (const auto& entry : plane_ice) {
+                    for (const auto& url : entry.urls) {
+                        if (url.empty()) continue;
+                        // Strip ?transport= query — libdatachannel IceServer
+                        // takes the base turn:/stun: URI.
+                        std::string clean = url;
+                        auto q = clean.find('?');
+                        if (q != std::string::npos) clean = clean.substr(0, q);
+                        rtc_cfg.iceServers.emplace_back(clean);
+                        if (!entry.username.empty() || !entry.credential.empty()) {
+                            rtc::IceServer& ice = rtc_cfg.iceServers.back();
+                            ice.username = entry.username;
+                            ice.password = entry.credential;
+                        }
+                    }
+                }
+                std::cout << "{\"event\":\"ice_servers_loaded\",\"source\":\"control_plane\",\"count\":"
+                          << rtc_cfg.iceServers.size() << "}\n";
+            } else {
+                rtc_cfg.iceServers.emplace_back("stun:stun.l.google.com:19302");
+                // F13-05: TURN when configured (PeerConnectionConfig.turn_*,
+                // from the desktop agent's config file or AI_BRIDGE_TURN_*
+                // env). Without TURN the peer cannot connect behind symmetric
+                // NAT; with it, libdatachannel relays through the TURN server
+                // using these credentials.
+                if (!cfg_.turn_url.empty()) {
+                    rtc_cfg.iceServers.emplace_back(cfg_.turn_url);
+                    rtc::IceServer& turn = rtc_cfg.iceServers.back();
+                    turn.username = cfg_.turn_username;
+                    turn.password = cfg_.turn_credential;
+                }
+                if (!ice_err.empty()) {
+                    std::cerr << "[AI Bridge] WARNING: plane ICE fetch failed (" << ice_err
+                              << "); using local TURN/STUN config.\n";
+                }
+            }
         }
 
         // F08-10: monitor geometry for input, enumerated ONCE per
@@ -132,7 +150,16 @@ public:
         }
 
         aibridge::input::WindowsInputController input_ctrl;
-        input_ctrl.SetPermissions(aibridge::input::SessionInputPermissions{true, true, false, true});
+        // Deny-by-default; grant from PeerConnectionConfig + plane poll + session_permissions.json.
+        auto apply_input_permissions = [&](bool mouse, bool keyboard, bool clipboard) {
+            aibridge::input::SessionInputPermissions perms{};
+            perms.allow_mouse = mouse;
+            perms.allow_keyboard = keyboard;
+            perms.allow_clipboard = clipboard;
+            perms.session_active = mouse || keyboard || clipboard;
+            input_ctrl.SetPermissions(perms);
+        };
+        apply_input_permissions(cfg_.allow_mouse, cfg_.allow_keyboard, cfg_.allow_clipboard);
 
         auto pc = std::make_shared<rtc::PeerConnection>(rtc_cfg);
         pc->onStateChange([this, &input_ctrl](rtc::PeerConnection::State state) {
@@ -173,6 +200,16 @@ public:
         auto video = rtc::Description::Video("video", rtc::Description::Direction::SendOnly);
         video.addH264Codec(96);
         auto track = pc->addTrack(std::move(video));
+
+        // Annex-B NALs from Media Foundation must be RTP-packetized for browsers.
+        // Raw track->send(annexb) is not interoperable with Chromium/aiortc.
+        std::mt19937 rng{std::random_device{}()};
+        uint32_t ssrc = 1 + (rng() % 0x7ffffffe);
+        auto rtpConfig = std::make_shared<rtc::RtpPacketizationConfig>(
+            ssrc, "video", /*payloadType=*/96, rtc::H264RtpPacketizer::defaultClockRate);
+        auto packetizer = std::make_shared<rtc::H264RtpPacketizer>(
+            rtc::H264RtpPacketizer::Separator::LongStartSequence, rtpConfig);
+        track->setMediaHandler(packetizer);
 
         // Same contract as Python webrtc_stream: agent-offerred "input" datachannel.
         auto input_dc = pc->createDataChannel("input");
@@ -230,6 +267,62 @@ public:
                         input_ctrl.TypeUnicodeText(wtext);
                     }
                 }
+            } else if (mtype == "clipboard_sync") {
+                // shared/protocols/input_protocol.json: direction to_agent | from_agent
+                // Also accept Python webrtc_stream aliases get/set.
+                std::string direction = ExtractJsonStr(text, "direction");
+                if (direction.empty()) direction = "to_agent";
+                auto utf8_from_wide = [](const std::wstring& w) -> std::string {
+                    if (w.empty()) return {};
+                    int n = WideCharToMultiByte(CP_UTF8, 0, w.data(), static_cast<int>(w.size()), nullptr, 0, nullptr, nullptr);
+                    if (n <= 0) return {};
+                    std::string out(n, '\0');
+                    WideCharToMultiByte(CP_UTF8, 0, w.data(), static_cast<int>(w.size()), out.data(), n, nullptr, nullptr);
+                    return out;
+                };
+                auto wide_from_utf8 = [](const std::string& s) -> std::wstring {
+                    if (s.empty()) return {};
+                    int n = MultiByteToWideChar(CP_UTF8, 0, s.data(), static_cast<int>(s.size()), nullptr, 0);
+                    if (n <= 0) return {};
+                    std::wstring out(n, L'\0');
+                    MultiByteToWideChar(CP_UTF8, 0, s.data(), static_cast<int>(s.size()), out.data(), n);
+                    return out;
+                };
+                auto json_escape = [](const std::string& s) -> std::string {
+                    std::string out;
+                    out.reserve(s.size() + 8);
+                    for (unsigned char c : s) {
+                        if (c == '\\' || c == '"') {
+                            out.push_back('\\');
+                            out.push_back(static_cast<char>(c));
+                        } else if (c < 0x20) {
+                            char buf[8];
+                            std::snprintf(buf, sizeof(buf), "\\u%04x", c);
+                            out += buf;
+                        } else {
+                            out.push_back(static_cast<char>(c));
+                        }
+                    }
+                    return out;
+                };
+                if (direction == "from_agent" || direction == "get") {
+                    std::wstring clip;
+                    bool ok = input_ctrl.GetClipboardText(clip);
+                    std::string payload = std::string("{\"type\":\"clipboard_data\",\"ok\":") +
+                        (ok ? "true" : "false") + ",\"text\":\"" + json_escape(utf8_from_wide(clip)) + "\"}";
+                    try {
+                        input_dc->send(payload);
+                    } catch (...) {
+                    }
+                } else if (direction == "to_agent" || direction == "set") {
+                    std::string clip_text = ExtractJsonStr(text, "text");
+                    bool ok = input_ctrl.SetClipboardText(wide_from_utf8(clip_text));
+                    try {
+                        input_dc->send(std::string("{\"type\":\"clipboard_data\",\"ok\":") +
+                            (ok ? "true" : "false") + ",\"action\":\"set\"}");
+                    } catch (...) {
+                    }
+                }
             }
         });
 
@@ -269,10 +362,14 @@ public:
         // version names these differently, the build will fail here —
         // do not silently drop the gate to make it compile.
         if (pc->gatheringState() != rtc::PeerConnection::GatheringState::Complete) {
-            if (gathering_future.wait_for(std::chrono::seconds(5)) != std::future_status::ready) {
-                if (error_out) *error_out = "ice_gathering_incomplete";
-                signaling.PostError("ice_gathering_incomplete");
-                return false;
+            // Plane TURN (ephemeral) often needs >5s to finish gathering.
+            // Prefer Complete, but fall through to trickle ICE: local SDP +
+            // onLocalCandidate posts already cover restrictive networks.
+            if (gathering_future.wait_for(std::chrono::seconds(15)) != std::future_status::ready) {
+                std::cerr << "[AI Bridge] WARNING: ICE gathering not complete after 15s; "
+                          << "posting trickle offer with current local SDP.\n";
+                std::cout << "{\"event\":\"ice_gathering_trickle\",\"sdp_bytes\":"
+                          << local_sdp.size() << "}\n";
             }
         }
         // F08-16: do not offer a session the pipeline cannot serve.
@@ -314,6 +411,46 @@ public:
                 if (snap && (snap->status == "ended" || snap->status == "error")) {
                     break;
                 }
+                // Keep input permissions aligned with plane session mode + local sidecar.
+                bool mouse = cfg_.allow_mouse;
+                bool keyboard = cfg_.allow_keyboard;
+                bool clipboard = cfg_.allow_clipboard;
+                if (snap && snap->permissions_present) {
+                    mouse = snap->control_mouse && !snap->human_takeover_active && snap->mode != "view_only";
+                    keyboard = snap->control_keyboard && !snap->human_takeover_active && snap->mode != "view_only";
+                }
+                // Sidecar written by WPF NamedPipeBridge.UpdateSessionPermissionsAsync
+                try {
+                    std::ifstream ifs;
+                    // Prefer beside config via USERPROFILE\.ai-bridge\session_permissions.json
+                    const char* home = std::getenv("USERPROFILE");
+                    if (home && *home) {
+                        std::string path = std::string(home) + "\\.ai-bridge\\session_permissions.json";
+                        ifs.open(path);
+                    }
+                    if (ifs) {
+                        std::ostringstream ss;
+                        ss << ifs.rdbuf();
+                        std::string body = ss.str();
+                        if (body.find("\"allow_desktop_control\":false") != std::string::npos ||
+                            body.find("\"allow_desktop_control\": false") != std::string::npos) {
+                            mouse = false;
+                            keyboard = false;
+                        } else if (body.find("\"allow_desktop_control\":true") != std::string::npos ||
+                                   body.find("\"allow_desktop_control\": true") != std::string::npos) {
+                            // Only raise if plane has not forced view_only / takeover
+                            if (!(snap && (snap->mode == "view_only" || snap->human_takeover_active))) {
+                                mouse = true;
+                                keyboard = true;
+                            }
+                        }
+                        clipboard = body.find("\"allow_clipboard\":true") != std::string::npos ||
+                                    body.find("\"allow_clipboard\": true") != std::string::npos;
+                    }
+                } catch (...) {
+                }
+                apply_input_permissions(mouse, keyboard, clipboard);
+
                 if (snap && !answer_applied && !snap->answer_sdp.empty()) {
                     try {
                         // Reject truncated/empty-looking answers before libdatachannel throws.
@@ -358,6 +495,7 @@ public:
                     // Count encoded frames even before ICE opens the track; send when open.
                     frames_sent_.fetch_add(1);
                     if (track->isOpen() && !au.annexb_nal_bytes.empty()) {
+                        // H264RtpPacketizer (setMediaHandler above) converts Annex-B → RTP.
                         rtc::binary payload(au.annexb_nal_bytes.size());
                         std::memcpy(
                             payload.data(),

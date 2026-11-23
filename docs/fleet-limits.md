@@ -1,5 +1,7 @@
 # Multi-Worker Operation & Fleet Limits
 
+**Updated:** 23 November 2026 · [PRODUCTION_READINESS.md](../analysis/PRODUCTION_READINESS.md) · [production-readiness.md](./production-readiness.md)
+
 ## Required Configuration for Multi-Worker / Multi-Host Production
 
 When running more than one worker (`AI_BRIDGE_WORKERS > 1` in `AI_BRIDGE_PROFILE=production`) or multiple control-plane hosts (`AI_BRIDGE_MULTI_HOST=1` or `AI_BRIDGE_REQUIRE_REDIS=1`):

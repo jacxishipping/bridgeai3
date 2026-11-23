@@ -1,3 +1,5 @@
+> **HISTORICAL analysis.** Current production assessment: [PRODUCTION_READINESS.md](./PRODUCTION_READINESS.md).
+
 # 14 — Performance and Scalability Audit — AI Bridge
 
 Scope: performance and scalability of the control plane, agents, and

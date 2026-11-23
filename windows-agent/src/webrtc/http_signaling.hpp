@@ -23,6 +23,17 @@ struct SessionSnapshot {
     std::string answer_sdp;
     std::string answer_type;
     std::vector<IceCandidateJson> viewer_candidates;
+    std::string mode;
+    bool human_takeover_active = false;
+    bool control_mouse = false;
+    bool control_keyboard = false;
+    bool permissions_present = false;
+};
+
+struct IceServerConfig {
+    std::vector<std::string> urls;
+    std::string username;
+    std::string credential;
 };
 
 // WinHTTP client for /api/agent/webrtc/* (same contract as Python HttpSignaling).
@@ -45,6 +56,8 @@ public:
     bool PostCandidate(const IceCandidateJson& candidate, std::string* error_out = nullptr);
     bool PostError(const std::string& message);
     std::optional<SessionSnapshot> PollSession(std::string* error_out = nullptr);
+    // Device-authenticated ephemeral STUN/TURN list from the control plane.
+    bool FetchIceServers(std::vector<IceServerConfig>* out, std::string* error_out = nullptr);
     void Close();
 
 private:

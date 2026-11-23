@@ -61,6 +61,7 @@ EXPECTED_ROUTES = set(
         ("GET", "/api/agent/policy"),
         ("GET", "/api/agent/tasks/next"),
         ("GET", "/api/agent/tasks/{task_id}/execution-state"),
+        ("GET", "/api/agent/webrtc/ice-servers"),
         ("GET", "/api/agent/webrtc/{session_id}"),
         ("GET", "/api/agent/whoami"),
         ("GET", "/api/agents"),

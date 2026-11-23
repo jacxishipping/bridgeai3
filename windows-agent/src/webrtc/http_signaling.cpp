@@ -80,9 +80,31 @@ std::string JsonGetString(const std::string& json, const std::string& key) {
                     case '"': out.push_back('"'); break;
                     case '\\': out.push_back('\\'); break;
                     case '/': out.push_back('/'); break;
-                    case 'u':
-                        if (after + 4 <= json.size()) after += 4;
+                    case 'u': {
+                        if (after + 4 > json.size()) return out;
+                        int cp = 0;
+                        bool ok = true;
+                        for (int i = 0; i < 4; ++i) {
+                            char h = json[after++];
+                            int n = -1;
+                            if (h >= '0' && h <= '9') n = h - '0';
+                            else if (h >= 'a' && h <= 'f') n = h - 'a' + 10;
+                            else if (h >= 'A' && h <= 'F') n = h - 'A' + 10;
+                            if (n < 0) { ok = false; break; }
+                            cp = (cp << 4) | n;
+                        }
+                        if (!ok) return out;
+                        if (cp <= 0x7F) out.push_back(static_cast<char>(cp));
+                        else if (cp <= 0x7FF) {
+                            out.push_back(static_cast<char>(0xC0 | ((cp >> 6) & 0x1F)));
+                            out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+                        } else {
+                            out.push_back(static_cast<char>(0xE0 | ((cp >> 12) & 0x0F)));
+                            out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
+                            out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+                        }
                         break;
+                    }
                     default: out.push_back(e); break;
                 }
             } else {
@@ -386,6 +408,7 @@ std::optional<SessionSnapshot> HttpSignalingClient::PollSession(std::string* err
     SessionSnapshot snap;
     snap.status = JsonGetString(resp, "status");
     snap.error = JsonGetString(resp, "error");
+    snap.mode = JsonGetString(resp, "mode");
     // Nested answer.sdp — best-effort parse
     auto answer_pos = resp.find("\"answer\"");
     if (answer_pos != std::string::npos) {
@@ -398,7 +421,129 @@ std::optional<SessionSnapshot> HttpSignalingClient::PollSession(std::string* err
     // PollSession read the answer SDP only. Parse them so the peer
     // connection can apply them (see peer_connection.cpp).
     snap.viewer_candidates = ParseViewerCandidates(resp);
+
+    auto takeover_pos = resp.find("\"human_takeover_active\"");
+    if (takeover_pos != std::string::npos) {
+        auto sub = resp.substr(takeover_pos);
+        snap.human_takeover_active = sub.find("true") != std::string::npos &&
+            (sub.find("true") < sub.find("false") || sub.find("false") == std::string::npos);
+    }
+    auto perms_pos = resp.find("\"permissions\"");
+    if (perms_pos != std::string::npos) {
+        auto sub = resp.substr(perms_pos, 400);
+        snap.permissions_present = true;
+        // Accept both v1 keys (control_mouse) and legacy (control).
+        snap.control_mouse =
+            sub.find("\"control_mouse\":true") != std::string::npos ||
+            sub.find("\"control_mouse\": true") != std::string::npos ||
+            (sub.find("\"control\":true") != std::string::npos && sub.find("control_mouse") == std::string::npos);
+        snap.control_keyboard =
+            sub.find("\"control_keyboard\":true") != std::string::npos ||
+            sub.find("\"control_keyboard\": true") != std::string::npos ||
+            snap.control_mouse;
+        if (snap.mode == "view_only") {
+            snap.control_mouse = false;
+            snap.control_keyboard = false;
+        }
+    }
     return snap;
+}
+
+namespace {
+
+std::vector<std::string> ParseUrlsField(const std::string& entry) {
+    std::vector<std::string> urls;
+    auto urls_pos = entry.find("\"urls\"");
+    if (urls_pos == std::string::npos) return urls;
+    auto after = entry.find(':', urls_pos + 6);
+    if (after == std::string::npos) return urls;
+    ++after;
+    while (after < entry.size() && (entry[after] == ' ' || entry[after] == '\t' || entry[after] == '\n' || entry[after] == '\r')) {
+        ++after;
+    }
+    if (after >= entry.size()) return urls;
+    if (entry[after] == '"') {
+        std::string one = JsonGetString(entry, "urls");
+        if (!one.empty()) urls.push_back(one);
+        return urls;
+    }
+    if (entry[after] != '[') return urls;
+    ++after;
+    while (after < entry.size() && entry[after] != ']') {
+        while (after < entry.size() && (entry[after] == ' ' || entry[after] == '\t' || entry[after] == '\n' || entry[after] == '\r' || entry[after] == ',')) {
+            ++after;
+        }
+        if (after >= entry.size() || entry[after] == ']') break;
+        if (entry[after] != '"') break;
+        ++after;
+        std::string u;
+        while (after < entry.size()) {
+            char c = entry[after++];
+            if (c == '"') break;
+            if (c == '\\' && after < entry.size()) {
+                u.push_back(entry[after++]);
+                continue;
+            }
+            u.push_back(c);
+        }
+        if (!u.empty()) urls.push_back(u);
+    }
+    return urls;
+}
+
+std::vector<IceServerConfig> ParseIceServersPayload(const std::string& body) {
+    std::vector<IceServerConfig> out;
+    auto arr_pos = body.find("\"ice_servers\"");
+    if (arr_pos == std::string::npos) return out;
+    auto bracket = body.find('[', arr_pos);
+    if (bracket == std::string::npos) return out;
+    size_t pos = bracket + 1;
+    while (pos < body.size()) {
+        while (pos < body.size() && (body[pos] == ' ' || body[pos] == '\t' || body[pos] == '\n' || body[pos] == '\r' || body[pos] == ',')) {
+            ++pos;
+        }
+        if (pos >= body.size() || body[pos] == ']') break;
+        if (body[pos] != '{') break;
+        int depth = 0;
+        size_t start = pos;
+        for (; pos < body.size(); ++pos) {
+            if (body[pos] == '{') ++depth;
+            else if (body[pos] == '}') {
+                --depth;
+                if (depth == 0) {
+                    ++pos;
+                    break;
+                }
+            }
+        }
+        std::string entry = body.substr(start, pos - start);
+        IceServerConfig cfg;
+        cfg.urls = ParseUrlsField(entry);
+        cfg.username = JsonGetString(entry, "username");
+        cfg.credential = JsonGetString(entry, "credential");
+        if (!cfg.urls.empty()) out.push_back(std::move(cfg));
+    }
+    return out;
+}
+
+} // namespace
+
+bool HttpSignalingClient::FetchIceServers(std::vector<IceServerConfig>* out, std::string* error_out) {
+    if (!out) {
+        if (error_out) *error_out = "null ice_servers out";
+        return false;
+    }
+    out->clear();
+    std::string resp;
+    if (!RequestJson("GET", "/api/agent/webrtc/ice-servers", "", &resp, error_out)) {
+        return false;
+    }
+    *out = ParseIceServersPayload(resp);
+    if (out->empty()) {
+        if (error_out) *error_out = "ice_servers empty or unparseable";
+        return false;
+    }
+    return true;
 }
 
 } // namespace webrtc

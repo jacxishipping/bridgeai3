@@ -30,6 +30,11 @@ struct PeerConnectionConfig {
     std::string turn_url;
     std::string turn_username;
     std::string turn_credential;
+    // Deny-by-default input; set from config / session_permissions.json /
+    // plane poll (mode + permissions + human_takeover_active).
+    bool allow_mouse = false;
+    bool allow_keyboard = false;
+    bool allow_clipboard = false;
 };
 
 enum class PeerBackend {

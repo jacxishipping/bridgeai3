@@ -57,7 +57,7 @@ public sealed class AgentGuiConfig
 {
     // Control Plane settings
     [JsonPropertyName("control_url")]
-    public string ControlUrl { get; set; } = "https://ec2-77-114-76-12.us-east-2.compute.amazonaws.com";
+    public string ControlUrl { get; set; } = "https://clideos.us";
 
     [JsonPropertyName("device_id")]
     public string DeviceId { get; set; } = Environment.MachineName.ToLowerInvariant();
@@ -261,6 +261,36 @@ public sealed class AgentFunctionPermissions
 
     [JsonPropertyName("disabled_tools")]
     public List<string> DisabledTools { get; set; } = new();
+
+    /// <summary>
+    /// Derive Device Function toggles from server effective policy so poll/chat
+    /// <c>IsToolAllowed</c> cannot disagree with <see cref="AgentPolicyConfig"/>.
+    /// Preserves explicit per-tool disables from <paramref name="preserveDisabled"/>.
+    /// </summary>
+    public static AgentFunctionPermissions SyncFromEffectivePolicy(
+        AgentPolicyConfig policy,
+        IEnumerable<string>? preserveDisabled = null)
+    {
+        bool tier3 = policy.AllowTier3 && policy.MaxTierUnattended >= 3;
+        bool tier4 = policy.AllowTier4 && policy.MaxTierUnattended >= 4;
+        bool desktop = policy.AllowDesktopControl && tier3;
+        return new AgentFunctionPermissions
+        {
+            AllowSystemHealthTools = true,
+            AllowScreenCapture = desktop || tier3,
+            AllowWindowManagement = desktop,
+            AllowUiInputAutomation = desktop,
+            AllowClipboard = policy.AllowClipboard,
+            AllowAppLaunching = desktop || policy.AllowUnrestrictedApps || policy.AllowedApps.Count > 0,
+            AllowWorkspaceFiles = policy.AllowWrites,
+            AllowFullPcFilesAndDrives = policy.AllowFullPcAccess && tier3,
+            AllowShellAndPowerShell = policy.AllowShell && tier4,
+            AllowProcessTermination = policy.AllowFullPcAccess && tier4,
+            DisabledTools = preserveDisabled is null
+                ? new List<string>()
+                : new List<string>(preserveDisabled),
+        };
+    }
 }
 
 public sealed class DeviceAgentSettings

@@ -1,3 +1,5 @@
+> **HISTORICAL analysis.** Current production assessment: [PRODUCTION_READINESS.md](./PRODUCTION_READINESS.md).
+
 # Wave 2A — Control Plane — Progress
 
 Owner: Wave 2A subagent (control plane). Repo: `/home/hatch/workspace/ai-bridge-main`,

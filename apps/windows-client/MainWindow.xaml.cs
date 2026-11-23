@@ -27,6 +27,11 @@ public partial class MainWindow : Window
 {
     private sealed record PaletteCommand(string Label, Action Execute);
 
+    private sealed class ToastItem
+    {
+        public string Message { get; init; } = "";
+    }
+
     private readonly ConfigService _configService = new();
     private readonly SystemMonitorService _monitor = new();
     private readonly NativeToolExecutor _executor;
@@ -70,7 +75,7 @@ public partial class MainWindow : Window
     private const int SparklineCapacity = 60;
 
     private readonly DispatcherTimer _monitorTimer;
-    private readonly DispatcherTimer _toastTimer;
+    private readonly ObservableCollection<ToastItem> _toasts = new();
     private NotifyIcon? _trayIcon;
     private readonly System.Windows.Controls.Button[] _navButtons;
     private readonly TextBlock[] _navIcons;
@@ -91,13 +96,13 @@ public partial class MainWindow : Window
 
     private static readonly (string Title, string Subtitle)[] TabMeta =
     {
-        ("Overview", "Agent status, connection, and live activity"),
-        ("Task Explorer", "Every task this device received, with full payloads"),
+        ("Overview", "Fleet poller status, connection, and live activity"),
+        ("Task Explorer", "Task metadata for this device (args and results are not stored locally)"),
         ("System Monitor", "Live hardware telemetry, GPU & process manager"),
-        ("Desktop Vision", "Multi-monitor C++20 DXGI Desktop Duplication, Media Foundation H.264 & GDI+ capture"),
+        ("Desktop Vision", "Capture monitors, test encode, and start a live desktop stream"),
         ("Security & Policy", "4-tier guardrails, allowlist matrix & policy audit"),
-        ("Settings", "Control Plane endpoint, C++20 DXGI/H.264 engine, DPAPI token, updates & appearance"),
-        ("Agents", "Local runtimes, C++ Named-Pipe bridge & agents scoped exclusively to this device"),
+        ("Settings", "Control Plane endpoint, capture/stream engine, DPAPI token, updates & appearance"),
+        ("Agents", "Local chat and tools on this device (separate from the fleet poller above)"),
     };
 
     public MainWindow(int initialTab = 0, bool suppressAutoSignIn = false)
@@ -171,8 +176,10 @@ public partial class MainWindow : Window
         AgentTakeoverService.StateChanged += OnTakeoverStateChanged;
         AgentTakeoverService.ExtraAllowedRegions = GetTakeoverAllowedRegions;
 
-        _toastTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2.5) };
-        _toastTimer.Tick += (_, _) => { ToastBanner.Visibility = Visibility.Collapsed; _toastTimer.Stop(); };
+        if (ToastStack is not null)
+        {
+            ToastStack.ItemsSource = _toasts;
+        }
 
         BuildPaletteCommands();
         SetupSystemTray();
@@ -278,12 +285,12 @@ public partial class MainWindow : Window
             ? NamedPipeBridge.PipeName
             : _config.DesktopPipeName.Trim();
         var hmac = _configService.LoadPipeHmacSecret();
-        if (string.IsNullOrWhiteSpace(hmac))
+        if (string.IsNullOrWhiteSpace(hmac) || NamedPipeBridge.IsInsecureDefaultSecret(hmac))
         {
             hmac = Convert.ToHexStringLower(System.Security.Cryptography.RandomNumberGenerator.GetBytes(24));
             _configService.SavePipeHmacSecret(hmac);
         }
-        NamedPipeBridge.ActiveHmacSecret = hmac;
+        NamedPipeBridge.ActiveHmacSecret = NamedPipeBridge.RequireHmacSecret(hmac);
         CppNativeBridge.SyncInputPermissions(_config.Policy.AllowDesktopControl, _config.Policy.AllowClipboard);
         var cppCfg = _config.CppAgent;
         _ = Task.Run(() => NamedPipeBridge.EnsureCppSupervisorRunning(
@@ -360,7 +367,15 @@ public partial class MainWindow : Window
 
         OverviewKpiGrid.Columns = width >= 1060 ? 4 : (width >= 720 ? 2 : 1);
         bool drawerOpen = AgSidePanel is not null && AgSidePanel.Visibility == Visibility.Visible;
-        AgLeftRailCol.Width = (width < 920 || (drawerOpen && width < 1480)) ? new GridLength(0) : new GridLength(228);
+        // Keep a recoverable chat list: never collapse to 0 solely because the settings drawer is open.
+        if (width < 920)
+            AgLeftRailCol.Width = new GridLength(0);
+        else if (drawerOpen && width < 1480)
+            AgLeftRailCol.Width = new GridLength(160);
+        else
+            AgLeftRailCol.Width = new GridLength(228);
+        if (AgShowChatsBtn is not null)
+            AgShowChatsBtn.Visibility = AgLeftRailCol.Width.Value < 1 ? Visibility.Visible : Visibility.Collapsed;
 
         if (width < 960)
         {
@@ -385,12 +400,30 @@ public partial class MainWindow : Window
         VisionHistoryCard.Visibility = width >= 900 ? Visibility.Visible : Visibility.Collapsed;
     }
 
-    private void ShowToast(string message)
+    private void ShowToast(string message, double seconds = 2.5)
     {
-        ToastText.Text = message;
-        ToastBanner.Visibility = Visibility.Visible;
-        _toastTimer.Stop();
-        _toastTimer.Start();
+        if (string.IsNullOrWhiteSpace(message)) return;
+        var item = new ToastItem { Message = message.Trim() };
+        _toasts.Insert(0, item);
+        while (_toasts.Count > 4)
+        {
+            _toasts.RemoveAt(_toasts.Count - 1);
+        }
+
+        var lifetime = TimeSpan.FromSeconds(Math.Clamp(seconds, 1.5, 12));
+        var timer = new DispatcherTimer { Interval = lifetime };
+        timer.Tick += (_, _) =>
+        {
+            timer.Stop();
+            _toasts.Remove(item);
+        };
+        timer.Start();
+    }
+
+    private void ShowErrorToast(string message)
+    {
+        AppendLog("err", message);
+        ShowToast(message, seconds: 5);
     }
 
     private void LoadHardwareInfo()
@@ -414,15 +447,14 @@ public partial class MainWindow : Window
             new PaletteCommand("Agents", () => SelectTab(6)),
             new PaletteCommand("Security & Policy", () => SelectTab(4)),
             new PaletteCommand("Settings", () => SelectTab(5)),
-            new PaletteCommand("Action: Start / Stop Agent", () => OnToggleAgentClick(this, new RoutedEventArgs())),
-            new PaletteCommand("Action: Pause / Resume", () => OnTogglePauseClick(this, new RoutedEventArgs())),
+            new PaletteCommand("Action: Start / Stop Fleet Poller", () => OnToggleAgentClick(this, new RoutedEventArgs())),
+            new PaletteCommand("Action: Pause / Resume Fleet Poller", () => OnTogglePauseClick(this, new RoutedEventArgs())),
             new PaletteCommand("Action: Ping Control Plane", () => OnPingClick(this, new RoutedEventArgs())),
             new PaletteCommand("Action: Capture Screenshot", () => { SelectTab(3); OnCaptureScreenshotClick(this, new RoutedEventArgs()); }),
             new PaletteCommand("Action: Open Workstation Inspector Drawer", () => OpenNodeDrawer()),
             new PaletteCommand("Action: Expand / Collapse Console", () => { SelectTab(0); OnToggleExpandConsoleClick(this, new RoutedEventArgs()); }),
             new PaletteCommand("Action: Copy Diagnostics Report", () => OnCopyDiagnosticsClick(this, new RoutedEventArgs())),
-            new PaletteCommand("Action: Toggle Light / Dark Theme", () => OnToggleThemeClick(this, new RoutedEventArgs())),
-            new PaletteCommand("Action: Test Agent Takeover Border Glow", () => AgentTakeoverService.StartAgentTakeover()),
+            new PaletteCommand("Action: Cycle Theme (Dark / Light / System)", () => OnToggleThemeClick(this, new RoutedEventArgs())),
             new PaletteCommand("Action: Open Global Quick-Command Bar (Ctrl+Shift+Space)", () => OpenQuickCommandOverlay()),
         });
         foreach (var pb in AgentPlaybookService.Load().Take(12))
@@ -453,9 +485,11 @@ public partial class MainWindow : Window
         }
         else if (ctrl && !shift && e.Key is >= Key.D1 and <= Key.D7)
         {
-            int tabIdx = (int)(e.Key - Key.D1);
+            // Match sidebar visual order: Overview, Tasks, Monitor, Vision, Agents, Security, Settings.
+            int[] visualToTab = { 0, 1, 2, 3, 6, 4, 5 };
+            int ordinal = (int)(e.Key - Key.D1);
             e.Handled = true;
-            SelectTab(tabIdx);
+            SelectTab(visualToTab[ordinal]);
         }
         else if (e.Key == Key.Escape && ScreenshotLightboxOverlay.Visibility == Visibility.Visible)
         {
@@ -476,7 +510,11 @@ public partial class MainWindow : Window
     {
         CommandSearchBox.Text = "";
         CommandResultsList.ItemsSource = _paletteCommands;
-        CommandResultsList.SelectedIndex = 0;
+        CommandResultsList.SelectedIndex = _paletteCommands.Count > 0 ? 0 : -1;
+        if (CommandPaletteEmptyText is not null)
+        {
+            CommandPaletteEmptyText.Visibility = _paletteCommands.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+        }
         CommandPaletteOverlay.Visibility = Visibility.Visible;
         CommandSearchBox.Focus();
     }
@@ -496,6 +534,10 @@ public partial class MainWindow : Window
             ? _paletteCommands
             : _paletteCommands.Where(c => c.Label.Contains(q, StringComparison.OrdinalIgnoreCase)).ToList();
         CommandResultsList.ItemsSource = filtered;
+        if (CommandPaletteEmptyText is not null)
+        {
+            CommandPaletteEmptyText.Visibility = filtered.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+        }
         if (filtered.Count > 0) CommandResultsList.SelectedIndex = 0;
     }
 
@@ -530,11 +572,20 @@ public partial class MainWindow : Window
 
     private void OnToggleThemeClick(object sender, RoutedEventArgs e)
     {
-        _config.Theme = string.Equals(_config.Theme, "light", StringComparison.OrdinalIgnoreCase) ? "dark" : "light";
+        // Cycle dark → light → system so Follow Windows is not abandoned permanently.
+        _config.Theme = _config.Theme?.Trim().ToLowerInvariant() switch
+        {
+            "dark" => "light",
+            "light" => "system",
+            _ => "dark",
+        };
         _configService.SaveConfig(_config);
         ApplyTheme(_config.Theme);
         UpdateDwmWindowChrome();
-        ShowToast($"Switched to {_config.Theme} mode");
+        var effective = ThemeManager.ResolveEffectiveTheme(_config.Theme);
+        ShowToast(_config.Theme == "system"
+            ? $"Theme: Follow Windows (currently {effective})"
+            : $"Theme: {_config.Theme}");
     }
 
     private void ApplyTheme(string theme)
@@ -560,6 +611,20 @@ public partial class MainWindow : Window
     }
 
     private void OnGoToSettingsMenuClick(object sender, RoutedEventArgs e) => SelectTab(5);
+
+    private void OnExitApplicationClick(object sender, RoutedEventArgs e) => ExitApplication();
+
+    private void OnAgShowChatsClick(object sender, RoutedEventArgs e)
+    {
+        // Recover conversation rail after a narrow layout hid it.
+        if (AgSidePanel is not null && AgSidePanel.Visibility == Visibility.Visible && ActualWidth < 1480)
+        {
+            AgSidePanel.Visibility = Visibility.Collapsed;
+        }
+        AgLeftRailCol.Width = new GridLength(228);
+        if (AgShowChatsBtn is not null) AgShowChatsBtn.Visibility = Visibility.Collapsed;
+        ApplyResponsiveLayout(ActualWidth > 0 ? ActualWidth : Width);
+    }
     private void OnOpenNodeDrawerMenuClick(object sender, RoutedEventArgs e) => OpenNodeDrawer();
     private void OnOpenNodeDrawerClick(object sender, MouseButtonEventArgs e) => OpenNodeDrawer();
 
@@ -661,8 +726,8 @@ public partial class MainWindow : Window
             TopTakeoverBtn.Content = "Return Control to Agent";
             TopTakeoverBtn.Style = (Style)FindResource("PrimaryBtnStyle");
             TopTakeoverBtn.Visibility = Visibility.Visible;
-            AppendLog("warn", "User reclaimed screen control — agent desktop input paused.");
-            ShowToast("You have screen control (agent input paused)");
+            AppendLog("warn", "You have screen control — agent desktop input paused until you return control.");
+            ShowToast("You have screen control — Return Control resumes agent input");
         }
         else
         {
@@ -679,7 +744,7 @@ public partial class MainWindow : Window
         else if (AgentTakeoverService.State == TakeoverState.UserControl)
         {
             AgentTakeoverService.ReturnControlToAgent();
-            ShowToast("Returned screen control to AI Agent");
+            ShowToast("Agent input resumed — AI can control the screen again");
         }
     }
 
@@ -688,12 +753,12 @@ public partial class MainWindow : Window
         var menu = new ContextMenuStrip();
         menu.Items.Add("Show Window", null, (_, _) => Dispatcher.Invoke(ShowFromTray));
         menu.Items.Add("Quick Agent Command (Ctrl+Shift+Space)", null, (_, _) => Dispatcher.Invoke(OpenQuickCommandOverlay));
-        menu.Items.Add("Start / Stop Agent", null, (_, _) => Dispatcher.Invoke(() => OnToggleAgentClick(this, new RoutedEventArgs())));
-        menu.Items.Add("Pause / Resume", null, (_, _) => Dispatcher.Invoke(() => OnTogglePauseClick(this, new RoutedEventArgs())));
+        menu.Items.Add("Start / Stop Fleet Poller", null, (_, _) => Dispatcher.Invoke(() => OnToggleAgentClick(this, new RoutedEventArgs())));
+        menu.Items.Add("Pause / Resume Fleet Poller", null, (_, _) => Dispatcher.Invoke(() => OnTogglePauseClick(this, new RoutedEventArgs())));
         menu.Items.Add("Ping Control Plane", null, (_, _) => Dispatcher.Invoke(() => OnPingClick(this, new RoutedEventArgs())));
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Capture Screenshot", null, (_, _) => Dispatcher.Invoke(() => { SelectTab(3); OnCaptureScreenshotClick(this, new RoutedEventArgs()); }));
-        menu.Items.Add("Toggle Light / Dark Theme", null, (_, _) => Dispatcher.Invoke(() => OnToggleThemeClick(this, new RoutedEventArgs())));
+        menu.Items.Add("Cycle Theme (Dark / Light / System)", null, (_, _) => Dispatcher.Invoke(() => OnToggleThemeClick(this, new RoutedEventArgs())));
         menu.Items.Add("Open Logs Folder", null, (_, _) => Dispatcher.Invoke(() => OnOpenLogsFolderClick(this, new RoutedEventArgs())));
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Exit", null, (_, _) => Dispatcher.Invoke(ExitApplication));
@@ -739,7 +804,11 @@ public partial class MainWindow : Window
             Hide();
             if (_config.NotificationsEnabled)
             {
-                _trayIcon?.ShowBalloonTip(2000, "AI Bridge", "Client minimized to system tray.", ToolTipIcon.Info);
+                _trayIcon?.ShowBalloonTip(
+                    2500,
+                    "AI Bridge",
+                    "Minimized to tray. Use tray Exit or profile → Exit AI Bridge to quit.",
+                    ToolTipIcon.Info);
             }
             return;
         }
@@ -788,7 +857,7 @@ public partial class MainWindow : Window
     private void SelectTab(int idx)
     {
         MainTabs.SelectedIndex = idx;
-        MainTabs.BeginAnimation(OpacityProperty, new DoubleAnimation(0.75, 1.0, TimeSpan.FromMilliseconds(140)));
+        MainTabs.BeginAnimation(OpacityProperty, new DoubleAnimation(0.82, 1.0, TimeSpan.FromMilliseconds(160)));
         if (idx >= 0 && idx < TabMeta.Length)
         {
             PageTitleText.Text = TabMeta[idx].Title;
@@ -904,12 +973,29 @@ public partial class MainWindow : Window
         SetCppFpsBox.Text = Math.Clamp(_config.CppAgent.H264TargetFps, 1, 60).ToString();
         SetCppBitrateBox.Text = Math.Clamp(_config.CppAgent.H264BitrateKbps, 250, 50_000).ToString();
         SetCppKeyframeBox.Text = Math.Clamp(_config.CppAgent.H264KeyframeIntervalSec, 1, 15).ToString();
+        // Seed TURN URL from the control-plane host when unset so the C++ Engine
+        // tab is never blank for a configured plane (credentials still come from ICE).
+        if (string.IsNullOrWhiteSpace(_config.CppAgent.TurnUrl))
+        {
+            var derived = ControlPlaneClient.DeriveTurnUrlFromControlPlane(_config.ControlUrl);
+            if (!string.IsNullOrWhiteSpace(derived))
+            {
+                _config.CppAgent.TurnUrl = derived;
+            }
+        }
         SetCppTurnUrlBox.Text = _config.CppAgent.TurnUrl ?? "";
         SetCppTurnUserBox.Text = _config.CppAgent.TurnUsername ?? "";
         SetCppTurnCredBox.Password = _config.CppAgent.TurnCredential ?? "";
+        if (SetCppTurnHintText is not null)
+        {
+            SetCppTurnHintText.Text = string.IsNullOrWhiteSpace(_config.CppAgent.TurnUsername)
+                ? "Username/credential empty — click Pull TURN from Control Plane."
+                : "TURN settings loaded (ephemeral credentials expire; re-pull as needed).";
+        }
         SetCppCursorHaloChk.IsChecked = _config.CppAgent.ShowAgentCursorHalo;
         SelectComboByTag(SetCppInputSpeedCombo, _config.CppAgent.InputSpeedProfile, 1);
         RefreshCppEngineStatusUi();
+        _ = HydrateTurnSettingsIfNeededAsync(force: false);
 
         // Logging
         SelectComboByTag(SetLogLevelCombo, _config.LogLevel, 1);
@@ -1000,9 +1086,9 @@ public partial class MainWindow : Window
     private void SetAgentButtonState(bool running, bool paused)
     {
         HeaderAgentIcon.Text = running ? "\uE71A" : "\uE768";
-        HeaderAgentLabel.Text = running ? "Stop Agent" : "Start Agent";
+        HeaderAgentLabel.Text = running ? "Stop Poller" : "Start Poller";
         HeaderPauseBtn.IsEnabled = running;
-        HeaderPauseLabel.Text = paused ? "Resume" : "Pause";
+        HeaderPauseLabel.Text = paused ? "Resume Poller" : "Pause Poller";
     }
 
     private void UpdateConnectionStatus(string status, string tone)
@@ -1121,6 +1207,11 @@ public partial class MainWindow : Window
         foreach (var item in filtered)
         {
             _visibleLogs.Add(item);
+        }
+
+        if (ActivityLogEmptyText is not null)
+        {
+            ActivityLogEmptyText.Visibility = _visibleLogs.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
         }
 
         if (LogAutoScrollChk?.IsChecked == true && _visibleLogs.Count > 0)
@@ -1275,7 +1366,7 @@ public partial class MainWindow : Window
         MonProcText.Text = $"{t.ProcessCount} processes · {(int)t.SystemUptime.TotalHours}h {t.SystemUptime.Minutes}m uptime";
 
         bool pipeOk = NamedPipeBridge.IsDesktopAgentAvailable();
-        MonPipeStatusText.Text = pipeOk ? $"C++ Desktop Pipe: Connected ({NamedPipeBridge.PipeName})" : "C++ Desktop Pipe: Offline";
+        MonPipeStatusText.Text = pipeOk ? $"Desktop pipe: Connected ({NamedPipeBridge.PipeName})" : "Desktop pipe: Offline";
         MonPipeStatusText.Foreground = new SolidColorBrush(pipeOk ? ColorFromHex(16, 185, 129) : ColorFromHex(100, 116, 139));
 
         RenderSparkline(OverviewCpuSparkCanvas, OverviewCpuSparkLine, OverviewCpuSparkFill, _cpuHistory);
@@ -1670,7 +1761,7 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            AppendLog("err", $"Could not open dashboard: {ex.Message}");
+            ShowErrorToast($"Could not open dashboard: {ex.Message}");
         }
     }
 
@@ -1679,7 +1770,7 @@ public partial class MainWindow : Window
         if (string.IsNullOrWhiteSpace(_deviceToken))
         {
             AppendLog("warn", "Cannot rotate token: no device token configured.");
-            ShowToast("No device token configured");
+            ShowToast("No device token configured", seconds: 4);
             return;
         }
         var (ok, newTok, detail) = await _client.RotateTokenAsync(_config.ControlUrl, _deviceToken);
@@ -1693,7 +1784,7 @@ public partial class MainWindow : Window
         }
         else
         {
-            AppendLog("err", $"Token rotation failed: {detail}");
+            ShowErrorToast($"Token rotation failed: {detail}");
         }
     }
 
@@ -1789,7 +1880,7 @@ public partial class MainWindow : Window
         _taskHistory.Clear();
         _configService.SaveTaskHistory(_taskHistory, _config.TaskHistoryLimit);
         KpiTasksText.Text = "0";
-        TaskInspectorBox.Text = "Select a task row above to inspect payload and result details.";
+        TaskInspectorBox.Text = "Select a task row to view metadata (tool, status, timing). Args and results are not stored locally.";
         RefreshTaskGrid();
         ShowToast("Cleared task history");
     }
@@ -1807,7 +1898,7 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            AppendLog("err", $"Screenshot capture failed: {ex.Message}");
+            ShowErrorToast($"Screenshot capture failed: {ex.Message}");
         }
     }
 
@@ -1823,7 +1914,7 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            AppendLog("err", $"Virtual desktop capture failed: {ex.Message}");
+            ShowErrorToast($"Virtual desktop capture failed: {ex.Message}");
         }
     }
 
@@ -1865,21 +1956,21 @@ public partial class MainWindow : Window
         }
         if (m.Valid == 0)
         {
-            VisionCppMetricsText.Text =
-                $"DLL: ai_bridge_native.dll loaded\n" +
-                $"Mode: {(_config.CppAgent.PreferDxgiCapture ? "DXGI Preferred" : "C# GDI+ Forced")}\n" +
-                $"Target H.264: {_config.CppAgent.H264TargetFps} FPS @ {_config.CppAgent.H264BitrateKbps} kbps\n" +
-                $"Held Keys: {CppNativeBridge.GetHeldKeyCount()}";
+        VisionCppMetricsText.Text =
+            $"Native capture ready\n" +
+                $"Mode: {(_config.CppAgent.PreferDxgiCapture ? "GPU preferred" : "Software capture")}\n" +
+                $"Target: {_config.CppAgent.H264TargetFps} FPS @ {_config.CppAgent.H264BitrateKbps} kbps\n" +
+                $"Held keys: {CppNativeBridge.GetHeldKeyCount()}";
             return;
         }
         var enc = !string.IsNullOrWhiteSpace(m.EncoderName)
             ? $"{m.EncoderName} ({(m.IsHardwareEncoder != 0 ? "HW" : "SW")}, {m.EncodeTimeMs:F1} ms, {m.EncodedBytes} B)"
             : $"Ready ({_config.CppAgent.H264TargetFps} FPS @ {_config.CppAgent.H264BitrateKbps} kbps)";
         VisionCppMetricsText.Text =
-            $"Backend: {(m.FromDxgi != 0 ? "DXGI Desktop Duplication" : "C++ GDI Fallback")}{(m.SecureDesktop != 0 ? " [Secure Desktop]" : "")}\n" +
+            $"Capture: {(m.FromDxgi != 0 ? "GPU" : "Software")}{(m.SecureDesktop != 0 ? " [Secure Desktop]" : "")}\n" +
             $"Frame:   {m.Width}x{m.Height} · {m.CaptureTimeMs:F2} ms · Dirty: {m.DirtyRectCount}\n" +
             $"Cursor:  ({m.CursorX}, {m.CursorY}) {(m.CursorVisible != 0 ? "Visible" : "Hidden")}\n" +
-            $"H.264:   {enc}\n" +
+            $"Encode:  {enc}\n" +
             $"Input:   {CppNativeBridge.GetHeldKeyCount()} held keys";
     }
 
@@ -1897,9 +1988,10 @@ public partial class MainWindow : Window
         }
         var lm = CppNativeBridge.LastMetrics;
         VisionMetaText.Text = ok
-            ? $"C++ H.264 Probe OK · {(lm.FromDxgi != 0 ? "DXGI" : "GDI")} {lm.CaptureTimeMs:F1} ms · H.264 {lm.EncodeTimeMs:F1} ms ({lm.EncodedBytes} B)"
-            : "C++ H.264 Probe failed";
-        ShowToast(ok ? $"C++ H.264 Probe: {lm.EncodedBytes} bytes ({lm.EncodeTimeMs:F1} ms)" : "C++ Probe failed");
+            ? $"Encode OK · {(lm.FromDxgi != 0 ? "GPU" : "software")} {lm.CaptureTimeMs:F1} ms · encode {lm.EncodeTimeMs:F1} ms ({lm.EncodedBytes} B)"
+            : "Encode test failed";
+        if (ok) ShowToast($"Encode test: {lm.EncodedBytes} bytes ({lm.EncodeTimeMs:F1} ms)");
+        else ShowErrorToast("Encode test failed");
     }
 
     private void OnVisionResetDxgiClick(object sender, RoutedEventArgs e)
@@ -1908,7 +2000,7 @@ public partial class MainWindow : Window
         bool ok = CppNativeBridge.ReinitializeCapture(monIdx);
         RefreshMonitorList();
         RefreshVisionCppMetricsUi();
-        ShowToast(ok ? $"Reinitialized C++ DXGI on display {monIdx}" : "Reinitialized GDI fallback");
+        ShowToast(ok ? $"Capture reset on display {monIdx}" : "Capture reset used software fallback");
     }
 
     private void OnVisionToggleWebRtcClick(object sender, RoutedEventArgs e)
@@ -1916,19 +2008,20 @@ public partial class MainWindow : Window
         if (NamedPipeBridge.IsCppWebRtcRunning)
         {
             NamedPipeBridge.StopCppWebRtcSession();
-            VisionWebRtcBtn.Content = "Start H.264 Stream";
-            VisionMetaText.Text = "C++20 H.264 WebRTC stream stopped";
-            ShowToast("Stopped C++20 H.264 stream");
+            VisionWebRtcBtn.Content = "Start Live Stream";
+            VisionMetaText.Text = "Live stream stopped";
+            ShowToast("Live stream stopped");
             return;
         }
         int monIdx = VisionMonitorCombo.SelectedItem is MonitorDescriptor m ? m.Index : 0;
         int fps = Math.Clamp(_config.CppAgent?.H264TargetFps ?? 30, 1, 60);
         int kbps = Math.Clamp(_config.CppAgent?.H264BitrateKbps ?? 4500, 250, 50_000);
         var (ok, detail) = NamedPipeBridge.StartCppWebRtcSession(_config.ControlUrl, _deviceToken, $"live-{Guid.NewGuid():N}"[..12], monIdx, fps, kbps);
-        VisionWebRtcBtn.Content = ok ? "Stop H.264 Stream" : "Start H.264 Stream";
+        VisionWebRtcBtn.Content = ok ? "Stop Live Stream" : "Start Live Stream";
         VisionMetaText.Text = detail;
         AppendLog(ok ? "ok" : "warn", detail);
-        ShowToast(ok ? $"Started {fps} FPS H.264 stream" : detail);
+        if (ok) ShowToast($"Live stream started ({fps} FPS)");
+        else ShowErrorToast(detail);
     }
 
     private void LoadScreenshotPreview(string path)
@@ -2118,7 +2211,12 @@ public partial class MainWindow : Window
     private void RefreshProcessesGrid()
     {
         var filter = ProcSearchBox?.Text?.Trim();
-        ProcessesGrid.ItemsSource = _monitor.GetTopProcesses(filter);
+        var rows = _monitor.GetTopProcesses(filter);
+        ProcessesGrid.ItemsSource = rows;
+        if (ProcessesEmptyText is not null)
+        {
+            ProcessesEmptyText.Visibility = rows.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+        }
     }
 
     private void OnProcSearchChanged(object sender, TextChangedEventArgs e) => RefreshProcessesGrid();
@@ -2144,11 +2242,12 @@ public partial class MainWindow : Window
         if (_monitor.TryKillProcess(proc.Pid, out var err))
         {
             AppendLog("warn", $"Terminated process {proc.Name} (PID {proc.Pid}).");
+            ShowToast($"Ended {proc.Name} (PID {proc.Pid})");
             RefreshProcessesGrid();
         }
         else
         {
-            AppendLog("err", $"Could not terminate PID {proc.Pid}: {err}");
+            ShowErrorToast($"Could not end PID {proc.Pid}: {err}");
         }
     }
 
@@ -2174,6 +2273,21 @@ public partial class MainWindow : Window
 
     private void OnApproveAlwaysLocalApprovalClick(object sender, RoutedEventArgs e)
     {
+        var confirm = System.Windows.MessageBox.Show(
+            "Always Allow will turn off:\n\n" +
+            "• Local workstation approval popups for Tier 3/4 tasks\n" +
+            "• Confirmation before mutating agent functions\n\n" +
+            "This device will keep approving sensitive actions until you re-enable those options in Security & Policy (or Agents → Functions).\n\n" +
+            "Continue and approve this request?",
+            "Disable future approval prompts?",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Warning,
+            MessageBoxResult.No);
+        if (confirm != MessageBoxResult.Yes)
+        {
+            return;
+        }
+
         ApprovalModalOverlay.Visibility = Visibility.Collapsed;
         _config.Policy.RequireLocalApproval = false;
         if (_config.DeviceAgent is not null)
@@ -2185,7 +2299,8 @@ public partial class MainWindow : Window
         LoadDeviceAgentSettingsIntoUi();
         SyncPolicyInBackgroundIfConnected();
         _pendingApprovalTcs?.TrySetResult(true);
-        ShowToast("Local approval prompts disabled");
+        ShowToast("Approval prompts disabled — re-enable in Security & Policy");
+        AppendLog("warn", "Always Allow: RequireLocalApproval and ConfirmMutatingFunctions disabled.");
     }
 
     private void OnDenyLocalApprovalClick(object sender, RoutedEventArgs e)
@@ -2209,11 +2324,26 @@ public partial class MainWindow : Window
             cur.AllowUnrestrictedApps != serverPol.AllowUnrestrictedApps ||
             cur.RequireLocalApproval != serverPol.RequireLocalApproval ||
             cur.MaxTierUnattended != serverPol.MaxTierUnattended;
-        if (!changed) return;
 
+        // Always realign Device Functions with effective policy (even when Policy
+        // fields look unchanged) so IsToolAllowed cannot drift from NativeToolExecutor.
         _config.Policy = serverPol;
+        _config.DeviceAgent ??= new DeviceAgentSettings();
+        var prevDisabled = _config.DeviceAgent.Functions?.DisabledTools;
+        _config.DeviceAgent.Functions = AgentFunctionPermissions.SyncFromEffectivePolicy(
+            serverPol, prevDisabled);
+        CppNativeBridge.SyncInputPermissions(serverPol.AllowDesktopControl, serverPol.AllowClipboard);
+
+        if (!changed)
+        {
+            _configService.SaveConfig(_config);
+            LoadDeviceAgentSettingsIntoUi();
+            return;
+        }
+
         _configService.SaveConfig(_config);
         LoadPolicyIntoUi();
+        LoadDeviceAgentSettingsIntoUi();
         UpdateSecurityPostureSummary();
         RefreshLocalAgentsSummary();
         if (NamedPipeBridge.IsDesktopAgentAvailable())
@@ -2284,16 +2414,14 @@ public partial class MainWindow : Window
         var (ok, policy, detail) = await _client.FetchPolicyAsync(_config.ControlUrl, _deviceToken, _config.Policy);
         if (ok && policy is not null)
         {
-            _config.Policy = policy;
-            _configService.SaveConfig(_config);
-            LoadPolicyIntoUi();
+            ApplyServerSyncedPolicy(policy);
             RecordPolicyAudit("Fetched policy from Control Plane");
             AppendLog("ok", detail);
             ShowToast("Fetched policy from Control Plane");
         }
         else
         {
-            AppendLog("err", detail);
+            ShowErrorToast(string.IsNullOrWhiteSpace(detail) ? "Failed to fetch policy" : detail);
         }
     }
 
@@ -2383,6 +2511,10 @@ public partial class MainWindow : Window
         SetSectionSecurity.Visibility = tag is "ALL" or "SECURITY" ? Visibility.Visible : Visibility.Collapsed;
         SetSectionAppearance.Visibility = tag is "ALL" or "APPEARANCE" ? Visibility.Visible : Visibility.Collapsed;
         SetSectionAdvanced.Visibility = tag is "ALL" or "ADVANCED" ? Visibility.Visible : Visibility.Collapsed;
+        if (tag is "ALL" or "CPP_AGENT")
+        {
+            _ = HydrateTurnSettingsIfNeededAsync(force: false);
+        }
     }
 
     private async void OnSaveSettingsClick(object sender, RoutedEventArgs e)
@@ -2611,7 +2743,7 @@ public partial class MainWindow : Window
     private void RefreshLocalAgentsSummary()
     {
         var workerState = !_client.IsRunning ? "Stopped" : (_client.IsPaused ? "Paused" : "Running");
-        AgPollerStateText.Text = $"Worker: {workerState}";
+        AgPollerStateText.Text = $"Fleet poller: {workerState}";
         AgPollerStateText.Foreground = (System.Windows.Media.Brush)FindResource(
             !_client.IsRunning ? "TextMuted" : (_client.IsPaused ? "WarningText" : "SuccessText"));
 
@@ -4050,13 +4182,99 @@ public partial class MainWindow : Window
         bool pipeUp = NamedPipeBridge.IsDesktopAgentAvailable(pipeName);
         SetCppStatusBadge.Text = (dllUp, pipeUp) switch
         {
-            (true, true) => $"C++ DLL & Pipe Active ({pipeName})",
-            (true, false) => "C++ DLL Active · Pipe Stopped",
-            (false, true) => "Pipe Active · DLL Missing",
-            _ => "C++ Engine Offline",
+            (true, true) => $"Engine + pipe active ({pipeName})",
+            (true, false) => "Engine ready · pipe stopped",
+            (false, true) => "Pipe active · native DLL missing",
+            _ => "Engine offline",
         };
         SetCppStatusBadge.Foreground = (System.Windows.Media.Brush)FindResource((dllUp && pipeUp) ? "SuccessText" : (dllUp || pipeUp ? "WarningText" : "ErrorText"));
         RefreshVisionCppMetricsUi();
+    }
+
+    private async void OnCppPullTurnClick(object sender, RoutedEventArgs e)
+    {
+        await HydrateTurnSettingsIfNeededAsync(force: true);
+    }
+
+    private async Task HydrateTurnSettingsIfNeededAsync(bool force)
+    {
+        _config.CppAgent ??= new CppAgentSettings();
+        if (!force &&
+            !string.IsNullOrWhiteSpace(_config.CppAgent.TurnUrl) &&
+            !string.IsNullOrWhiteSpace(_config.CppAgent.TurnUsername) &&
+            !string.IsNullOrWhiteSpace(_config.CppAgent.TurnCredential))
+        {
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(_config.ControlUrl))
+        {
+            if (SetCppTurnHintText is not null)
+            {
+                SetCppTurnHintText.Text = "Set a Control Plane URL first.";
+            }
+            return;
+        }
+
+        if (SetCppTurnHintText is not null)
+        {
+            SetCppTurnHintText.Text = "Pulling TURN from control plane…";
+        }
+
+        var (ok, ice, detail) = await _client.FetchIceServersAsync(
+            _config.ControlUrl,
+            string.IsNullOrWhiteSpace(_deviceToken) ? null : _deviceToken,
+            string.IsNullOrWhiteSpace(_operatorToken) ? null : _operatorToken,
+            _operatorIsAdminToken);
+
+        if (!ok || !ControlPlaneClient.TryExtractTurnSettings(ice, out var turnUrl, out var user, out var cred))
+        {
+            // Still seed the URL from the plane host so the fields aren't blank.
+            if (string.IsNullOrWhiteSpace(_config.CppAgent.TurnUrl))
+            {
+                var derived = ControlPlaneClient.DeriveTurnUrlFromControlPlane(_config.ControlUrl);
+                if (!string.IsNullOrWhiteSpace(derived))
+                {
+                    _config.CppAgent.TurnUrl = derived;
+                    if (SetCppTurnUrlBox is not null) SetCppTurnUrlBox.Text = derived;
+                }
+            }
+            if (SetCppTurnHintText is not null)
+            {
+                SetCppTurnHintText.Text = string.IsNullOrWhiteSpace(detail)
+                    ? "Could not pull TURN credentials."
+                    : detail;
+            }
+            if (force)
+            {
+                ShowToast("TURN pull failed — check operator login or plane deploy.");
+            }
+            return;
+        }
+
+        _config.CppAgent.TurnUrl = turnUrl;
+        _config.CppAgent.TurnUsername = user;
+        _config.CppAgent.TurnCredential = cred;
+        _configService.SaveConfig(_config);
+        if (SetCppTurnUrlBox is not null) SetCppTurnUrlBox.Text = turnUrl;
+        if (SetCppTurnUserBox is not null) SetCppTurnUserBox.Text = user;
+        if (SetCppTurnCredBox is not null) SetCppTurnCredBox.Password = cred;
+        if (SetCppTurnHintText is not null)
+        {
+            SetCppTurnHintText.Text = detail;
+        }
+
+        // Push into C++ runtime config so the next WebRTC launch uses TURN.
+        ApplyRuntimeSettings();
+        if (force)
+        {
+            ShowToast($"TURN loaded: {turnUrl}");
+            if (SetCppConsoleBox is not null)
+            {
+                SetCppConsoleBox.Text =
+                    $"[TURN FROM CONTROL PLANE]\nurl={turnUrl}\nusername={user}\ncredential=(set, {cred.Length} chars)\n{detail}";
+            }
+        }
     }
 
     private void OnCppApplyBitrateClick(object sender, RoutedEventArgs e)

@@ -1,3 +1,5 @@
+> **HISTORICAL analysis.** Current production assessment: [PRODUCTION_READINESS.md](./PRODUCTION_READINESS.md).
+
 # 06 — MCP Protocol Audit
 
 **Scope:** `src/ai_bridge/server.py` (1,701 LOC), `src/ai_bridge/tools.py` (2,990 LOC),

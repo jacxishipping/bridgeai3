@@ -1,0 +1,19 @@
+{
+  "schema_version": "1.0.0",
+  "name_for_human": "AI Bridge Operator",
+  "name_for_model": "ai_bridge_operator",
+  "description_for_human": "Observe and control authorized AI Bridge fleet desktops — screenshots, UI tools, tasks, sessions, and audit — from ChatGPT.",
+  "description_for_model": "Call AI Bridge control-plane Actions to list devices, capture desktop frames, send input, create/poll tasks, manage live sessions, and read policies/audit. Always use real Action results; never invent device state. Honor approval and emergency-stop responses. Prefer observe then act. Confirm destructive shell or file operations once.",
+  "auth": {
+    "type": "service_http",
+    "authorization_type": "bearer"
+  },
+  "api": {
+    "type": "openapi",
+    "schema_file": "openapi.yaml",
+    "is_user_authenticated": false
+  },
+  "logo_url": "",
+  "contact_email": "",
+  "legal_info_url": ""
+}

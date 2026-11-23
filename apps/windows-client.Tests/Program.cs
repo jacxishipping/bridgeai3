@@ -899,5 +899,155 @@ await RunTest("DeviceAgentRuntimeService: AutoVerifyVisualActions defaults true 
     return Task.CompletedTask;
 });
 
+// 36. Live JPEG frame parity (scale/quality) + secure-desktop honesty fields
+await RunTest("ScreenCaptureService: CaptureLiveFrame returns JPEG mime with scale/quality", () =>
+{
+    var dir = Path.Combine(Path.GetTempPath(), $"aib-live-{Guid.NewGuid():N}");
+    Directory.CreateDirectory(dir);
+    try
+    {
+        var frame = ScreenCaptureService.CaptureLiveFrame(dir, monitorIndex: 0, scale: 0.5, quality: 60);
+        Assert(frame.MimeType == "image/jpeg", $"Expected image/jpeg, got {frame.MimeType}");
+        Assert(Math.Abs(frame.Scale - 0.5) < 0.001, $"Expected scale 0.5, got {frame.Scale}");
+        Assert(frame.Quality == 60, $"Expected quality 60, got {frame.Quality}");
+        if (frame.Available)
+        {
+            Assert(!string.IsNullOrWhiteSpace(frame.Base64Data), "Expected base64 JPEG data");
+            Assert(frame.Width > 0 && frame.Height > 0, "Expected positive dimensions");
+            Assert(frame.OrigWidth >= frame.Width && frame.OrigHeight >= frame.Height, "Expected orig >= scaled");
+        }
+        else
+        {
+            Assert(!string.IsNullOrWhiteSpace(frame.Note), "Unavailable frames must explain why");
+        }
+    }
+    finally
+    {
+        try { Directory.Delete(dir, recursive: true); } catch { /* ignore */ }
+    }
+    return Task.CompletedTask;
+});
+
+// 37. Pipe HMAC never silently uses the insecure legacy default
+await RunTest("NamedPipeBridge: RequireHmacSecret refuses legacy default and regenerates", () =>
+{
+    Assert(NamedPipeBridge.IsInsecureDefaultSecret(NamedPipeBridge.DefaultPipeSecret), "Expected default marked insecure");
+    NamedPipeBridge.ActiveHmacSecret = NamedPipeBridge.DefaultPipeSecret;
+    var secret = NamedPipeBridge.RequireHmacSecret(NamedPipeBridge.DefaultPipeSecret);
+    Assert(!NamedPipeBridge.IsInsecureDefaultSecret(secret), "Expected regenerated secret, not legacy default");
+    Assert(secret.Length >= 32, "Expected sufficiently long secret");
+    var wire = NamedPipeBridge.BuildCppWireMessage("HEARTBEAT_PING", new { client = "test" }, secret);
+    Assert(NamedPipeBridge.TryParseCppWireMessage(wire, secret, out var msgType, out _), msgType == "HEARTBEAT_PING" ? "ok" : "parse failed");
+    return Task.CompletedTask;
+});
+
+// 38. NativeToolExecutor capture_desktop_frame returns mime_type image/jpeg
+await RunTest("NativeToolExecutor: capture_desktop_frame returns JPEG contract fields", async () =>
+{
+    var tempWs = Path.Combine(Path.GetTempPath(), $"aib-frame-{Guid.NewGuid():N}");
+    Directory.CreateDirectory(tempWs);
+    try
+    {
+        var cfg = new AgentGuiConfig
+        {
+            Workspace = tempWs,
+            ScreenshotDirectory = Path.Combine(tempWs, "shots"),
+            Policy = new AgentPolicyConfig { AllowTier3 = true, MaxTierUnattended = 3 },
+        };
+        var exec = new NativeToolExecutor(new SystemMonitorService(), cfg.ScreenshotDirectory);
+        var (ok, res) = await exec.ExecuteAsync(
+            "capture_desktop_frame",
+            "{\"scale\":0.5,\"quality\":55,\"monitor_index\":0}",
+            cfg,
+            CancellationToken.None);
+        Assert(ok, $"Expected capture_desktop_frame success, got: {res}");
+        using var doc = JsonDocument.Parse(res.Contains('{') ? res[res.IndexOf('{')..] : res);
+        // Result may be wrapped — try root or nested
+        var root = doc.RootElement;
+        if (root.TryGetProperty("result", out var nested)) root = nested;
+        if (root.TryGetProperty("mime_type", out var mime))
+        {
+            Assert(mime.GetString() == "image/jpeg", $"Expected image/jpeg mime, got {mime}");
+        }
+        else
+        {
+            // Executor may return object serialized with mime_type at top level of success payload
+            Assert(res.Contains("image/jpeg") || res.Contains("mime_type"), $"Expected JPEG contract in: {res}");
+        }
+    }
+    finally
+    {
+        try { Directory.Delete(tempWs, recursive: true); } catch { /* ignore */ }
+    }
+});
+
+// 39. Input permission sync no longer auto-grants on TryMoveMouse
+await RunTest("CppNativeBridge: SyncInputPermissions deny blocks TryMoveMouse without re-enable", () =>
+{
+    CppNativeBridge.SyncInputPermissions(allowDesktopControl: false, allowClipboard: false);
+    Assert(!CppNativeBridge.InputDesktopAllowed, "Expected desktop input denied");
+    // When denied, TryMoveMouse must return false even if DLL is present (no silent re-grant).
+    Assert(!CppNativeBridge.TryMoveMouse(10, 10), "Denied permissions must block TryMoveMouse");
+    Assert(!CppNativeBridge.InputDesktopAllowed, "TryMoveMouse must not flip InputDesktopAllowed back on");
+    return Task.CompletedTask;
+});
+
+// 40. Device Functions stay aligned with server effective policy
+await RunTest("AgentFunctionPermissions: SyncFromEffectivePolicy aligns IsToolAllowed with Policy", () =>
+{
+    var locked = ControlPlaneClient.ParsePolicyFromJsonElement(
+        JsonDocument.Parse("""
+            {
+              "allow_writes": false,
+              "allow_tier3": false,
+              "allow_file_deletion": false,
+              "allow_shell": false,
+              "desktop_enabled": false,
+              "allow_clipboard": false,
+              "allow_full_pc_access": false,
+              "max_tier_unattended": 2
+            }
+            """).RootElement);
+    var lockedFns = AgentFunctionPermissions.SyncFromEffectivePolicy(locked);
+    Assert(!lockedFns.AllowUiInputAutomation && !lockedFns.AllowShellAndPowerShell && !lockedFns.AllowClipboard,
+        "Locked policy must disable desktop/shell/clipboard functions");
+
+    var open = ControlPlaneClient.ParsePolicyFromJsonElement(
+        JsonDocument.Parse("""
+            {
+              "allow_writes": true,
+              "allow_tier3": true,
+              "allow_file_deletion": true,
+              "allow_shell": true,
+              "desktop_enabled": true,
+              "allow_clipboard": true,
+              "allow_full_pc_access": true,
+              "allow_unrestricted_apps": true,
+              "max_tier_unattended": 4
+            }
+            """).RootElement);
+    var openFns = AgentFunctionPermissions.SyncFromEffectivePolicy(open, new[] { "close_window" });
+    Assert(openFns.AllowUiInputAutomation && openFns.AllowShellAndPowerShell && openFns.AllowClipboard,
+        "Open tier-4 policy must enable desktop/shell/clipboard functions");
+    Assert(openFns.DisabledTools.Contains("close_window"), "Must preserve explicit DisabledTools");
+
+    var cfg = new AgentGuiConfig
+    {
+        DeviceAgent = new DeviceAgentSettings { Functions = openFns },
+        Policy = open,
+    };
+    Assert(DeviceAgentRuntimeService.IsToolAllowed("mouse_click", cfg, out _), "mouse_click allowed after sync");
+    Assert(DeviceAgentRuntimeService.IsToolAllowed("get_clipboard", cfg, out _), "get_clipboard allowed after sync");
+    Assert(DeviceAgentRuntimeService.IsToolAllowed("run_shell", cfg, out _), "run_shell allowed after sync");
+    Assert(!DeviceAgentRuntimeService.IsToolAllowed("close_window", cfg, out _), "DisabledTools still deny close_window");
+
+    cfg.DeviceAgent.Functions = lockedFns;
+    cfg.Policy = locked;
+    Assert(!DeviceAgentRuntimeService.IsToolAllowed("mouse_click", cfg, out _), "mouse_click denied after locked sync");
+    Assert(!DeviceAgentRuntimeService.IsToolAllowed("get_clipboard", cfg, out _), "get_clipboard denied after locked sync");
+    Assert(!DeviceAgentRuntimeService.IsToolAllowed("run_shell", cfg, out _), "run_shell denied after locked sync");
+    return Task.CompletedTask;
+});
+
 Console.WriteLine($"\nSummary: {passed} passed, {failed} failed ({passed + failed} total)");
 return failed > 0 ? 1 : 0;

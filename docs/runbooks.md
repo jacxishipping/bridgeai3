@@ -1,5 +1,7 @@
 # AI Bridge Operational Runbooks & SLOs
 
+**Updated:** 23 November 2026 · [operations.md](./operations.md) · [PRODUCTION_READINESS.md](../analysis/PRODUCTION_READINESS.md)
+
 ## Service Level Objectives (SLOs)
 
 | Signal | Target | Prometheus Metric |

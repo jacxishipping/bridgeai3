@@ -1,7 +1,9 @@
 # Release 1 — Production Proof, Security Review & Supported-Platform Matrix
 
-**Date:** 20 November 2026
-**Verified CI Commit:** `5eb8750` (all 9 CI matrix jobs green across `ubuntu-latest`, `windows-latest`, and `macos-latest`)
+**Date:** 20 November 2026  
+**Verified CI Commit:** `5eb8750` (all 9 CI matrix jobs green across `ubuntu-latest`, `windows-latest`, and `macos-latest`)  
+**Current assessment:** [analysis/PRODUCTION_READINESS.md](../analysis/PRODUCTION_READINESS.md) (23 Nov 2026) — lab GO; controlled fleet CONDITIONAL GO pending hosted/physical RC items below; SaaS NO-GO.  
+**Note:** Branch HEAD may be ahead of `5eb8750`; re-anchor CI green on current HEAD before a signed RC.  
 **Scope:** Release 1 live local-staging deployment proof (PostgreSQL 17.11 + Control Plane + Built React v3 Dashboard + Live Polling Windows Agent + Real Google Chrome WebRTC peer), independent read-only security/architecture review + full P0/P1 remediation, and green cross-platform CI matrix.
 
 ## 1. Release 1 Gate Matrix

@@ -65,7 +65,7 @@ def describe_native_encode() -> dict[str, Any]:
         "fallback": "pyav_screen_track",
         "search_paths": paths[:5],
         "reason": reason,
-        "webrtc_path": "python_aiortc_pyav (native DLL does not replace libwebrtc)",
+        "webrtc_path": "python_aiortc_pyav_or_ai_bridge_desktop",
         "libwebrtc_e2e": os.environ.get("AI_BRIDGE_LIBWEBRTC_E2E_VERIFIED", "").strip().lower()
         in ("1", "true", "yes"),
         "libwebrtc_status": (
@@ -74,11 +74,12 @@ def describe_native_encode() -> dict[str, Any]:
             in ("1", "true", "yes")
             else "unverified"
         ),
-        "shipping_path": "python_aiortc",
+        "shipping_path": "native_libdatachannel_when_available",
         "honesty": (
-            "Fleet WebRTC uses Python aiortc/PyAV. Optional ai_bridge_native.dll only "
-            "provides H.264 encode timing smoke — not a C++ libwebrtc media path. "
-            "See scripts/libwebrtc_e2e_checklist.md."
+            "On Windows, start_webrtc_stream prefers ai_bridge_desktop.exe "
+            "(libdatachannel) when present; otherwise Python aiortc/PyAV. "
+            "Optional ai_bridge_native.dll only provides H.264 encode timing smoke. "
+            "See ai_bridge.native_webrtc and scripts/libwebrtc_e2e_checklist.md."
         ),
     }
 

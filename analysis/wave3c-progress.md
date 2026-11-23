@@ -1,3 +1,5 @@
+> **HISTORICAL analysis.** Current production assessment: [PRODUCTION_READINESS.md](./PRODUCTION_READINESS.md).
+
 # Wave 3C — Agents reliability, WebRTC/native P2s, MCP client, Phase 5 foundation — Progress
 
 Date: 2026-11-17. Repo: `/home/hatch/workspace/ai-bridge-main`, base commit

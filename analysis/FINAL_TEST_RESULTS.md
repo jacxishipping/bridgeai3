@@ -1,3 +1,5 @@
+> **HISTORICAL analysis.** Current production assessment: [PRODUCTION_READINESS.md](./PRODUCTION_READINESS.md).
+
 # FINAL TEST RESULTS — AI Bridge Remediation
 
 **Date:** 2026-11-17 · **Repo:** `~/workspace/ai-bridge-main` · **Head:** `61faa67` (Wave 4)

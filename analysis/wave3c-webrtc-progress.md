@@ -1,3 +1,5 @@
+> **HISTORICAL analysis.** Current production assessment: [PRODUCTION_READINESS.md](./PRODUCTION_READINESS.md).
+
 # Wave 3C Track B — WebRTC P2s + Native Windows P2s — Progress
 
 Date: 2026-11-17. Repo: `/home/hatch/workspace/ai-bridge-main`, commit

@@ -26,6 +26,9 @@ def test_shared_schemas_and_protocols_exist_and_parse():
     assert "permissions" in session_schema["properties"]
     assert input_proto["channel_label"] == "input"
     assert pipe_proto["pipe_name"] == r"\\.\pipe\AIBridgeDesktopPipe"
+    assert "IU" in pipe_proto["security"]["sddl"], "pipe ACL must use Interactive Users (IU), not Authenticated Users (AU)"
+    assert "START_WEBRTC_SESSION" in pipe_proto["message_types"]
+    assert "STOP_WEBRTC_SESSION" in pipe_proto["message_types"]
     assert "screen access must not automatically grant command execution" in perm_matrix["principle"]
     assert perm_matrix["modes"]["view_only"]["human_permissions"]["control_mouse"] is False
     assert perm_matrix["modes"]["human_control"]["ai_allowed"] is False

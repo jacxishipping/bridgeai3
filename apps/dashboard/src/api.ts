@@ -12,6 +12,8 @@ import type {
   DeviceDesktopCapabilities,
   DeviceOverview,
   DeviceRecord,
+  WebRtcIceServer,
+  WebRtcSessionV1,
   EnrollResult,
   FleetHealthSummary,
   FleetTelemetrySummary,
@@ -873,6 +875,77 @@ export class ApiClient {
 
   async getDeviceDesktopCapabilities(deviceId: string): Promise<DeviceDesktopCapabilities> {
     return this.request<DeviceDesktopCapabilities>(`/api/devices/${encodeURIComponent(deviceId)}/desktop/capabilities`);
+  }
+
+  // v1 WebRTC Live Desktop (signaling only — media is peer-to-peer)
+  async getWebRtcIceServers(): Promise<WebRtcIceServer[]> {
+    const res = await this.request<{ ice_servers: WebRtcIceServer[] }>("/api/v1/sessions/ice-servers");
+    return res.ice_servers || [];
+  }
+
+  async createWebRtcSession(payload: {
+    device_id: string;
+    mode?: "view_only" | "human_control" | "ai_assisted";
+    fps?: number;
+    scale?: number;
+    monitor_index?: number;
+    bitrate_kbps?: number;
+    width?: number;
+    height?: number;
+  }): Promise<WebRtcSessionV1> {
+    return this.request<WebRtcSessionV1>("/api/v1/sessions", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async getWebRtcSession(sessionId: string): Promise<WebRtcSessionV1> {
+    return this.request<WebRtcSessionV1>(`/api/v1/sessions/${encodeURIComponent(sessionId)}`);
+  }
+
+  async postWebRtcAnswer(sessionId: string, sdp: string, type = "answer"): Promise<Record<string, unknown>> {
+    return this.request(`/api/v1/sessions/${encodeURIComponent(sessionId)}/answer`, {
+      method: "POST",
+      body: JSON.stringify({ sdp, type }),
+    });
+  }
+
+  async postWebRtcIce(
+    sessionId: string,
+    candidate: RTCIceCandidateInit,
+    from: "viewer" | "agent" = "viewer",
+  ): Promise<Record<string, unknown>> {
+    return this.request(`/api/v1/sessions/${encodeURIComponent(sessionId)}/ice`, {
+      method: "POST",
+      body: JSON.stringify({ from, candidate }),
+    });
+  }
+
+  async setWebRtcSessionMode(
+    sessionId: string,
+    mode: "view_only" | "human_control" | "ai_assisted",
+  ): Promise<WebRtcSessionV1> {
+    return this.request<WebRtcSessionV1>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/mode`, {
+      method: "PATCH",
+      body: JSON.stringify({ mode }),
+    });
+  }
+
+  async terminateWebRtcSession(sessionId: string): Promise<WebRtcSessionV1> {
+    return this.request<WebRtcSessionV1>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/terminate`, {
+      method: "POST",
+      body: JSON.stringify({}),
+    });
+  }
+
+  async sessionClipboard(
+    sessionId: string,
+    payload: { action: "get" | "set"; text?: string; paste?: boolean },
+  ): Promise<{ ok: boolean; action: string; text?: string; length?: number }> {
+    return this.request(`/api/v1/sessions/${encodeURIComponent(sessionId)}/clipboard`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
   }
 
   async listMemorySnippets(workspace?: string): Promise<{ items: MemorySnippetRecord[]; count: number }> {

@@ -1,3 +1,5 @@
+> **HISTORICAL analysis.** Current production assessment: [PRODUCTION_READINESS.md](./PRODUCTION_READINESS.md).
+
 # 04 — Module-by-Module Analysis: Python Core (`src/ai_bridge/`)
 
 **Scope:** `src/ai_bridge/*.py` (26 files) + `src/ai_bridge/connectors/` (5 files).

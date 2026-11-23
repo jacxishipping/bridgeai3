@@ -1,3 +1,5 @@
+> **HISTORICAL analysis.** Current production assessment: [PRODUCTION_READINESS.md](./PRODUCTION_READINESS.md).
+
 # 20 — Refactoring Roadmap
 
 > **Method.** Priorities P0–P4 per the brief. Every P0 and every P1 row from report 17 appears here — P0 items get a full entry; P1 items get a full row in the §3 tables (all ten fields: ID, priority, affected files, root cause, recommended change, expected benefits, complexity, risk, dependencies, required tests, rollback strategy — root cause and files are stated in full in report 17 and summarised here). P2–P4 are summarised as workstreams. **Necessary fixes** (close a bypass, stop data loss, make a claim true) are separated from **optional redesign** (§5). Nothing here modifies application source code — this is a plan.

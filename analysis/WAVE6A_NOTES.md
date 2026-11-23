@@ -1,3 +1,5 @@
+> **HISTORICAL analysis.** Current production assessment: [PRODUCTION_READINESS.md](./PRODUCTION_READINESS.md).
+
 # Wave 6A working notes (coordinator scratch — not a deliverable)
 
 ## F-05-02 — CLOSED (code + configs + live proof)

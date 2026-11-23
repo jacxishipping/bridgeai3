@@ -29,30 +29,8 @@ std::atomic<bool> g_stop{false};
 void on_signal(int) { g_stop.store(true); }
 
 std::string ExtractJsonField(const std::string& json, const std::string& key) {
-    // F08-15: hand-rolled JSON extraction — see the full justification
-    // in windows-agent/src/webrtc/http_signaling.cpp (no JSON library
-    // is vendored in this tree; this extracts a fixed set of string
-    // fields from the agent's own config file and must not grow into
-    // a general parser).
-    std::string needle = "\"" + key + "\"";
-    size_t pos = json.find(needle);
-    if (pos == std::string::npos) return {};
-    pos = json.find(':', pos + needle.size());
-    if (pos == std::string::npos) return {};
-    pos = json.find('"', pos + 1);
-    if (pos == std::string::npos) return {};
-    ++pos;
-    std::string out;
-    while (pos < json.size()) {
-        char c = json[pos++];
-        if (c == '\\' && pos < json.size()) {
-            out.push_back(json[pos++]);
-            continue;
-        }
-        if (c == '"') break;
-        out.push_back(c);
-    }
-    return out;
+    // Shared implementation decodes \\uXXXX (needed for DPAPI base64 '+').
+    return aibridge::security::ExtractJsonStringField(json, key);
 }
 
 struct SupervisorRegistration {
@@ -160,6 +138,9 @@ int main(int argc, char* argv[]) {
         }
     }
 
+    bool allow_mouse = false;
+    bool allow_keyboard = false;
+    bool allow_clipboard = false;
     if (!config_path.empty()) {
         std::ifstream ifs(config_path);
         if (ifs) {
@@ -173,6 +154,11 @@ int main(int argc, char* argv[]) {
             if (turn_url.empty()) turn_url = ExtractJsonField(body, "turn_url");
             if (turn_username.empty()) turn_username = ExtractJsonField(body, "turn_username");
             if (turn_credential.empty()) turn_credential = ExtractJsonField(body, "turn_credential");
+            allow_mouse = body.find("\"allow_desktop_control\":true") != std::string::npos ||
+                          body.find("\"allow_desktop_control\": true") != std::string::npos;
+            allow_keyboard = allow_mouse;
+            allow_clipboard = body.find("\"allow_clipboard\":true") != std::string::npos ||
+                              body.find("\"allow_clipboard\": true") != std::string::npos;
         }
     }
     // F13-05: environment fallback for TURN (same names as the Python
@@ -195,6 +181,10 @@ int main(int argc, char* argv[]) {
     // loudly if unsealing fails — never treat the sealed value as the
     // secret. (A --device-token passed on the CLI is unsealed too if it
     // carries the prefix; a plaintext token passes through unchanged.)
+    // WebRTC session launches often supply a plaintext --device-token on the
+    // CLI while the companion runtime JSON still has a sealed pipe_secret.
+    // In that mode, a pipe_secret unseal failure is non-fatal: continue
+    // unsupervised so offer/answer can still be produced.
     {
         std::string unsealed;
         if (!aibridge::security::DpapiSecretStore::UnsealIfSealed(device_token, unsealed)) {
@@ -203,10 +193,17 @@ int main(int argc, char* argv[]) {
         }
         device_token = unsealed;
         if (!aibridge::security::DpapiSecretStore::UnsealIfSealed(pipe_secret, unsealed)) {
-            std::cerr << "[AI Bridge] FATAL: could not DPAPI-unseal pipe_secret; refusing to run.\n";
-            return 1;
+            if (!session_id.empty() && !control_url.empty() && !device_token.empty()) {
+                std::cerr << "[AI Bridge] WARNING: could not DPAPI-unseal pipe_secret; "
+                          << "continuing WebRTC session without supervisor pipe auth.\n";
+                pipe_secret.clear();
+            } else {
+                std::cerr << "[AI Bridge] FATAL: could not DPAPI-unseal pipe_secret; refusing to run.\n";
+                return 1;
+            }
+        } else {
+            pipe_secret = unsealed;
         }
-        pipe_secret = unsealed;
     }
     SupervisorRegistration supervisor_reg = RegisterWithSupervisorPipe(pipe_name, pipe_secret);
     // F08-04: the supervisor's verdict is reported, not discarded.
@@ -254,6 +251,9 @@ int main(int argc, char* argv[]) {
         cfg.turn_url = turn_url;
         cfg.turn_username = turn_username;
         cfg.turn_credential = turn_credential;
+        cfg.allow_mouse = allow_mouse;
+        cfg.allow_keyboard = allow_keyboard;
+        cfg.allow_clipboard = allow_clipboard;
 
         auto backend = aibridge::webrtc::DescribeAvailablePeerBackend();
         auto session = aibridge::webrtc::CreatePeerConnectionSession(cfg);

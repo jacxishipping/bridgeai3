@@ -1,0 +1,613 @@
+openapi: 3.1.0
+info:
+  title: AI Bridge — ChatGPT Actions
+  description: |
+    Advanced Custom GPT Actions for the AI Bridge control plane.
+    Control authorized Windows/Linux/macOS fleet devices — list hosts,
+    queue policy-gated tools, approve gated tasks, inspect audit,
+    capture desktop frames / fleet stills, inject input, and manage
+    live WebRTC sessions.
+
+    Replace the server URL with your TLS control-plane origin
+    (for example https://clideos.us). Authenticate with a Bearer admin
+    or operator session token. Never paste tokens into chat.
+  version: 1.0.0
+  contact:
+    name: AI Bridge
+    url: https://github.com/jacxishipping/bridgeai3
+servers:
+  - url: https://clideos.us
+    description: Production control plane (edit to your deployment)
+paths:
+  /health/ready:
+    get:
+      operationId: healthReady
+      summary: Control plane health
+      description: Check database connectivity, emergency-stop state, and readiness. No auth required.
+      security: []
+      responses:
+        "200":
+          description: Plane is ready
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthReady"
+
+  /api/v1/devices:
+    get:
+      operationId: listDevices
+      summary: List fleet devices
+      description: Return enrolled devices for the caller's tenant (online/offline, OS, last seen).
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Device list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeviceList"
+
+  /api/v1/devices/{device_id}:
+    get:
+      operationId: getDevice
+      summary: Get device details
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/DeviceId"
+      responses:
+        "200":
+          description: Device record
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "404":
+          description: Device not found
+
+  /api/v1/devices/{device_id}/status:
+    get:
+      operationId: getDeviceStatus
+      summary: Live device status
+      description: Online state, last seen, and optional telemetry snapshot.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/DeviceId"
+      responses:
+        "200":
+          description: Status payload
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+  /api/v1/devices/{device_id}/monitors:
+    get:
+      operationId: listDeviceMonitors
+      summary: List monitors
+      description: Display topology for desktop capture / streaming.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/DeviceId"
+      responses:
+        "200":
+          description: Monitor list
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+  /api/v1/devices/{device_id}/ui-elements:
+    get:
+      operationId: getUiElements
+      summary: Inspect on-screen UI elements
+      description: Query interactive UI elements on the remote desktop (buttons, inputs, windows).
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/DeviceId"
+        - name: max_elements
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 40
+      responses:
+        "200":
+          description: UI element tree / list
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+  /api/v1/devices/{device_id}/files:
+    get:
+      operationId: listDeviceFiles
+      summary: List files on device
+      description: Browse a path on the device within policy allowlists.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/DeviceId"
+        - name: path
+          in: query
+          required: true
+          schema:
+            type: string
+            example: "C:\\Users"
+      responses:
+        "200":
+          description: Directory listing
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+  /api/devices/{device_id}/desktop/frame:
+    get:
+      operationId: getDesktopFrame
+      summary: Capture desktop screenshot
+      description: |
+        Fetch a still frame from the device desktop (JPEG metadata + content).
+        Prefer this for "what is on screen?" before issuing input or shell tools.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/DeviceId"
+        - name: scale
+          in: query
+          schema:
+            type: number
+            minimum: 0.2
+            maximum: 1
+            default: 0.5
+        - name: quality
+          in: query
+          schema:
+            type: integer
+            minimum: 20
+            maximum: 95
+            default: 70
+      responses:
+        "200":
+          description: Desktop frame payload
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+  /api/devices/{device_id}/desktop/input:
+    post:
+      operationId: sendDesktopInput
+      summary: Send mouse/keyboard input
+      description: |
+        Inject desktop input (click, type, key). High risk — confirm intent with the
+        user for destructive actions. Honors human-takeover locks on the host.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/DeviceId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DesktopInput"
+      responses:
+        "200":
+          description: Input accepted
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+  /api/v1/tasks:
+    get:
+      operationId: listTasks
+      summary: List recent tasks
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: device_id
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Task list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TaskList"
+    post:
+      operationId: createTask
+      summary: Queue a tool task on a device
+      description: |
+        Enqueue a policy-gated tool (screenshot, shell, file, UI automation, etc.).
+        Tier 3/4 tools may return needs_approval instead of running immediately.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateTask"
+      responses:
+        "200":
+          description: Task queued or awaiting approval
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreateTaskResult"
+
+  /api/v1/tasks/{task_id}:
+    get:
+      operationId: getTask
+      summary: Get task status / result
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: task_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Task record
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "404":
+          description: Not found
+
+  /api/v1/sessions:
+    get:
+      operationId: listSessions
+      summary: List live desktop sessions
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: device_id
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Session list
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+    post:
+      operationId: createSession
+      summary: Start a live desktop WebRTC session
+      description: Opens a live stream session on a Windows desktop host (H.264).
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateSession"
+      responses:
+        "200":
+          description: Session created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+  /api/v1/sessions/{session_id}/terminate:
+    post:
+      operationId: terminateSession
+      summary: End a live session
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Session terminated
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+  /api/v1/policies:
+    get:
+      operationId: getPolicies
+      summary: Read effective policy
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: device_id
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Policy document
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+  /api/v1/audit:
+    get:
+      operationId: getAuditLog
+      summary: Recent audit events
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Audit entries
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+  /api/approvals:
+    get:
+      operationId: listApprovals
+      summary: List pending / recent approvals
+      description: |
+        Human-in-the-loop gates for Tier 3/4 tools. When createTask returns
+        needs_approval, tell the user to approve on the dashboard (or via
+        decideApproval), then poll getTask.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Approval list
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+  /api/approvals/{approval_id}/decide:
+    post:
+      operationId: decideApproval
+      summary: Approve or deny a pending tool
+      description: Operator decision for a gated task. Prefer explicit user confirmation before approving destructive tools.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: approval_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DecideApproval"
+      responses:
+        "200":
+          description: Decision recorded
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+  /api/fleet/desktop/frames:
+    get:
+      operationId: listFleetDesktopFrames
+      summary: Latest frames across the fleet
+      description: Operator overview of recent desktop stills (when agents are publishing frames).
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: os
+          in: query
+          schema:
+            type: string
+            example: windows
+      responses:
+        "200":
+          description: Per-device frame snapshot
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: opaque
+      description: AI Bridge admin token or operator session Bearer token.
+
+  parameters:
+    DeviceId:
+      name: device_id
+      in: path
+      required: true
+      schema:
+        type: string
+      description: Enrolled device id (or `local` for plane-local tools where allowed).
+
+  schemas:
+    HealthReady:
+      type: object
+      additionalProperties: true
+      properties:
+        status:
+          type: string
+          example: ready
+        emergency_stop:
+          type: boolean
+
+    DeviceList:
+      type: object
+      properties:
+        devices:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        count:
+          type: integer
+
+    TaskList:
+      type: object
+      properties:
+        tasks:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+
+    CreateTask:
+      type: object
+      required: [device_id, tool]
+      properties:
+        device_id:
+          type: string
+          description: Target device id
+        tool:
+          type: string
+          description: |
+            Tool name, e.g. desktop_get_screenshot, desktop_get_ui_elements,
+            get_system_info, run_shell, read_file, write_file,
+            desktop_mouse_click, desktop_type_text
+          example: desktop_get_screenshot
+        args:
+          type: object
+          additionalProperties: true
+          description: Tool-specific arguments (e.g. command for run_shell, path for read_file)
+        human_initiated:
+          type: boolean
+          default: true
+          description: Set true for interactive ChatGPT operator requests
+        tenant:
+          type: string
+
+    DecideApproval:
+      type: object
+      required: [decision]
+      properties:
+        decision:
+          type: string
+          enum: [approved, denied]
+        reason:
+          type: string
+
+    CreateTaskResult:
+      type: object
+      properties:
+        task_id:
+          type: string
+        device_id:
+          type: string
+        tool:
+          type: string
+        status:
+          type: string
+        tier:
+          type: integer
+        approval_id:
+          type: string
+          nullable: true
+
+    CreateSession:
+      type: object
+      properties:
+        device_id:
+          type: string
+          default: local
+        mode:
+          type: string
+          enum: [ai_assisted, human_control, view_only]
+          default: ai_assisted
+        codec:
+          type: string
+          default: H264
+        width:
+          type: integer
+          default: 1920
+        height:
+          type: integer
+          default: 1080
+        fps:
+          type: integer
+          default: 30
+        bitrate_kbps:
+          type: integer
+          default: 4500
+        scale:
+          type: number
+          default: 1.0
+        monitor_index:
+          type: integer
+          default: 0
+
+    DesktopInput:
+      type: object
+      required: [action]
+      properties:
+        action:
+          type: string
+          description: |
+            click | double_click | right_click | middle_click | move | type | key | scroll
+          example: click
+        x:
+          type: number
+          description: Pixel X, or 0–1 if normalized=true
+        y:
+          type: number
+          description: Pixel Y, or 0–1 if normalized=true
+        normalized:
+          type: boolean
+          default: true
+        text:
+          type: string
+        key:
+          type: string
+        button:
+          type: string
+          enum: [left, right, middle]
+          default: left
+        clicks:
+          type: integer
+          default: 1
+        delta:
+          type: integer
+          default: -120
+          description: Scroll wheel delta (negative = down)
+        screen_width:
+          type: integer
+          default: 1920
+        screen_height:
+          type: integer
+          default: 1080

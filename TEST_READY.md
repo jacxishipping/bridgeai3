@@ -1,5 +1,7 @@
 # TEST_READY: AI Bridge Enterprise Dashboard E2E Test Suite
 
+> **Note (23 Nov 2026):** Product-level readiness is tracked in [analysis/PRODUCTION_READINESS.md](analysis/PRODUCTION_READINESS.md). This file is the dashboard E2E suite record from Wave 2B and may lag CI dashboard job status.
+
 **Document Version**: 1.1.0
 **Status**: Updated 2026-11-17 (Wave 2B) — supersedes the 2026-11-02 "100% pass" claim, which is withdrawn below.
 **Workspace Target**: `apps/dashboard`

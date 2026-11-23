@@ -42,6 +42,21 @@ def test_emergency_stop_refresh_converges_workers(tmp_path):
     assert plane_state.is_emergency_stop(app2.state.conn, app2.state) is True
 
 
+def test_health_endpoint_refreshes_stale_emergency_stop(tmp_path):
+    """/health must not report a stale in-memory e-stop across workers."""
+    from fastapi.testclient import TestClient
+
+    app = create_app(admin_token="adm-p9h", db_path=tmp_path / "estop-health.db")
+    app2 = create_app(admin_token="adm-p9h", db_path=tmp_path / "estop-health.db")
+    # Simulate a worker that never saw the admin POST locally.
+    app2.state.emergency_stop = False
+    plane_state.set_emergency_stop(app.state.conn, True)
+    client = TestClient(app2)
+    body = client.get("/health").json()
+    assert body["emergency_stop"] is True
+    assert app2.state.emergency_stop is True
+
+
 def test_poller_mirror_emergency_stop_to_webrtc():
     set_emergency_stop(False)
     streamer = webrtc_stream.AgentStreamer("s-test", object(), monitor_index=0)

@@ -1,5 +1,7 @@
 # AI Bridge — Phase 1 Technical Audit & Advanced Roadmap (Phases 2–9)
 
+> Prefer [ROADMAP.md](./ROADMAP.md) and [PRODUCTION_READINESS.md](../analysis/PRODUCTION_READINESS.md) for current delivery status.
+
 **Audit date:** 2025-11-14 (source-verified against `C:\Users\Administrator\ai-bridge`)  
 **Phase 2–9 shipped:** 2026-11-14 — Phases 2–8 via `tests/unit/test_orchestration_phases.py` + `test_phase8_deep.py`; **Phase 9** via `tests/unit/test_phase9_deep.py`.  
 **Scope:** Phase 1 audit preserved below as historical baseline; Phases 2–9 reflect **current shipped code**.

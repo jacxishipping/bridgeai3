@@ -5,6 +5,7 @@ using System.IO.Pipes;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -22,10 +23,31 @@ namespace AIBridgeClient.Services;
 public static class NamedPipeBridge
 {
     public const string PipeName = "AIBridgeDesktopPipe";
+    /// <summary>Legacy insecure default — never use silently. Kept only to detect/refuse misconfiguration.</summary>
     public const string DefaultPipeSecret = "aibridge-local-pipe-hmac-v1";
     public static string ActivePipeName { get; set; } = PipeName;
-    public static string? ActiveHmacSecret { get; set; } = DefaultPipeSecret;
+    public static string? ActiveHmacSecret { get; set; }
     public const int MaxMessageBytes = 65536;
+
+    public static bool IsInsecureDefaultSecret(string? secret) =>
+        string.Equals(secret?.Trim(), DefaultPipeSecret, StringComparison.Ordinal);
+
+    /// <summary>
+    /// Resolve the active pipe HMAC. Never falls back to <see cref="DefaultPipeSecret"/>.
+    /// Generates a cryptographically random secret when none is configured.
+    /// </summary>
+    public static string RequireHmacSecret(string? preferred = null)
+    {
+        var candidate = !string.IsNullOrWhiteSpace(preferred)
+            ? preferred.Trim()
+            : (!string.IsNullOrWhiteSpace(ActiveHmacSecret) ? ActiveHmacSecret!.Trim() : null);
+        if (string.IsNullOrWhiteSpace(candidate) || IsInsecureDefaultSecret(candidate))
+        {
+            candidate = Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(24));
+        }
+        ActiveHmacSecret = candidate;
+        return candidate;
+    }
 
     private static Process? _managedServiceProcess;
     private static Process? _managedWebRtcProcess;
@@ -97,7 +119,12 @@ public static class NamedPipeBridge
             try
             {
                 var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-                var cfgPath = Path.Combine(home, ".ai-bridge", "cpp_service_runtime.json");
+                var cfgDir = Path.Combine(home, ".ai-bridge");
+                // Prefer sealed runtime JSON (DPAPI + \\uXXXX extract fixed);
+                // fall back to plaintext companion when sealed is missing.
+                var plainCfg = Path.Combine(cfgDir, "cpp_service_runtime.plain.json");
+                var sealedCfg = Path.Combine(cfgDir, "cpp_service_runtime.json");
+                var cfgPath = File.Exists(sealedCfg) ? sealedCfg : (File.Exists(plainCfg) ? plainCfg : null);
                 var args = BuildCppWebRtcArguments(controlUrl, deviceToken, sessionId, monitorIndex, fps, bitrateKbps, cfgPath);
                 var psi = new ProcessStartInfo
                 {
@@ -107,13 +134,43 @@ public static class NamedPipeBridge
                     CreateNoWindow = true,
                     WindowStyle = ProcessWindowStyle.Hidden,
                     WorkingDirectory = Path.GetDirectoryName(desktopExe) ?? AppContext.BaseDirectory,
+                    RedirectStandardError = true,
+                    RedirectStandardOutput = true,
                 };
                 _managedWebRtcProcess = Process.Start(psi);
                 if (_managedWebRtcProcess is null)
                 {
                     return (false, "Failed to launch ai_bridge_desktop.exe.");
                 }
-                return (true, $"Started C++20 H.264 WebRTC agent (PID {_managedWebRtcProcess.Id}, {Math.Clamp(fps, 1, 60)} FPS @ {Math.Clamp(bitrateKbps, 250, 50_000)} kbps).");
+                var pid = _managedWebRtcProcess.Id;
+                // Drain a short window of stderr so early fatals (no backend,
+                // DPAPI, missing session) surface instead of a false "started".
+                var errBuf = new StringBuilder();
+                var outBuf = new StringBuilder();
+                _managedWebRtcProcess.ErrorDataReceived += (_, e) =>
+                {
+                    if (!string.IsNullOrEmpty(e.Data)) errBuf.AppendLine(e.Data);
+                };
+                _managedWebRtcProcess.OutputDataReceived += (_, e) =>
+                {
+                    if (!string.IsNullOrEmpty(e.Data)) outBuf.AppendLine(e.Data);
+                };
+                _managedWebRtcProcess.BeginErrorReadLine();
+                _managedWebRtcProcess.BeginOutputReadLine();
+                var exitedEarly = _managedWebRtcProcess.WaitForExit(1500);
+                if (exitedEarly || _managedWebRtcProcess.HasExited)
+                {
+                    var code = _managedWebRtcProcess.HasExited ? _managedWebRtcProcess.ExitCode : -1;
+                    var detail = (errBuf.ToString() + outBuf.ToString()).Trim();
+                    if (string.IsNullOrWhiteSpace(detail))
+                    {
+                        detail = $"ai_bridge_desktop.exe exited immediately (code {code}).";
+                    }
+                    try { _managedWebRtcProcess.Dispose(); } catch { }
+                    _managedWebRtcProcess = null;
+                    return (false, detail.Length > 500 ? detail[..500] : detail);
+                }
+                return (true, $"Started C++20 H.264 WebRTC agent (PID {pid}, {Math.Clamp(fps, 1, 60)} FPS @ {Math.Clamp(bitrateKbps, 250, 50_000)} kbps).");
             }
             catch (Exception ex)
             {
@@ -200,10 +257,7 @@ public static class NamedPipeBridge
     {
         var targetPipe = NormalizePipeName(pipeName);
         ActivePipeName = targetPipe;
-        var secret = string.IsNullOrWhiteSpace(hmacSecret)
-            ? (string.IsNullOrWhiteSpace(ActiveHmacSecret) ? DefaultPipeSecret : ActiveHmacSecret!)
-            : hmacSecret!;
-        ActiveHmacSecret = secret;
+        var secret = RequireHmacSecret(hmacSecret);
 
         var cfg = cppSettings ?? new CppAgentSettings();
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
@@ -211,32 +265,16 @@ public static class NamedPipeBridge
         Directory.CreateDirectory(cfgDir);
         var cfgPath = Path.Combine(cfgDir, "cpp_service_runtime.json");
         var desktopExe = FindCppExecutable("ai_bridge_desktop.exe") ?? "";
-
-        try
-        {
-            var cfgJson = JsonSerializer.Serialize(new
-            {
-                pipe_name = $@"\\.\pipe\{targetPipe}",
-                pipe_secret = secret,
-                control_url = controlUrl ?? "",
-                device_token = deviceToken ?? "",
-                desktop_agent_path = desktopExe,
-                turn_url = cfg.TurnUrl ?? "",
-                turn_username = cfg.TurnUsername ?? "",
-                turn_credential = cfg.TurnCredential ?? "",
-                target_fps = Math.Clamp(cfg.H264TargetFps, 1, 60),
-                bitrate_kbps = Math.Clamp(cfg.H264BitrateKbps, 250, 50_000),
-                keyframe_interval_sec = Math.Clamp(cfg.H264KeyframeIntervalSec, 1, 15),
-                prefer_dxgi = cfg.PreferDxgiCapture,
-                prefer_hardware_h264 = cfg.H264PreferHardware,
-                adaptive_bitrate = cfg.H264AdaptiveBitrate,
-            }, new JsonSerializerOptions { WriteIndented = true });
-            File.WriteAllText(cfgPath, cfgJson, Encoding.UTF8);
-        }
-        catch
-        {
-            // Non-fatal if config write fails
-        }
+        WriteRuntimeConfig(
+            cfgPath,
+            targetPipe,
+            secret,
+            controlUrl ?? "",
+            deviceToken ?? "",
+            desktopExe,
+            cfg,
+            allowDesktopControl: CppNativeBridge.InputDesktopAllowed,
+            allowClipboard: CppNativeBridge.InputClipboardAllowed);
 
         if (IsDesktopAgentAvailable(targetPipe))
         {
@@ -376,9 +414,7 @@ public static class NamedPipeBridge
 
     public static string BuildCppWireMessage(string messageType, object payload, string? hmacSecret = null)
     {
-        var secret = string.IsNullOrWhiteSpace(hmacSecret)
-            ? (string.IsNullOrWhiteSpace(ActiveHmacSecret) ? DefaultPipeSecret : ActiveHmacSecret!)
-            : hmacSecret!;
+        var secret = RequireHmacSecret(hmacSecret);
         var payloadJson = payload is string s ? s : JsonSerializer.Serialize(payload);
         Span<byte> nonceBytes = stackalloc byte[16];
         RandomNumberGenerator.Fill(nonceBytes);
@@ -439,9 +475,7 @@ public static class NamedPipeBridge
         string? pipeName = null)
     {
         var pipeTarget = NormalizePipeName(pipeName);
-        var secret = string.IsNullOrWhiteSpace(hmacSecret)
-            ? (string.IsNullOrWhiteSpace(ActiveHmacSecret) ? DefaultPipeSecret : ActiveHmacSecret!)
-            : hmacSecret!;
+        var secret = RequireHmacSecret(hmacSecret);
 
         if (!IsDesktopAgentAvailable(pipeTarget))
         {
@@ -604,7 +638,40 @@ public static class NamedPipeBridge
 
     public static Task<(bool Ok, string Response)> UpdateSessionPermissionsAsync(AgentPolicyConfig policy, CancellationToken ct = default)
     {
+        // Keep DLL (in-proc), pipe supervisor, and desktop WebRTC runtime config in sync.
         CppNativeBridge.SyncInputPermissions(policy.AllowDesktopControl, policy.AllowClipboard);
+        try
+        {
+            var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            var cfgPath = Path.Combine(home, ".ai-bridge", "cpp_service_runtime.json");
+            var cfgDir = Path.GetDirectoryName(cfgPath)!;
+            Directory.CreateDirectory(cfgDir);
+            WriteRuntimeConfig(
+                cfgPath,
+                ActivePipeName,
+                RequireHmacSecret(),
+                controlUrl: ReadRuntimeString(cfgPath, "control_url"),
+                deviceToken: ReadRuntimeString(cfgPath, "device_token"),
+                desktopExe: FindCppExecutable("ai_bridge_desktop.exe") ?? ReadRuntimeString(cfgPath, "desktop_agent_path"),
+                cfg: new CppAgentSettings(),
+                allowDesktopControl: policy.AllowDesktopControl,
+                allowClipboard: policy.AllowClipboard,
+                preserveExistingMediaSettings: true);
+            // Sidecar file polled by ai_bridge_desktop.exe during an active WebRTC session.
+            File.WriteAllText(
+                Path.Combine(cfgDir, "session_permissions.json"),
+                JsonSerializer.Serialize(new
+                {
+                    allow_desktop_control = policy.AllowDesktopControl,
+                    allow_clipboard = policy.AllowClipboard,
+                    updated_at = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
+                }),
+                Encoding.UTF8);
+        }
+        catch
+        {
+            // Non-fatal: pipe + DLL still updated below.
+        }
         return SendCommandAsync("UPDATE_SESSION_PERMISSIONS", new
         {
             allow_writes = policy.AllowWrites,
@@ -620,5 +687,144 @@ public static class NamedPipeBridge
             allowed_apps = policy.AllowedApps,
             allowed_commands = policy.AllowedCommands,
         }, ct: ct);
+    }
+
+    private static void WriteRuntimeConfig(
+        string cfgPath,
+        string targetPipe,
+        string secret,
+        string controlUrl,
+        string deviceToken,
+        string desktopExe,
+        CppAgentSettings cfg,
+        bool allowDesktopControl,
+        bool allowClipboard,
+        bool preserveExistingMediaSettings = false)
+    {
+        int fps = Math.Clamp(cfg.H264TargetFps, 1, 60);
+        int kbps = Math.Clamp(cfg.H264BitrateKbps, 250, 50_000);
+        int keyframe = Math.Clamp(cfg.H264KeyframeIntervalSec, 1, 15);
+        bool preferDxgi = cfg.PreferDxgiCapture;
+        bool preferHw = cfg.H264PreferHardware;
+        bool adaptive = cfg.H264AdaptiveBitrate;
+        string turnUrl = cfg.TurnUrl ?? "";
+        string turnUser = cfg.TurnUsername ?? "";
+        string turnCred = cfg.TurnCredential ?? "";
+
+        if (preserveExistingMediaSettings && File.Exists(cfgPath))
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(File.ReadAllText(cfgPath));
+                var root = doc.RootElement;
+                if (root.TryGetProperty("target_fps", out var f) && f.TryGetInt32(out var fv)) fps = Math.Clamp(fv, 1, 60);
+                if (root.TryGetProperty("bitrate_kbps", out var b) && b.TryGetInt32(out var bv)) kbps = Math.Clamp(bv, 250, 50_000);
+                if (root.TryGetProperty("keyframe_interval_sec", out var k) && k.TryGetInt32(out var kv)) keyframe = Math.Clamp(kv, 1, 15);
+                if (root.TryGetProperty("prefer_dxgi", out var d) && (d.ValueKind == JsonValueKind.True || d.ValueKind == JsonValueKind.False)) preferDxgi = d.GetBoolean();
+                if (root.TryGetProperty("prefer_hardware_h264", out var h) && (h.ValueKind == JsonValueKind.True || h.ValueKind == JsonValueKind.False)) preferHw = h.GetBoolean();
+                if (root.TryGetProperty("adaptive_bitrate", out var a) && (a.ValueKind == JsonValueKind.True || a.ValueKind == JsonValueKind.False)) adaptive = a.GetBoolean();
+                if (root.TryGetProperty("turn_url", out var tu) && tu.ValueKind == JsonValueKind.String) turnUrl = tu.GetString() ?? turnUrl;
+                if (root.TryGetProperty("turn_username", out var tn) && tn.ValueKind == JsonValueKind.String) turnUser = tn.GetString() ?? turnUser;
+                if (root.TryGetProperty("turn_credential", out var tc) && tc.ValueKind == JsonValueKind.String) turnCred = tc.GetString() ?? turnCred;
+            }
+            catch
+            {
+                // Keep defaults from cfg
+            }
+        }
+
+        // Seal secrets for on-disk config (idempotent if already aib-dpapi-v1:).
+        var sealedSecret = SealIfNeeded(secret);
+        var sealedToken = string.IsNullOrWhiteSpace(deviceToken) ? "" : SealIfNeeded(deviceToken);
+        var pipeName = $@"\\.\pipe\{targetPipe}";
+        // UnsafeRelaxedJsonEscaping keeps '+' '/' in DPAPI base64 as literals.
+        // The default encoder emits \\u002B which older C++ extractors corrupted.
+        var jsonOpts = new JsonSerializerOptions
+        {
+            WriteIndented = true,
+            Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+        };
+        var cfgJson = JsonSerializer.Serialize(new
+        {
+            pipe_name = pipeName,
+            pipe_secret = sealedSecret,
+            control_url = controlUrl ?? "",
+            device_token = sealedToken,
+            desktop_agent_path = desktopExe,
+            turn_url = turnUrl,
+            turn_username = turnUser,
+            turn_credential = turnCred,
+            target_fps = fps,
+            bitrate_kbps = kbps,
+            keyframe_interval_sec = keyframe,
+            prefer_dxgi = preferDxgi,
+            prefer_hardware_h264 = preferHw,
+            adaptive_bitrate = adaptive,
+            allow_desktop_control = allowDesktopControl,
+            allow_clipboard = allowClipboard,
+        }, jsonOpts);
+        File.WriteAllText(cfgPath, cfgJson, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+
+        // Companion plaintext config for operators / fallback launches.
+        // ACL is left to the user profile directory permissions.
+        var plainPath = Path.Combine(
+            Path.GetDirectoryName(cfgPath) ?? "",
+            "cpp_service_runtime.plain.json");
+        if (!string.IsNullOrEmpty(plainPath))
+        {
+            var plainSecret = secret.StartsWith(DpapiTokenStore.DpapiMagic, StringComparison.Ordinal)
+                ? DpapiTokenStore.UnsealToken(secret)
+                : secret;
+            var plainToken = string.IsNullOrWhiteSpace(deviceToken)
+                ? ""
+                : (deviceToken.StartsWith(DpapiTokenStore.DpapiMagic, StringComparison.Ordinal)
+                    ? DpapiTokenStore.UnsealToken(deviceToken)
+                    : deviceToken);
+            var plainJson = JsonSerializer.Serialize(new
+            {
+                pipe_name = pipeName,
+                pipe_secret = plainSecret,
+                control_url = controlUrl ?? "",
+                device_token = plainToken,
+                desktop_agent_path = desktopExe,
+                turn_url = turnUrl,
+                turn_username = turnUser,
+                turn_credential = turnCred,
+                target_fps = fps,
+                bitrate_kbps = kbps,
+                keyframe_interval_sec = keyframe,
+                prefer_dxgi = preferDxgi,
+                prefer_hardware_h264 = preferHw,
+                adaptive_bitrate = adaptive,
+                allow_desktop_control = allowDesktopControl,
+                allow_clipboard = allowClipboard,
+            }, jsonOpts);
+            File.WriteAllText(plainPath, plainJson, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+        }
+    }
+
+    private static string ReadRuntimeString(string cfgPath, string key)
+    {
+        try
+        {
+            if (!File.Exists(cfgPath)) return "";
+            using var doc = JsonDocument.Parse(File.ReadAllText(cfgPath));
+            if (doc.RootElement.TryGetProperty(key, out var el) && el.ValueKind == JsonValueKind.String)
+            {
+                return el.GetString() ?? "";
+            }
+        }
+        catch
+        {
+            // ignore
+        }
+        return "";
+    }
+
+    private static string SealIfNeeded(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return "";
+        if (value.StartsWith("aib-dpapi-v1:", StringComparison.Ordinal)) return value;
+        return DpapiTokenStore.SealToken(value);
     }
 }

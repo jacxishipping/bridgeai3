@@ -1,3 +1,5 @@
+> **HISTORICAL analysis.** Current production assessment: [PRODUCTION_READINESS.md](./PRODUCTION_READINESS.md).
+
 # 12 — Security and Threat Assessment — AI Bridge
 
 Scope: security track of the autonomous investigation. Read-only review of the

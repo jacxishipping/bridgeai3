@@ -1,110 +1,106 @@
-# Workspace operations and release checks
+# Production hardening checklist (operators)
 
-## Delivered in this change
+> **Verdict (go / conditional-go / no-go):** [analysis/PRODUCTION_READINESS.md](../analysis/PRODUCTION_READINESS.md)  
+> **Platform claims:** [support-matrix.md](./support-matrix.md) · **R1 evidence:** [release-1-verification.md](./release-1-verification.md)  
+> **Runtime gate:** `src/ai_bridge/control/production_readiness.py` + `GET /health/ready` (production returns **503** on critical issues)
 
-- Live audit search/export, global policy review/publish, gateway connection
-  checks and client editing, and administrator-only service logs.
-- Local/Google user role management and disable/enable. Access changes revoke
-  existing sessions; self-demotion and removal of the last active administrator
-  are rejected. Google sign-in continues to create viewers, never auto-admins.
-- Server-persisted device groups/tags, inventory filtering and 25-row pages.
-- Device heartbeat/token-expiry checks and an enrollment-to-first-task checklist.
-- Polling attention counts for stale devices, recent failures and approvals.
-  These are not push notifications or a historical notification inbox.
-- Searchable recent tasks and opt-in, server-paginated full task history.
-- Compact/Comfortable controls; narrow/touch screens keep 44px targets.
-- Shareable non-secret inventory filters and device/tab links. Opening a shared
-  URL overrides saved browser filters; don't put sensitive labels into shared URLs.
-- Idempotency keys on task creation, permission tests, browser checks in CI and
-  a read-only deployment smoke check.
+This file is the **operator checklist**. It does not replace the assessment verdict.
+
+---
+
+## Production profile requirements
+
+Set `AI_BRIDGE_PROFILE=production` (or equivalent). Critical readiness checks include:
+
+| Requirement | Notes |
+|---|---|
+| PostgreSQL `DATABASE_URL` | SQLite is lab-only |
+| TURN / ICE | `AI_BRIDGE_TURN_SECRET` or `AI_BRIDGE_TURN_URL` or `AI_BRIDGE_ICE_SERVERS` |
+| Admin access | Active admin user **or** configured legacy admin path |
+| HTTPS public origin | `AI_BRIDGE_PUBLIC_BASE_URL` / `AI_BRIDGE_PUBLIC_URL` must not be `http://` |
+| Durable emergency stop | Stored in settings / `plane_state` (survives worker restart) |
+| Redis when multi-worker | Required if `AI_BRIDGE_WORKERS > 1`, `AI_BRIDGE_MULTI_HOST`, or `AI_BRIDGE_REQUIRE_REDIS` |
+| Shared `AI_BRIDGE_CSRF_SECRET` | Required for multi-worker session CSRF |
+| `AI_BRIDGE_MCP_TOKEN_KEY` | Fernet key for MCP OAuth secrets at rest |
+| Chromium sandbox on | Unless explicitly acknowledging `AI_BRIDGE_ALLOW_UNSAFE_BROWSER=1` |
+
+Defaults for a safe first deploy: `AI_BRIDGE_ALLOW_TIER3=0`, desktop opt-in, legacy WebRTC create disabled.
+
+Compose / prod image also fail-fast without Postgres password, admin token, CSRF secret, and TURN secret. See `docker-compose.prod.yml` and `deployment/docker/Dockerfile.prod`.
+
+---
+
+## Workspace operations (delivered)
+
+- Live audit search/export, global policy review/publish, gateway connection checks, admin service logs.
+- Local/Google user role management; access changes revoke sessions; Google sign-in creates viewers (never auto-admins).
+- Server-persisted device groups/tags; inventory filtering and pagination.
+- Heartbeat / token-expiry checks; enrollment-to-first-task checklist.
+- Attention counts for stale devices, failures, approvals (not a full notification product).
+- Searchable recent tasks; opt-in paginated full history.
+- Idempotency keys on task creation; CI browser checks; `deployment/smoke_check.py`.
+
+---
 
 ## Known boundaries
 
-- No production merge, deployment, credential rotation or external account login
-  is performed by these code changes.
-- The main workspace still obtains a complete device snapshot for selection and
-  device navigation. Local inventory pages reduce rendering, not download size.
-  `/api/fleet/inventory` provides server-side search/pagination for a future
-  cursor-based fleet client. Do not claim million-device scalability.
-- Live logs are host service logs, not automatic remote-agent log collection.
-  Connection status is a local TCP check, not proof of a working external gateway.
-- Policy editing creates a new global version. Device overrides remain visible
-  under device details and may differ from that global policy.
-- Real terminal streaming, unattended desktop streaming, scheduling and workflow
-  editors are not exposed by these operations panels; their existing previews
-  remain explicitly separate from live operations.
-- Tier-4/device override semantics, tenant isolation and horizontal deployment
-  need a dedicated security review. The existing control plane keeps emergency
-  stop and OIDC pending state in process memory: use one worker, and do not assume
-  those states survive restart. This release is not a security certification.
-- Core navigation/sign-in translations ship as a 20-locale preview with RTL
-  shells. Operational/safety content and the demo remain English pending string
-  extraction and native-speaker review. See `docs/localization.md` for exact
-  coverage; this is not complete translation or support for every language.
+- Do not claim million-device or public multi-tenant SaaS scale.
+- Main workspace may still load a device snapshot for navigation; `/api/fleet/inventory` is the paginated path.
+- Live logs are host service logs, not automatic remote-agent log shipping.
+- Policy publish creates a new global version; device overrides can differ.
+- Terminal / desktop / workflow editors remain separate from basic ops panels where labelled as such.
+- Tier-4 / tenant / horizontal deployment: code + R1 review exist; this checklist is **not** a security certification.
+- Localisation: core nav/sign-in multi-locale preview; operational/safety copy may remain English — see [localization.md](./localization.md).
+
+**Multi-worker:** emergency stop and OIDC pending login state are durable (DB settings / `plane_state`). Rate limits and WS fan-out use Redis when multi-worker is enabled. A memory-only rate-limit backend is a readiness **warning** in production — use Redis for shared limits.
+
+---
 
 ## Idempotent task submissions
 
-`POST /api/tasks` accepts an optional `Idempotency-Key` (1–128 ASCII characters).
-Use one random key per reviewed, per-device submission. Keep that key if a client
-intentionally reconciles an uncertain outcome; use a new key only for a genuinely
-new task. The dashboard does not automatically replay uncertain writes.
+`POST /api/tasks` accepts optional `Idempotency-Key` (1–128 ASCII). One random key per reviewed per-device submission. Reused key with different args/tenant/device → **409**. Auth, emergency stop, and device policy still apply. No automatic key expiry — retain keys while retries are possible.
 
-The actor, request hash and original task ID are stored atomically with the task
-and approval. Concurrent equal requests create one task/approval. A reused key
-with different arguments/tenant/device receives 409. Replays report the original
-task's current state; deleted original tasks return 409, not a new submission.
-Authentication, current emergency stop and device policy checks still apply.
-Keep submission records while retries are possible; there is no automatic expiry.
+---
 
 ## Release checklist
 
-1. Rotate any admin token or Google client secret previously shared in chat.
-   Supply replacements through the host's secret/environment configuration only.
-2. Confirm the deployment method and approved branch/commit before landing.
-3. Run the Python tests, dashboard build and browser tests in CI. Back up the DB
-   **before** starting a release that applies `004_workspace_operations.sql`.
-4. Configure the Google web client's authorized redirect URI exactly:
-   `https://YOUR_HOST/api/auth/oidc/callback`. Set the dashboard URL to the same
-   HTTPS origin. Load the environment through the service/hosting platform:
-   the Python entry point does not load `.env` automatically.
-5. Deploy the API and the dashboard bundle together. Run:
+1. Rotate any admin token or OIDC/Google secret previously shared in chat; load secrets only via host env.
+2. Confirm approved branch/commit and deployment method.
+3. Green CI (Python, dashboard, postgres-boot, platform jobs). Back up the DB before migrations.
+4. Configure OIDC redirect exactly: `https://YOUR_HOST/api/auth/oidc/callback`. Dashboard origin = same HTTPS origin. Python does not auto-load `.env`.
+5. Deploy API + dashboard together. Smoke:
 
    ```sh
    python deployment/smoke_check.py https://YOUR_HOST
    ```
 
-   This checks readiness, rejection of anonymous identity requests and the
-   branded frontend. It does not prove OAuth login succeeds.
-6. In a fresh browser, complete Google sign-in, confirm viewer access, have an
-   administrator change a test user's role, confirm old sessions are rejected,
-   sign back in and sign out. Never put production tokens into browser tests.
-7. Enroll a disposable agent, confirm its heartbeat, submit a read-only system
-   information task, inspect its result, then review a sensitive test task through
-   the approval flow. Do not run destructive commands as a smoke test.
-8. Verify HTTPS/proxy routing, host firewall rules and rate limits. The existing
-   rate limiter is per-process memory, not a shared distributed limiter.
+   Checks readiness, anonymous rejection, branded frontend — not a full OAuth proof.
+6. Fresh browser: sign-in, role change, session revoke, sign-out. Never put production tokens in browser tests.
+7. Enroll a disposable agent → heartbeat → Tier-1 task → Tier-3 approval path. No destructive smoke commands.
+8. Verify HTTPS/proxy, firewall, TURN, Redis (if multi-worker), and rate-limit behaviour.
+9. Archive hosted evidence before calling the RC signed: staging gate, backup drill, Windows reboot soak, cross-NAT TURN (see assessment §2).
+
+---
 
 ## Backup and recovery
 
-Backups contain sensitive identity/session/device data. Restrict permissions,
-encrypt off-host copies and agree retention with the operator. Do not commit
-backups or write tokens into backup scripts.
+Backups contain identity/session/device data — encrypt off-host, restrict access, never commit.
 
-SQLite: use the backup API rather than copying a live WAL database file:
+**SQLite:**
 
 ```sh
 python -m ai_bridge.control.backup /PATH/control.db /PRIVATE/NEW-backup.db
 ```
 
-The command refuses to overwrite any destination and verifies SQLite integrity.
-For a recovery drill, run it again from the backup into a **new**, isolated DB
-path. Start an isolated control plane with that DB, no live agents and no exposed
-network port; verify users/devices/tasks/audit. Never overwrite the live database
-as part of a test. A production restore requires a maintenance window, service
-shutdown, preservation of the old DB/WAL files and explicit operator approval.
+Refuses overwrite; verifies integrity. Drill into an isolated path only.
 
-PostgreSQL: use the hosting provider's encrypted snapshots/PITR, or `pg_dump`
-with credentials supplied privately through the process environment. Restore
-with `pg_restore` into a new isolated database, verify migrations and record
-counts, and run the same application checks. SQLite tests do not validate
-PostgreSQL backup, query plans or cross-worker behavior.
+**PostgreSQL:** provider snapshots/PITR, or `pg_dump` / `pg_restore` into a **new** DB. Use `scripts/backup_drill.sh` / `scripts/backup_restore.py` / `scripts/postgres_pitr_drill.py`. Record RTO/RPO. Never overwrite live as a test.
+
+---
+
+## Related
+
+- [PRODUCTION_READINESS.md](../analysis/PRODUCTION_READINESS.md) — current assessment  
+- [fleet-limits.md](./fleet-limits.md) — sizing envelopes  
+- [runbooks.md](./runbooks.md) — incidents / DLQ / rollbacks  
+- [security.md](./security.md) · [threat-model.md](./threat-model.md)

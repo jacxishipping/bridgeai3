@@ -1,5 +1,7 @@
 # Real-Time Video & Input Streaming (`docs/streaming.md`)
 
+**Updated:** 23 November 2026 · Platforms: [support-matrix.md](./support-matrix.md) · Native WebRTC = **Preview**; interactive desktop **Supported** on Windows.
+
 ## 1. Video Pipeline
  Raw 1920x1080 BGRA frames at 30 FPS require ~249 MB/s before compression. AI Bridge compresses desktop frames in real time using H.264 over WebRTC:
 

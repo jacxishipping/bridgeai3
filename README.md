@@ -10,6 +10,9 @@
 > [!IMPORTANT]
 > **This is not a remote root shell.** There is no unrestricted shell endpoint, no arbitrary PowerShell executor, and no tool that can escalate its own permissions. All actions pass through server-side policy enforcement, 4-tier risk gating, path confinement, secret redaction, and hash-chained audit logging (see [docs/security.md](docs/security.md)).
 
+> [!NOTE]
+> **Production readiness (23 Nov 2026):** local/lab **GO** · small controlled fleet **CONDITIONAL GO** (hosted/physical RC evidence still required) · public multi-tenant SaaS **NO-GO**. See [analysis/PRODUCTION_READINESS.md](analysis/PRODUCTION_READINESS.md), [docs/support-matrix.md](docs/support-matrix.md), and [docs/implementation-status.md](docs/implementation-status.md).
+
 ---
 
 ## Architecture
@@ -191,6 +194,7 @@ curl -sSL https://raw.githubusercontent.com/jacxishipping/ai-bridge/main/magic-i
 | [docs/runbooks.md](docs/runbooks.md) | Operator runbooks for alerts, DLQ replay, rollbacks, and incident recovery |
 | [docs/fleet-limits.md](docs/fleet-limits.md) | Multi-worker scaling envelopes, Redis/PostgreSQL requirements, and quotas |
 | [docs/production-readiness.md](docs/production-readiness.md) | Production hardening checklist, TLS/mTLS, OIDC, and backup/PITR requirements |
+| [analysis/PRODUCTION_READINESS.md](analysis/PRODUCTION_READINESS.md) | Current go / conditional-go / no-go production assessment (supersedes removed FINAL snapshot) |
 | [docs/security.md](docs/security.md) | Threat model, 4-tier guardrails, secret redaction, and audit integrity |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | Release 1–4 delivery record and governance policy |
 

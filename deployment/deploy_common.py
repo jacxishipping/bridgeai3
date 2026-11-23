@@ -159,10 +159,19 @@ def run_remote(
             )
         ssh = ["ssh", "-o", "StrictHostKeyChecking=accept-new", "-i", key, host,
                f"cd {app_dir} && {cmd}"]
-        proc = subprocess.run(ssh, capture_output=True, text=True, timeout=1800)
-    if proc.stdout.strip():
+        # encoding="utf-8" + replace: Windows cp1252 readers blow up on
+        # docker/apt build logs that contain non-ASCII bytes.
+        proc = subprocess.run(
+            ssh,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=1800,
+        )
+    if (proc.stdout or "").strip():
         print(proc.stdout.strip())
-    if proc.stderr.strip():
+    if (proc.stderr or "").strip():
         print(proc.stderr.strip(), file=sys.stderr)
     if proc.returncode != 0:
         sys.exit(f"Step '{step}' failed with exit code {proc.returncode}")

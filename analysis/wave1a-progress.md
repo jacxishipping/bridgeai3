@@ -1,3 +1,5 @@
+> **HISTORICAL analysis.** Current production assessment: [PRODUCTION_READINESS.md](./PRODUCTION_READINESS.md).
+
 # Wave 1A — Progress Report: Phase 0 Deployment / CI / Installer
 
 **Scope:** roadmap R-P0-14, R-P0-15, P-03, P-04, P-05, P-09, R-P1-53, P-06.

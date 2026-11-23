@@ -1,6 +1,8 @@
-# 🤖 AI Bridge MCP Chatbot Integration Guide
+# AI Bridge MCP Chatbot Integration Guide
 
 Connect Claude, ChatGPT, Gemini, Grok, Codex, Cursor, Windsurf, and any MCP-compatible AI to your AI Bridge fleet.
+
+**Updated:** 23 November 2026 · Also see [mcp-clients.md](./mcp-clients.md) and ChatGPT **Custom GPT Actions** at [integrations/chatgpt/actions/](../integrations/chatgpt/actions/).
 
 ---
 

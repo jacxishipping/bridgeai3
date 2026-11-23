@@ -1,3 +1,5 @@
+> **HISTORICAL analysis.** Current production assessment: [PRODUCTION_READINESS.md](./PRODUCTION_READINESS.md).
+
 # Regression Register
 
 Tests added during remediation to protect existing functionality and lock in fixes.

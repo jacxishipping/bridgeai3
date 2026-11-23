@@ -1,3 +1,5 @@
+> **HISTORICAL analysis.** Current production assessment: [PRODUCTION_READINESS.md](./PRODUCTION_READINESS.md).
+
 # 05 — Control Plane Analysis (`src/ai_bridge/control/`)
 
 **Scope:** `src/ai_bridge/control/*.py` — 38 files, **16,666 LOC total** (VERIFIED `wc -l`, 2026-11-17).

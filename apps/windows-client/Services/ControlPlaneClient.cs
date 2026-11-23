@@ -510,10 +510,13 @@ public sealed class ControlPlaneClient : IDisposable
         var baseUrl = NormalizeUrl(config.ControlUrl);
         int intervalSec = Math.Clamp(config.HeartbeatIntervalSeconds, 5, 120);
         int reqTimeoutSec = Math.Clamp(config.HttpTimeoutSeconds, 5, 120);
-        // Push local device policy on initial connect so the online panel immediately reflects all 11 device controls
+        // Pull server effective policy on connect (do not push local overrides that fight the plane).
+        // Operators push via dashboard; the client Sync Policy button remains for explicit upload.
         try
         {
-            await SyncPolicyAsync(config.ControlUrl, token, config.Policy, ct);
+            var (fetched, serverPolicy, _) = await FetchPolicyAsync(config.ControlUrl, token, config.Policy, ct);
+            if (fetched && serverPolicy is not null)
+                ServerPolicyReceived?.Invoke(serverPolicy);
         }
         catch
         {
@@ -569,9 +572,9 @@ public sealed class ControlPlaneClient : IDisposable
                     {
                         UpdateEmergencyStop(esEl.GetBoolean());
                     }
-                    if (hbRoot.TryGetProperty("has_custom_policy", out var hcpEl) &&
-                        hcpEl.ValueKind == JsonValueKind.True &&
-                        hbRoot.TryGetProperty("effective_policy", out var effEl) &&
+                    // Always apply effective_policy when present so Device Functions stay
+                    // aligned even when the device has no custom_policy override.
+                    if (hbRoot.TryGetProperty("effective_policy", out var effEl) &&
                         effEl.ValueKind == JsonValueKind.Object)
                     {
                         var serverPolicy = ParsePolicyFromJsonElement(effEl, config.Policy);
@@ -885,6 +888,158 @@ public sealed class ControlPlaneClient : IDisposable
             throw new ArgumentException("Control Plane URL must use HTTPS. HTTP is allowed only for localhost or a loopback IP.", nameof(url));
         }
         return normalized;
+    }
+
+    /// <summary>
+    /// Fetch STUN/TURN ICE servers. Prefers device-token agent path; falls back to
+    /// operator/admin <c>/api/v1/sessions/ice-servers</c> when provided.
+    /// </summary>
+    public async Task<(bool Ok, JsonElement IceServers, string Detail)> FetchIceServersAsync(
+        string controlUrl,
+        string? deviceToken = null,
+        string? operatorToken = null,
+        bool operatorIsAdminToken = false,
+        CancellationToken ct = default)
+    {
+        var baseUrl = NormalizeUrl(controlUrl);
+        try
+        {
+            if (!string.IsNullOrWhiteSpace(deviceToken))
+            {
+                using var agentReq = new HttpRequestMessage(HttpMethod.Get, $"{baseUrl}/api/agent/webrtc/ice-servers");
+                agentReq.Headers.Add("X-Device-Token", deviceToken.Trim());
+                using var agentResp = await _http.SendAsync(agentReq, ct);
+                var agentBody = await agentResp.Content.ReadAsStringAsync(ct);
+                if (agentResp.IsSuccessStatusCode)
+                {
+                    using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(agentBody) ? "{}" : agentBody);
+                    if (doc.RootElement.TryGetProperty("ice_servers", out var ice) && ice.ValueKind == JsonValueKind.Array)
+                    {
+                        return (true, ice.Clone(), "Loaded ICE servers via device token.");
+                    }
+                    return (false, default, "ICE response missing ice_servers array.");
+                }
+                // Fall through to operator path when agent endpoint is undeployed (404) or denied.
+                if (agentResp.StatusCode is not HttpStatusCode.NotFound and not HttpStatusCode.Unauthorized and not HttpStatusCode.Forbidden)
+                {
+                    return (false, default, ExtractApiDetail(agentBody, $"HTTP {(int)agentResp.StatusCode}"));
+                }
+            }
+
+            if (!string.IsNullOrWhiteSpace(operatorToken))
+            {
+                using var opReq = new HttpRequestMessage(HttpMethod.Get, $"{baseUrl}/api/v1/sessions/ice-servers");
+                if (operatorIsAdminToken)
+                {
+                    opReq.Headers.Add("X-Admin-Token", operatorToken.Trim());
+                }
+                else
+                {
+                    opReq.Headers.Add("X-Session-Token", operatorToken.Trim());
+                }
+                using var opResp = await _http.SendAsync(opReq, ct);
+                var opBody = await opResp.Content.ReadAsStringAsync(ct);
+                if (!opResp.IsSuccessStatusCode)
+                {
+                    return (false, default, ExtractApiDetail(opBody, $"HTTP {(int)opResp.StatusCode}"));
+                }
+                using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(opBody) ? "{}" : opBody);
+                if (doc.RootElement.TryGetProperty("ice_servers", out var ice) && ice.ValueKind == JsonValueKind.Array)
+                {
+                    return (true, ice.Clone(), "Loaded ICE servers via operator token.");
+                }
+                return (false, default, "ICE response missing ice_servers array.");
+            }
+
+            return (false, default, "No device or operator token available to fetch ICE servers.");
+        }
+        catch (Exception ex)
+        {
+            return (false, default, ex.Message);
+        }
+    }
+
+    public static bool TryExtractTurnSettings(JsonElement iceServers, out string turnUrl, out string username, out string credential)
+    {
+        turnUrl = "";
+        username = "";
+        credential = "";
+        if (iceServers.ValueKind != JsonValueKind.Array)
+        {
+            return false;
+        }
+
+        foreach (var entry in iceServers.EnumerateArray())
+        {
+            if (entry.ValueKind != JsonValueKind.Object) continue;
+            string entryUser = "";
+            string entryCred = "";
+            if (entry.TryGetProperty("username", out var userEl) && userEl.ValueKind == JsonValueKind.String)
+            {
+                entryUser = (userEl.GetString() ?? "").Trim();
+            }
+            if (entry.TryGetProperty("credential", out var credEl) && credEl.ValueKind == JsonValueKind.String)
+            {
+                entryCred = (credEl.GetString() ?? "").Trim();
+            }
+            var hasCred = !string.IsNullOrWhiteSpace(entryCred);
+            var hasUser = !string.IsNullOrWhiteSpace(entryUser);
+            if (!entry.TryGetProperty("urls", out var urlsEl)) continue;
+
+            string? pickUrl = null;
+            if (urlsEl.ValueKind == JsonValueKind.String)
+            {
+                var u = urlsEl.GetString();
+                if (!string.IsNullOrWhiteSpace(u) && u.StartsWith("turn:", StringComparison.OrdinalIgnoreCase))
+                {
+                    pickUrl = u;
+                }
+            }
+            else if (urlsEl.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var uEl in urlsEl.EnumerateArray())
+                {
+                    var u = uEl.GetString();
+                    if (!string.IsNullOrWhiteSpace(u) && u.StartsWith("turn:", StringComparison.OrdinalIgnoreCase))
+                    {
+                        pickUrl = u;
+                        break;
+                    }
+                }
+            }
+
+            if (string.IsNullOrWhiteSpace(pickUrl)) continue;
+            // Prefer TURN entries that carry credentials (ephemeral REST API style).
+            if (hasCred || hasUser || string.IsNullOrWhiteSpace(turnUrl))
+            {
+                turnUrl = pickUrl.Split('?', 2)[0].Trim();
+                if (hasUser) username = entryUser;
+                if (hasCred) credential = entryCred;
+                if (hasCred && hasUser)
+                {
+                    return true;
+                }
+            }
+        }
+
+        return !string.IsNullOrWhiteSpace(turnUrl);
+    }
+
+    public static string DeriveTurnUrlFromControlPlane(string controlUrl)
+    {
+        try
+        {
+            var normalized = NormalizeUrl(controlUrl);
+            if (Uri.TryCreate(normalized, UriKind.Absolute, out var uri) && !string.IsNullOrWhiteSpace(uri.Host))
+            {
+                return $"turn:{uri.Host}:3478";
+            }
+        }
+        catch
+        {
+            // ignore
+        }
+        return "";
     }
 
     private static bool IsLoopbackHost(Uri uri) =>

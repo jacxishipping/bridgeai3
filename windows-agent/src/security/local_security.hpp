@@ -34,6 +34,13 @@ public:
     static bool UnsealIfSealed(const std::string& value, std::string& out_plaintext);
 };
 
+// Hand-rolled JSON string-field extractors used by the service/desktop
+// agents (no JSON library is vendored). Must decode JSON escapes including
+// \\uXXXX — System.Text.Json defaults escape '+' as \\u002B inside
+// aib-dpapi-v1 base64 payloads, and a naive "\\ + next char" reader
+// corrupts the sealed blob so CryptUnprotectData fails.
+std::string ExtractJsonStringField(const std::string& json, const std::string& key);
+
 // Creates and validates a Named Pipe with restricted ACLs (LocalSystem, Administrators, Authenticated Interactive User)
 class SecureNamedPipe {
 public:

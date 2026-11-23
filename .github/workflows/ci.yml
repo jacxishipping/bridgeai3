@@ -148,11 +148,21 @@ jobs:
         env:
           AIBRIDGE_DESKTOP_EXE: ${{ github.workspace }}\windows-agent\build\Release\ai_bridge_desktop.exe
         run: python scripts/libwebrtc_e2e_harness.py --out .run/libwebrtc_e2e_evidence.json --native-agent
+      - name: Production WebRTC E2E (signaling + JPEG fallback + native agent)
+        env:
+          AIBRIDGE_DESKTOP_EXE: ${{ github.workspace }}\windows-agent\build\Release\ai_bridge_desktop.exe
+          AIBRIDGE_RUN_NATIVE_WEBRTC: "1"
+        run: |
+          mkdir -p .run
+          python scripts/webrtc_production_e2e.py --require-native-agent --out .run/webrtc_production_e2e_evidence.json
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: libwebrtc-e2e-evidence
-          path: .run/libwebrtc_e2e_evidence.json
+          path: |
+            .run/libwebrtc_e2e_evidence.json
+            .run/webrtc_production_e2e_evidence.json
+            .run/libwebrtc_e2e_from_production.json
           retention-days: 14
 
   dashboard:
@@ -239,6 +249,10 @@ jobs:
           python scripts/staging_release_gate.py --self-host --out .run/staging_release_gate_evidence.json
       - name: Run Release 1 real-browser WebRTC E2E
         run: python scripts/webrtc_browser_e2e.py --require-browser-peer --out .run/webrtc_browser_e2e_evidence.json
+      - name: Production WebRTC E2E (signaling + JPEG fallback + browser peer)
+        run: |
+          mkdir -p .run
+          python scripts/webrtc_production_e2e.py --require-browser-peer --out .run/webrtc_production_e2e_evidence.json
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -246,6 +260,7 @@ jobs:
           path: |
             .run/staging_release_gate_evidence.json
             .run/webrtc_browser_e2e_evidence.json
+            .run/webrtc_production_e2e_evidence.json
           retention-days: 30
 
   security-and-supply-chain:

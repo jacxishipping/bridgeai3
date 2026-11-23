@@ -1,5 +1,7 @@
 # Windows Agent Architecture (`windows-agent/`)
 
+**Updated:** 23 November 2026 · Support tier: **Preview** for native C++ WebRTC dataplane; Windows Python agent + WPF client are **Supported** ([support-matrix.md](./support-matrix.md)).
+
 ## 1. Two-Process Session Model
 Windows isolates background services from interactive user desktops. To operate reliably across session changes while maintaining least privilege, the AI Bridge Windows Agent is split into two native C++20 executables plus a shared C-API library:
 

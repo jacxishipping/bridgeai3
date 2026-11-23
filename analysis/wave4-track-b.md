@@ -1,3 +1,5 @@
+> **HISTORICAL analysis.** Current production assessment: [PRODUCTION_READINESS.md](./PRODUCTION_READINESS.md).
+
 # Wave 4 Track B — periphery wiring: progress
 
 Base commit: `88ad591`. No reset/rebase/commit. No packages installed.

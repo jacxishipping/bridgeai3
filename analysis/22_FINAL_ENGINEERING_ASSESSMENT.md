@@ -50,6 +50,8 @@ The sixteen P0 items (report 17 §2) cluster into four stories:
 
 The honest summary from report 12: **core primitives are sound; enforcement is entry-point-dependent, not uniform.** That is the sentence the whole assessment turns on.
 
+> **HISTORICAL (Nov 2026 audit).** Current verdict: [PRODUCTION_READINESS.md](./PRODUCTION_READINESS.md). Do not treat the NO-GO scores below as current product status.
+
 ## 5. What limits production readiness
 
 In order: (1) the P0 bypasses above; (2) multi-worker unsafety while prod compose runs 4 workers (DIST); (3) no tested Postgres backup/restore and no referential integrity (DB-01/02); (4) a test suite that has never been executed in any audit and is partly self-referential (TST-01/04); (5) deployment defaults that are unsafe as shipped (P-01/02/03/04/09/13); (6) a dashboard whose default experience is a simulation with fabricated verification (D-01/02/03); (7) documentation that overstates the product in ≥15 material places (DOC-31). Full verdict: report 21 — **NO-GO for any production use**.
