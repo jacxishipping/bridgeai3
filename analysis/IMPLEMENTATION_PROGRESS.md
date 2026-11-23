@@ -42,6 +42,6 @@ See AUTONOMOUS_EXECUTION_TRACKER.md for status per finding and FINAL_IMPLEMENTAT
 - `analysis/FINAL_IMPLEMENTATION_REPORT.md` — per-wave summary + all 174 register rows dispositioned (110 Closed, 36 Partially closed, 25 Open, 3 Deferred).
 - `analysis/FINAL_SECURITY_REASSESSMENT.md` — all 16 P0s re-evaluated; report 12 invariants re-scored; residual risks ranked.
 - `analysis/FINAL_TEST_RESULTS.md` — full test history, the 12 pre-existing failures, the flaky timing test, the /tmp incident, tests not run.
-- `analysis/FINAL_PRODUCTION_READINESS.md` — all 20 gate conditions evaluated (13 MET, 6 PARTIALLY MET, 1 NOT MET). **Verdict: NO-GO for production use (unchanged).**
+- `analysis/FINAL_PRODUCTION_READINESS.md` — **removed** (stale Nov 17 NO-GO). Current assessment: `analysis/PRODUCTION_READINESS.md` (23 Nov 2026).
 
 Rollback: any wave can be reverted with `git revert <commit>` (commits: 726bed2, 3712b81, 19747b2, 88ad591, 61faa67); full rollback to the as-received state is `git checkout 79c010e`. Original zip hash: `bed477c750c9b782891678d44efe156c4f7b8dad07e765a4f8b011298d282d5c`.

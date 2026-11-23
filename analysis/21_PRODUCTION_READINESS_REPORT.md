@@ -1,6 +1,9 @@
 # 21 — Production Readiness Report
 
-> **Verdict: NO-GO for any production use.** Not "go with caveats", not "go for a pilot with production data". AI Bridge may be used today only as a **local development / lab system** on machines and data you can afford to lose, with no production credentials, no production fleet, and no unattended Tier-3/4 execution. This verdict follows from the P0 findings in report 17 — any one of the P0 approval/policy bypasses would be enough; there are sixteen.
+> **HISTORICAL (17 Nov 2026).** Kept for audit trail only.  
+> **Current assessment:** [`PRODUCTION_READINESS.md`](./PRODUCTION_READINESS.md) (23 Nov 2026).
+
+> **Original verdict: NO-GO for any production use.** Not "go with caveats", not "go for a pilot with production data". AI Bridge may be used today only as a **local development / lab system** on machines and data you can afford to lose, with no production credentials, no production fleet, and no unattended Tier-3/4 execution. This verdict follows from the P0 findings in report 17 — any one of the P0 approval/policy bypasses would be enough; there are sixteen.
 >
 > **Basis.** All 18 source audit reports (01, 03–16, DEPLOYMENT_AUDIT, DISTRIBUTED_RELIABILITY_AUDIT), reconciled in report 02 §1. No production system was contacted; no load test was run; no measurement in this report is presented as a benchmark. Where a track says "needs a live test", this report says so.
 

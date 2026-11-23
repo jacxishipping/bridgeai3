@@ -1,5 +1,7 @@
 # Workspace operations and release checks
 
+> **Current go/no-go assessment:** see [analysis/PRODUCTION_READINESS.md](../analysis/PRODUCTION_READINESS.md) (23 Nov 2026). This file is the operator checklist; that file is the verdict.
+
 ## Delivered in this change
 
 - Live audit search/export, global policy review/publish, gateway connection
