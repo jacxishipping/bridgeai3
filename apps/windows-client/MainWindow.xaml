@@ -76,35 +76,40 @@
                         <StackPanel>
                             <TextBlock x:Name="NavGroupOpsText" Text="OPERATIONS" FontSize="10.5" FontWeight="Medium" Foreground="{DynamicResource TextMuted}" Margin="10,0,0,6"/>
 
-                            <Button x:Name="NavOverviewBtn" Style="{StaticResource NavButtonActiveStyle}" Click="OnNavClick" Tag="0" Margin="0,0,0,2" ToolTip="Overview">
+                            <Button x:Name="NavOverviewBtn" Style="{StaticResource NavButtonActiveStyle}" Click="OnNavClick" Tag="0" Margin="0,0,0,2" ToolTip="Overview"
+                                    AutomationProperties.Name="Overview">
                                 <StackPanel Orientation="Horizontal">
                                     <TextBlock x:Name="NavIcon0" Text="&#xE80F;" FontFamily="Segoe MDL2 Assets" FontSize="14" Foreground="{DynamicResource NavActiveAccent}" Margin="0,0,10,0" VerticalAlignment="Center"/>
                                     <TextBlock x:Name="NavLblOverview" Text="Overview" VerticalAlignment="Center"/>
                                 </StackPanel>
                             </Button>
 
-                            <Button x:Name="NavTasksBtn" Style="{StaticResource NavButtonStyle}" Click="OnNavClick" Tag="1" Margin="0,0,0,2" ToolTip="Task Explorer">
+                            <Button x:Name="NavTasksBtn" Style="{StaticResource NavButtonStyle}" Click="OnNavClick" Tag="1" Margin="0,0,0,2" ToolTip="Task Explorer"
+                                    AutomationProperties.Name="Task Explorer">
                                 <StackPanel Orientation="Horizontal">
                                     <TextBlock x:Name="NavIcon1" Text="&#xE7C4;" FontFamily="Segoe MDL2 Assets" FontSize="14" Margin="0,0,10,0" VerticalAlignment="Center"/>
                                     <TextBlock x:Name="NavLblTasks" Text="Task Explorer" VerticalAlignment="Center"/>
                                 </StackPanel>
                             </Button>
 
-                            <Button x:Name="NavMonitorBtn" Style="{StaticResource NavButtonStyle}" Click="OnNavClick" Tag="2" Margin="0,0,0,2" ToolTip="System Monitor">
+                            <Button x:Name="NavMonitorBtn" Style="{StaticResource NavButtonStyle}" Click="OnNavClick" Tag="2" Margin="0,0,0,2" ToolTip="System Monitor"
+                                    AutomationProperties.Name="System Monitor">
                                 <StackPanel Orientation="Horizontal">
                                     <TextBlock x:Name="NavIcon2" Text="&#xE9D2;" FontFamily="Segoe MDL2 Assets" FontSize="14" Margin="0,0,10,0" VerticalAlignment="Center"/>
                                     <TextBlock x:Name="NavLblMonitor" Text="System Monitor" VerticalAlignment="Center"/>
                                 </StackPanel>
                             </Button>
 
-                            <Button x:Name="NavVisionBtn" Style="{StaticResource NavButtonStyle}" Click="OnNavClick" Tag="3" Margin="0,0,0,2" ToolTip="Desktop Vision">
+                            <Button x:Name="NavVisionBtn" Style="{StaticResource NavButtonStyle}" Click="OnNavClick" Tag="3" Margin="0,0,0,2" ToolTip="Desktop Vision"
+                                    AutomationProperties.Name="Desktop Vision">
                                 <StackPanel Orientation="Horizontal">
                                     <TextBlock x:Name="NavIcon3" Text="&#xE7F4;" FontFamily="Segoe MDL2 Assets" FontSize="14" Margin="0,0,10,0" VerticalAlignment="Center"/>
                                     <TextBlock x:Name="NavLblVision" Text="Desktop Vision" VerticalAlignment="Center"/>
                                 </StackPanel>
                             </Button>
 
-                            <Button x:Name="NavAgentsBtn" Style="{StaticResource NavButtonStyle}" Click="OnNavClick" Tag="6" Margin="0,0,0,20" ToolTip="Agents">
+                            <Button x:Name="NavAgentsBtn" Style="{StaticResource NavButtonStyle}" Click="OnNavClick" Tag="6" Margin="0,0,0,20" ToolTip="Agents"
+                                    AutomationProperties.Name="Agents">
                                 <StackPanel Orientation="Horizontal">
                                     <TextBlock x:Name="NavIcon6" Text="&#xE99A;" FontFamily="Segoe MDL2 Assets" FontSize="14" Margin="0,0,10,0" VerticalAlignment="Center"/>
                                     <TextBlock x:Name="NavLblAgents" Text="Agents" VerticalAlignment="Center"/>
@@ -113,14 +118,16 @@
 
                             <TextBlock x:Name="NavGroupGovText" Text="GOVERNANCE" FontSize="10.5" FontWeight="Medium" Foreground="{DynamicResource TextMuted}" Margin="10,0,0,6"/>
 
-                            <Button x:Name="NavSecurityBtn" Style="{StaticResource NavButtonStyle}" Click="OnNavClick" Tag="4" Margin="0,0,0,2" ToolTip="Security &amp; Policy">
+                            <Button x:Name="NavSecurityBtn" Style="{StaticResource NavButtonStyle}" Click="OnNavClick" Tag="4" Margin="0,0,0,2" ToolTip="Security &amp; Policy"
+                                    AutomationProperties.Name="Security and Policy">
                                 <StackPanel Orientation="Horizontal">
                                     <TextBlock x:Name="NavIcon4" Text="&#xEA18;" FontFamily="Segoe MDL2 Assets" FontSize="14" Margin="0,0,10,0" VerticalAlignment="Center"/>
                                     <TextBlock x:Name="NavLblSecurity" Text="Security &amp; Policy" VerticalAlignment="Center"/>
                                 </StackPanel>
                             </Button>
 
-                            <Button x:Name="NavSettingsBtn" Style="{StaticResource NavButtonStyle}" Click="OnNavClick" Tag="5" ToolTip="Settings">
+                            <Button x:Name="NavSettingsBtn" Style="{StaticResource NavButtonStyle}" Click="OnNavClick" Tag="5" ToolTip="Settings"
+                                    AutomationProperties.Name="Settings">
                                 <StackPanel Orientation="Horizontal">
                                     <TextBlock x:Name="NavIcon5" Text="&#xE713;" FontFamily="Segoe MDL2 Assets" FontSize="14" Margin="0,0,10,0" VerticalAlignment="Center"/>
                                     <TextBlock x:Name="NavLblSettings" Text="Settings" VerticalAlignment="Center"/>
@@ -148,7 +155,8 @@
                             <!-- Left Breadcrumb -->
                             <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
                                 <Button Content="&#xE700;" Style="{StaticResource CaptionBtnStyle}" Click="OnToggleSidebarClick"
-                                        Margin="0,0,8,0" ToolTip="Toggle Compact Sidebar"/>
+                                        Margin="0,0,8,0" ToolTip="Toggle Compact Sidebar"
+                                        AutomationProperties.Name="Toggle compact sidebar"/>
                                 <TextBlock Text="AI Bridge" FontSize="12" Foreground="{DynamicResource TextMuted}" VerticalAlignment="Center"/>
                                 <TextBlock Text=" / " FontSize="12" Foreground="{DynamicResource TextMuted}" VerticalAlignment="Center"/>
                                 <TextBlock x:Name="BreadcrumbPageText" Text="Overview" FontSize="12" FontWeight="Medium" Foreground="{DynamicResource TextPrimary}" VerticalAlignment="Center"/>
@@ -159,7 +167,7 @@
                                 <Button x:Name="TopTakeoverBtn" Content="⚡ Take Over Screen" Style="{StaticResource DangerBtnStyle}"
                                         Padding="11,4.5" FontSize="11.5" FontWeight="SemiBold" Visibility="Collapsed"
                                         WindowChrome.IsHitTestVisibleInChrome="True" Click="OnTopTakeoverClick"
-                                        Margin="0,0,8,0" ToolTip="Reclaim mouse &amp; keyboard control from the AI agent (Ctrl+Alt+T)"/>
+                                        Margin="0,0,8,0" ToolTip="Reclaim mouse &amp; keyboard (Ctrl+Alt+T). After takeover, Return Control resumes agent input."/>
 
                                 <Border Background="{DynamicResource BgCard}" BorderBrush="{DynamicResource BorderHairline}" BorderThickness="1"
                                         CornerRadius="14" Padding="10,4.5" Margin="0,0,8,0" VerticalAlignment="Center"
@@ -178,7 +186,8 @@
                                 </Border>
 
                                 <Button Style="{StaticResource BtnStyle}" Padding="10,4.5" FontSize="11.5"
-                                        WindowChrome.IsHitTestVisibleInChrome="True" Click="OnOpenCommandPaletteClick" Margin="0,0,8,0" ToolTip="Command Palette (Ctrl+K)">
+                                        WindowChrome.IsHitTestVisibleInChrome="True" Click="OnOpenCommandPaletteClick" Margin="0,0,8,0" ToolTip="Command Palette (Ctrl+K)"
+                                        AutomationProperties.Name="Open command palette">
                                     <StackPanel Orientation="Horizontal">
                                         <TextBlock Text="&#xE721;" FontFamily="Segoe MDL2 Assets" FontSize="11" Foreground="{DynamicResource TextSecondary}" Margin="0,0,6,0" VerticalAlignment="Center"/>
                                         <TextBlock Text="Search" Foreground="{DynamicResource TextSecondary}" Margin="0,0,6,0" VerticalAlignment="Center"/>
@@ -189,12 +198,14 @@
                                 </Button>
 
                                 <Button Style="{StaticResource BtnStyle}" Padding="7,6" WindowChrome.IsHitTestVisibleInChrome="True"
-                                        Click="OnToggleThemeClick" Margin="0,0,8,0" ToolTip="Toggle Dark / Light Theme">
+                                        Click="OnToggleThemeClick" Margin="0,0,8,0" ToolTip="Cycle theme: Dark → Light → Follow Windows"
+                                        AutomationProperties.Name="Cycle color theme">
                                     <TextBlock x:Name="ThemeToggleIcon" Text="&#xE708;" FontFamily="Segoe MDL2 Assets" FontSize="12"/>
                                 </Button>
 
                                 <Button x:Name="ProfileMenuBtn" WindowChrome.IsHitTestVisibleInChrome="True" Click="OnProfileMenuClick"
-                                        Background="Transparent" BorderThickness="0" Cursor="Hand" Margin="0,0,8,0" ToolTip="Node Actions &amp; Account Menu">
+                                        Background="Transparent" BorderThickness="0" Cursor="Hand" Margin="0,0,8,0" ToolTip="Node Actions &amp; Account Menu"
+                                        AutomationProperties.Name="Node actions and account menu">
                                     <Button.ContextMenu>
                                         <ContextMenu x:Name="ProfileContextMenu" Style="{StaticResource SaaSContextMenuStyle}">
                                             <MenuItem Header="Inspect Workstation Drawer" Click="OnOpenNodeDrawerMenuClick"/>
@@ -204,6 +215,8 @@
                                             <Separator/>
                                             <MenuItem Header="Open Settings" Click="OnGoToSettingsMenuClick"/>
                                             <MenuItem Header="Sign In / Re-Enroll Device" Click="OnOpenEnrollModalClick"/>
+                                            <Separator/>
+                                            <MenuItem Header="Exit AI Bridge" Click="OnExitApplicationClick"/>
                                         </ContextMenu>
                                     </Button.ContextMenu>
                                     <Border Width="26" Height="26" CornerRadius="13" Background="{DynamicResource AccentPrimary}">
@@ -212,9 +225,12 @@
                                     </Border>
                                 </Button>
 
-                                <Button Content="&#xE921;" Style="{StaticResource CaptionBtnStyle}" Click="OnMinimizeWindowClick" ToolTip="Minimize"/>
-                                <Button Content="&#xE922;" Style="{StaticResource CaptionBtnStyle}" Click="OnMaximizeRestoreClick" ToolTip="Maximize / Restore"/>
-                                <Button Content="&#xE8BB;" Style="{StaticResource CaptionBtnStyle}" Click="OnCloseToTrayClick" ToolTip="Minimize to Tray"/>
+                                <Button Content="&#xE921;" Style="{StaticResource CaptionBtnStyle}" Click="OnMinimizeWindowClick" ToolTip="Minimize"
+                                        AutomationProperties.Name="Minimize window"/>
+                                <Button Content="&#xE922;" Style="{StaticResource CaptionBtnStyle}" Click="OnMaximizeRestoreClick" ToolTip="Maximize / Restore"
+                                        AutomationProperties.Name="Maximize or restore window"/>
+                                <Button x:Name="CaptionCloseBtn" Content="&#xE8BB;" Style="{StaticResource CaptionBtnStyle}" Click="OnCloseToTrayClick" ToolTip="Minimize to tray (Exit from profile menu or tray)"
+                                        AutomationProperties.Name="Minimize to system tray"/>
                             </StackPanel>
                         </Grid>
                     </Border>
@@ -243,18 +259,20 @@
                             </StackPanel>
 
                             <WrapPanel x:Name="HeaderActionsWrap" Grid.Row="0" Grid.Column="1" VerticalAlignment="Center" HorizontalAlignment="Right">
-                                <Button x:Name="HeaderToggleAgentBtn" Style="{StaticResource PrimaryBtnStyle}" Click="OnToggleAgentClick" Margin="0,3,8,3">
+                                <Button x:Name="HeaderToggleAgentBtn" Style="{StaticResource PrimaryBtnStyle}" Click="OnToggleAgentClick" Margin="0,3,8,3"
+                                        ToolTip="Start or stop the control-plane fleet poller (not the local Agents chat)">
                                     <StackPanel Orientation="Horizontal">
                                         <TextBlock x:Name="HeaderAgentIcon" Text="&#xE768;" FontFamily="Segoe MDL2 Assets" FontSize="10.5" Margin="0,0,6,0" VerticalAlignment="Center"/>
-                                        <TextBlock x:Name="HeaderAgentLabel" Text="Start Agent" VerticalAlignment="Center"/>
+                                        <TextBlock x:Name="HeaderAgentLabel" Text="Start Poller" VerticalAlignment="Center"/>
                                     </StackPanel>
                                 </Button>
-                                <Button x:Name="HeaderPauseBtn" Style="{StaticResource BtnStyle}" Click="OnTogglePauseClick" IsEnabled="False" Margin="0,3,8,3">
-                                    <TextBlock x:Name="HeaderPauseLabel" Text="Pause"/>
+                                <Button x:Name="HeaderPauseBtn" Style="{StaticResource BtnStyle}" Click="OnTogglePauseClick" IsEnabled="False" Margin="0,3,8,3"
+                                        ToolTip="Pause or resume claiming fleet tasks from the control plane">
+                                    <TextBlock x:Name="HeaderPauseLabel" Text="Pause Poller"/>
                                 </Button>
-                                <Button Content="Ping" Style="{StaticResource BtnStyle}" Click="OnPingClick" Margin="0,3,8,3"/>
-                                <Button Content="Enroll" Style="{StaticResource BtnStyle}" Click="OnOpenEnrollModalClick" Margin="0,3,8,3"/>
-                                <Button Content="Dashboard" Style="{StaticResource BtnStyle}" Click="OnOpenDashboardClick" Margin="0,3,0,3"/>
+                                <Button Content="Ping" Style="{StaticResource BtnStyle}" Click="OnPingClick" Margin="0,3,8,3" ToolTip="Ping control plane /health"/>
+                                <Button Content="Enroll" Style="{StaticResource BtnStyle}" Click="OnOpenEnrollModalClick" Margin="0,3,8,3" ToolTip="Sign in or re-enroll this device"/>
+                                <Button Content="Dashboard" Style="{StaticResource BtnStyle}" Click="OnOpenDashboardClick" Margin="0,3,0,3" ToolTip="Open the web control plane"/>
                             </WrapPanel>
                         </Grid>
 
@@ -380,7 +398,7 @@
                                                             </Border>
                                                             <TextBlock Text="Endpoint &amp; Credential Controls" FontSize="13" FontWeight="Medium" Foreground="{DynamicResource TextPrimary}" VerticalAlignment="Center"/>
                                                         </StackPanel>
-                                                        <TextBlock x:Name="OverviewEndpointText" Text="https://ec2-77-114-76-12.us-east-2.compute.amazonaws.com" FontSize="12" FontFamily="Consolas" Foreground="{DynamicResource TextMuted}" TextTrimming="CharacterEllipsis" Margin="0,5,0,0"/>
+                                                        <TextBlock x:Name="OverviewEndpointText" Text="https://clideos.us" FontSize="12" FontFamily="Consolas" Foreground="{DynamicResource TextMuted}" TextTrimming="CharacterEllipsis" Margin="0,5,0,0"/>
                                                     </StackPanel>
                                                     <WrapPanel Grid.Column="1" VerticalAlignment="Center">
                                                         <Button Content="Rotate Token" Style="{StaticResource BtnStyle}" Click="OnRotateTokenClick" Margin="0,2,8,2"/>
@@ -459,30 +477,37 @@
                                                             <CheckBox x:Name="LogAutoScrollChk" IsChecked="True" Style="{StaticResource ToggleSwitchStyle}" Margin="0,0,10,0" VerticalAlignment="Center"/>
                                                             <Button x:Name="ExpandConsoleBtn" Content="&#xE740;" FontFamily="Segoe MDL2 Assets" FontSize="11"
                                                                     Style="{StaticResource TerminalChipStyle}" Click="OnToggleExpandConsoleClick"
-                                                                    ToolTip="Expand / Collapse Console"/>
+                                                                    ToolTip="Expand / Collapse Console"
+                                                                    AutomationProperties.Name="Expand or collapse activity console"/>
                                                         </StackPanel>
                                                     </Grid>
                                                 </Border>
 
-                                                <ListBox x:Name="ActivityLogList" Background="Transparent" BorderThickness="0"
-                                                         ScrollViewer.HorizontalScrollBarVisibility="Disabled"
-                                                         MouseDoubleClick="OnCopySelectedLogEntry">
-                                                    <ListBox.ItemContainerStyle>
-                                                        <Style TargetType="ListBoxItem">
-                                                            <Setter Property="Padding" Value="2,2"/>
-                                                            <Setter Property="Background" Value="Transparent"/>
-                                                        </Style>
-                                                    </ListBox.ItemContainerStyle>
-                                                    <ListBox.ItemTemplate>
-                                                        <DataTemplate>
-                                                            <StackPanel Orientation="Horizontal">
-                                                                <TextBlock Text="{Binding Timestamp, StringFormat='[{0}] '}" FontFamily="Consolas" FontSize="12" Foreground="#64748B"/>
-                                                                <TextBlock Text="{Binding Level, StringFormat='[{0}] '}" FontFamily="Consolas" FontSize="12" FontWeight="Medium" Foreground="{Binding LevelColor}"/>
-                                                                <TextBlock Text="{Binding Message}" FontFamily="Consolas" FontSize="12" Foreground="#CBD5E1" TextWrapping="Wrap"/>
-                                                            </StackPanel>
-                                                        </DataTemplate>
-                                                    </ListBox.ItemTemplate>
-                                                </ListBox>
+                                                <Grid>
+                                                    <ListBox x:Name="ActivityLogList" Background="Transparent" BorderThickness="0"
+                                                             ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                                             MouseDoubleClick="OnCopySelectedLogEntry"
+                                                             AutomationProperties.Name="Live activity log">
+                                                        <ListBox.ItemContainerStyle>
+                                                            <Style TargetType="ListBoxItem">
+                                                                <Setter Property="Padding" Value="2,2"/>
+                                                                <Setter Property="Background" Value="Transparent"/>
+                                                            </Style>
+                                                        </ListBox.ItemContainerStyle>
+                                                        <ListBox.ItemTemplate>
+                                                            <DataTemplate>
+                                                                <StackPanel Orientation="Horizontal">
+                                                                    <TextBlock Text="{Binding Timestamp, StringFormat='[{0}] '}" FontFamily="Consolas" FontSize="12" Foreground="#64748B"/>
+                                                                    <TextBlock Text="{Binding Level, StringFormat='[{0}] '}" FontFamily="Consolas" FontSize="12" FontWeight="Medium" Foreground="{Binding LevelColor}"/>
+                                                                    <TextBlock Text="{Binding Message}" FontFamily="Consolas" FontSize="12" Foreground="#CBD5E1" TextWrapping="Wrap"/>
+                                                                </StackPanel>
+                                                            </DataTemplate>
+                                                        </ListBox.ItemTemplate>
+                                                    </ListBox>
+                                                    <TextBlock x:Name="ActivityLogEmptyText" Text="No activity yet — connection and task events appear here."
+                                                               FontSize="12" Foreground="#64748B" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                               Visibility="Collapsed" IsHitTestVisible="False"/>
+                                                </Grid>
                                             </DockPanel>
                                         </Border>
                                     </Grid>
@@ -608,7 +633,7 @@
                                                     <ColumnDefinition Width="*"/>
                                                     <ColumnDefinition Width="Auto"/>
                                                 </Grid.ColumnDefinitions>
-                                                <TextBlock Grid.Column="0" Text="Payload &amp; Result Inspector" FontSize="12" FontWeight="Medium" Foreground="{DynamicResource TextSecondary}" VerticalAlignment="Center"/>
+                                                <TextBlock Grid.Column="0" Text="Task Metadata Inspector" FontSize="12" FontWeight="Medium" Foreground="{DynamicResource TextSecondary}" VerticalAlignment="Center"/>
                                                 <StackPanel Grid.Column="1" Orientation="Horizontal">
                                                     <Button Content="Open Drawer" Style="{StaticResource BtnStyle}" Padding="10,4" FontSize="12" Click="OnOpenTaskDrawerClick" Margin="0,0,6,0"/>
                                                     <Button Content="Copy JSON" Style="{StaticResource BtnStyle}" Padding="10,4" FontSize="12" Click="OnCopyTaskPayloadClick"/>
@@ -617,7 +642,7 @@
                                             <Border Background="{DynamicResource ConsoleCardBg}" BorderBrush="#1A1E2B" BorderThickness="1" CornerRadius="10" Padding="12">
                                                 <TextBox x:Name="TaskInspectorBox" Background="Transparent" Foreground="#CBD5E1"
                                                          BorderThickness="0" FontFamily="Consolas" FontSize="12"
-                                                         Text="Select a task row above to inspect payload and result details."
+                                                         Text="Select a task row to view metadata (tool, status, timing). Args and results are not stored locally."
                                                          IsReadOnly="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"/>
                                             </Border>
                                         </DockPanel>
@@ -693,7 +718,7 @@
                                                     <TextBlock Text="GPU &amp; Hardware" FontSize="12" Foreground="{DynamicResource TextMuted}" Margin="0,0,0,6"/>
                                                     <TextBlock x:Name="MonGpuText" Text="Detecting GPU..." FontSize="14" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}" TextTrimming="CharacterEllipsis"/>
                                                     <TextBlock x:Name="MonCpuModelText" Text="CPU..." FontSize="11.5" Foreground="{DynamicResource TextMuted}" TextTrimming="CharacterEllipsis" Margin="0,4,0,0"/>
-                                                    <TextBlock x:Name="MonPipeStatusText" Text="C++ Desktop Pipe: Offline" FontSize="11" FontFamily="Consolas" Foreground="{DynamicResource TextMuted}" Margin="0,2,0,0"/>
+                                                    <TextBlock x:Name="MonPipeStatusText" Text="Desktop pipe: Offline" FontSize="11" FontFamily="Consolas" Foreground="{DynamicResource TextMuted}" Margin="0,2,0,0"/>
                                                 </StackPanel>
                                             </Border>
                                         </UniformGrid>
@@ -714,14 +739,20 @@
                                                         <Button Content="End Process" Style="{StaticResource DangerBtnStyle}" Padding="10,5" FontSize="12" Click="OnKillProcessClick"/>
                                                     </StackPanel>
                                                 </Grid>
-                                                <DataGrid x:Name="ProcessesGrid" Style="{StaticResource MinimalDataGridStyle}" AutoGenerateColumns="False" IsReadOnly="True">
-                                                    <DataGrid.Columns>
-                                                        <DataGridTextColumn Header="PID" Binding="{Binding Pid}" Width="90" FontFamily="Consolas"/>
-                                                        <DataGridTextColumn Header="Process" Binding="{Binding Name}" Width="*"/>
-                                                        <DataGridTextColumn Header="Memory (MB)" Binding="{Binding MemoryMb}" Width="120" FontFamily="Consolas"/>
-                                                        <DataGridTextColumn Header="Threads" Binding="{Binding Threads}" Width="90" FontFamily="Consolas"/>
-                                                    </DataGrid.Columns>
-                                                </DataGrid>
+                                                <Grid>
+                                                    <DataGrid x:Name="ProcessesGrid" Style="{StaticResource MinimalDataGridStyle}" AutoGenerateColumns="False" IsReadOnly="True"
+                                                              AutomationProperties.Name="Process manager">
+                                                        <DataGrid.Columns>
+                                                            <DataGridTextColumn Header="PID" Binding="{Binding Pid}" Width="90" FontFamily="Consolas"/>
+                                                            <DataGridTextColumn Header="Process" Binding="{Binding Name}" Width="*"/>
+                                                            <DataGridTextColumn Header="Memory (MB)" Binding="{Binding MemoryMb}" Width="120" FontFamily="Consolas"/>
+                                                            <DataGridTextColumn Header="Threads" Binding="{Binding Threads}" Width="90" FontFamily="Consolas"/>
+                                                        </DataGrid.Columns>
+                                                    </DataGrid>
+                                                    <TextBlock x:Name="ProcessesEmptyText" Text="No processes match this filter."
+                                                               FontSize="12" Foreground="{DynamicResource TextMuted}" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                               Visibility="Collapsed" IsHitTestVisible="False"/>
+                                                </Grid>
                                             </DockPanel>
                                         </Border>
                                     </Grid>
@@ -744,11 +775,11 @@
                                             </Grid.ColumnDefinitions>
                                             <WrapPanel Grid.Column="0" VerticalAlignment="Center">
                                                 <ComboBox x:Name="VisionMonitorCombo" Style="{StaticResource SaaSComboBoxStyle}" Width="210" Margin="0,2,8,2" DisplayMemberPath="DisplayLabel"/>
-                                                <Button Content="Capture" Style="{StaticResource PrimaryBtnStyle}" Padding="12,6" FontSize="12" Click="OnCaptureScreenshotClick" Margin="0,2,8,2"/>
-                                                <Button Content="Full Desktop" Style="{StaticResource BtnStyle}" Padding="12,6" FontSize="12" Click="OnCaptureFullDesktopClick" Margin="0,2,8,2"/>
-                                                <Button Content="C++ H.264 Probe" Style="{StaticResource BtnStyle}" Padding="12,6" FontSize="12" Click="OnVisionCppProbeClick" Margin="0,2,8,2" ToolTip="Capture frame via C++20 DXGI and encode H.264 keyframe via Media Foundation"/>
-                                                <Button x:Name="VisionWebRtcBtn" Content="Start H.264 Stream" Style="{StaticResource BtnStyle}" Padding="12,6" FontSize="12" Click="OnVisionToggleWebRtcClick" Margin="0,2,8,2" ToolTip="Start or stop real-time C++20 DXGI + Media Foundation H.264 WebRTC streaming agent"/>
-                                                <Button Content="Reset DXGI" Style="{StaticResource BtnStyle}" Padding="12,6" FontSize="12" Click="OnVisionResetDxgiClick" Margin="0,2,8,2" ToolTip="Reinitialize C++ DXGI Desktop Duplication output"/>
+                                                <Button Content="Capture" Style="{StaticResource PrimaryBtnStyle}" Padding="12,6" FontSize="12" Click="OnCaptureScreenshotClick" Margin="0,2,8,2" ToolTip="Capture the selected monitor"/>
+                                                <Button Content="Full Desktop" Style="{StaticResource BtnStyle}" Padding="12,6" FontSize="12" Click="OnCaptureFullDesktopClick" Margin="0,2,8,2" ToolTip="Capture all monitors as one image"/>
+                                                <Button Content="Test Encode" Style="{StaticResource BtnStyle}" Padding="12,6" FontSize="12" Click="OnVisionCppProbeClick" Margin="0,2,8,2" ToolTip="Advanced: capture one frame via DXGI and encode an H.264 keyframe"/>
+                                                <Button x:Name="VisionWebRtcBtn" Content="Start Live Stream" Style="{StaticResource BtnStyle}" Padding="12,6" FontSize="12" Click="OnVisionToggleWebRtcClick" Margin="0,2,8,2" ToolTip="Start or stop live desktop WebRTC streaming (H.264)"/>
+                                                <Button Content="Reset Capture" Style="{StaticResource BtnStyle}" Padding="12,6" FontSize="12" Click="OnVisionResetDxgiClick" Margin="0,2,8,2" ToolTip="Advanced: reinitialize the native desktop capture pipeline"/>
                                                 <Button x:Name="VisionZoomBtn" Content="Zoom: Fit" Style="{StaticResource BtnStyle}" Padding="12,6" FontSize="12" Click="OnVisionZoomToggleClick" Margin="0,2,8,2"/>
                                                 <Button Content="Open" Style="{StaticResource BtnStyle}" Padding="12,6" FontSize="12" Click="OnOpenScreenshotClick" Margin="0,2,8,2"/>
                                                 <Button Content="Copy Path" Style="{StaticResource BtnStyle}" Padding="12,6" FontSize="12" Click="OnCopyScreenshotPathClick" Margin="0,2,8,2"/>
@@ -771,7 +802,7 @@
                                                 </ScrollViewer>
                                                 <StackPanel x:Name="VisionEmptyState" HorizontalAlignment="Center" VerticalAlignment="Center" IsHitTestVisible="False">
                                                     <TextBlock Text="Click Capture to inspect your desktop session" FontSize="14" FontWeight="Medium" Foreground="{DynamicResource TextPrimary}" HorizontalAlignment="Center"/>
-                                                    <TextBlock Text="Hardware C++20 DXGI Desktop Duplication &amp; Media Foundation H.264 with GDI fallback" FontSize="12" Foreground="{DynamicResource TextMuted}" Margin="0,6,0,0" HorizontalAlignment="Center"/>
+                                                    <TextBlock Text="GPU capture with software fallback · optional live stream" FontSize="12" Foreground="{DynamicResource TextMuted}" Margin="0,6,0,0" HorizontalAlignment="Center"/>
                                                 </StackPanel>
                                             </Grid>
                                         </Border>
@@ -779,11 +810,11 @@
                                         <Border x:Name="VisionHistoryCard" Grid.Column="1" Background="{DynamicResource BgCard}" BorderBrush="{DynamicResource BorderHairline}" BorderThickness="1" CornerRadius="12" Padding="16">
                                             <DockPanel>
                                                 <StackPanel DockPanel.Dock="Top" Margin="0,0,0,12">
-                                                    <TextBlock Text="Display Topology" FontSize="11" FontWeight="SemiBold" Foreground="{DynamicResource TextMuted}"/>
+                                                    <TextBlock Text="Displays" FontSize="11" FontWeight="SemiBold" Foreground="{DynamicResource TextMuted}"/>
                                                     <TextBlock x:Name="VisionDisplayInfoText" Text="Detecting displays..." FontSize="11.5" FontFamily="Consolas" Foreground="{DynamicResource TextPrimary}" TextWrapping="Wrap" Margin="0,4,0,10"/>
                                                     <Border Height="1" Background="{DynamicResource BorderHairline}" Margin="0,0,0,10"/>
-                                                    <TextBlock Text="C++20 DXGI &amp; H.264 Telemetry" FontSize="11" FontWeight="SemiBold" Foreground="{DynamicResource TextMuted}"/>
-                                                    <TextBlock x:Name="VisionCppMetricsText" Text="Engine: ai_bridge_native.dll ready" FontSize="11" FontFamily="Consolas" Foreground="{DynamicResource IndigoText}" TextWrapping="Wrap" Margin="0,4,0,10"/>
+                                                    <TextBlock Text="Capture Engine" FontSize="11" FontWeight="SemiBold" Foreground="{DynamicResource TextMuted}"/>
+                                                    <TextBlock x:Name="VisionCppMetricsText" Text="Native capture ready" FontSize="11" FontFamily="Consolas" Foreground="{DynamicResource IndigoText}" TextWrapping="Wrap" Margin="0,4,0,10"/>
                                                     <Border Height="1" Background="{DynamicResource BorderHairline}" Margin="0,0,0,10"/>
                                                     <TextBlock Text="Capture History" FontSize="12" FontWeight="Medium" Foreground="{DynamicResource TextSecondary}"/>
                                                 </StackPanel>
@@ -1162,16 +1193,16 @@
                                                             <ColumnDefinition Width="Auto"/>
                                                         </Grid.ColumnDefinitions>
                                                         <StackPanel Grid.Column="0">
-                                                            <TextBlock Text="C++20 Native Agent, DXGI Capture, Media Foundation H.264 &amp; WebRTC Engine" FontSize="13" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}"/>
-                                                            <TextBlock Text="Controls ai_bridge_native.dll (in-process P/Invoke), ai_bridge_service.exe (HMAC-SHA256 pipe server), and ai_bridge_desktop.exe (WebRTC/H.264 agent)" FontSize="11.5" Foreground="{DynamicResource TextMuted}" Margin="0,2,0,0"/>
+                                                            <TextBlock Text="Desktop Capture &amp; Live Stream Engine" FontSize="13" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}"/>
+                                                            <TextBlock Text="GPU capture, hardware encode, and the local pipe service used for live desktop streaming. Advanced binary names stay in tooltips." FontSize="11.5" Foreground="{DynamicResource TextMuted}" Margin="0,2,0,0"/>
                                                         </StackPanel>
-                                                        <TextBlock Grid.Column="1" x:Name="SetCppStatusBadge" Text="C++ DLL &amp; Pipe Active" FontSize="11.5" FontFamily="Consolas" Foreground="{DynamicResource SuccessText}" VerticalAlignment="Center"/>
+                                                        <TextBlock Grid.Column="1" x:Name="SetCppStatusBadge" Text="Engine Active" FontSize="11.5" FontFamily="Consolas" Foreground="{DynamicResource SuccessText}" VerticalAlignment="Center"/>
                                                     </Grid>
 
-                                                    <CheckBox x:Name="SetCppAutoStartChk" Style="{StaticResource ToggleSwitchStyle}" Content="Auto-start C++ Supervisor Named-Pipe Server (ai_bridge_service.exe --pipe-server)"/>
-                                                    <CheckBox x:Name="SetCppPreferDxgiChk" Style="{StaticResource ToggleSwitchStyle}" Content="Prefer C++20 DXGI Desktop Duplication GPU capture (automatic GDI fallback on Session-0 / headless)" Margin="0,4,0,0"/>
-                                                    <CheckBox x:Name="SetCppPreferHwH264Chk" Style="{StaticResource ToggleSwitchStyle}" Content="Prefer Hardware H.264 Encoder MFT (NVIDIA NVENC / Intel QuickSync / AMD AMF)" Margin="0,4,0,0"/>
-                                                    <CheckBox x:Name="SetCppAdaptiveBitrateChk" Style="{StaticResource ToggleSwitchStyle}" Content="Enable Dynamic Adaptive Bitrate (ABR) scaling on WebRTC transport congestion" Margin="0,4,0,0"/>
+                                                    <CheckBox x:Name="SetCppAutoStartChk" Style="{StaticResource ToggleSwitchStyle}" Content="Auto-start desktop pipe service on launch" ToolTip="Starts ai_bridge_service.exe --pipe-server"/>
+                                                    <CheckBox x:Name="SetCppPreferDxgiChk" Style="{StaticResource ToggleSwitchStyle}" Content="Prefer GPU desktop capture (fallback when GPU capture is unavailable)" Margin="0,4,0,0" ToolTip="DXGI Desktop Duplication with GDI fallback on Session-0 / headless"/>
+                                                    <CheckBox x:Name="SetCppPreferHwH264Chk" Style="{StaticResource ToggleSwitchStyle}" Content="Prefer hardware video encoder when available" Margin="0,4,0,0" ToolTip="Media Foundation H.264 MFT: NVENC / QuickSync / AMF"/>
+                                                    <CheckBox x:Name="SetCppAdaptiveBitrateChk" Style="{StaticResource ToggleSwitchStyle}" Content="Adapt stream bitrate when the network is congested" Margin="0,4,0,0" ToolTip="Dynamic ABR on WebRTC transport congestion"/>
                                                     <CheckBox x:Name="SetCppCursorHaloChk" Style="{StaticResource ToggleSwitchStyle}" Content="Show glowing cursor halo while AI Agent controls the screen" Margin="0,4,0,10"/>
 
                                                     <StackPanel Orientation="Horizontal" Margin="0,0,0,14" VerticalAlignment="Center">
@@ -1200,7 +1231,7 @@
 
                                                     <UniformGrid Columns="3" Margin="-6,0,-6,8">
                                                         <StackPanel Margin="6,0">
-                                                            <TextBlock Text="C++ WebRTC TURN Server URL" FontSize="12" Foreground="{DynamicResource TextMuted}" Margin="0,0,0,6"/>
+                                                            <TextBlock Text="TURN Server URL" FontSize="12" Foreground="{DynamicResource TextMuted}" Margin="0,0,0,6"/>
                                                             <TextBox x:Name="SetCppTurnUrlBox" Style="{StaticResource FieldStyle}" FontFamily="Consolas" ToolTip="Example: turn:clideos.us:3478 — pulled from the control plane ICE list when empty"/>
                                                         </StackPanel>
                                                         <StackPanel Margin="6,0">
@@ -1214,25 +1245,25 @@
                                                     </UniformGrid>
                                                     <WrapPanel Margin="0,0,0,14">
                                                         <Button Content="Pull TURN from Control Plane" Style="{StaticResource BtnStyle}" Padding="10,6" FontSize="11.5" Click="OnCppPullTurnClick" Margin="0,0,6,0"
-                                                                ToolTip="Fetches ephemeral ICE/TURN from /api/agent/webrtc/ice-servers (or operator ice-servers)"/>
+                                                                ToolTip="Fetches ephemeral ICE/TURN from the control plane"/>
                                                         <TextBlock x:Name="SetCppTurnHintText" Text="" FontSize="11.5" Foreground="{DynamicResource TextMuted}" VerticalAlignment="Center" TextWrapping="Wrap"/>
                                                     </WrapPanel>
 
                                                     <WrapPanel Margin="0,0,0,10">
-                                                        <Button Content="Apply H.264 Bitrate Live" Style="{StaticResource PrimaryBtnStyle}" Padding="10,6" FontSize="11.5" Click="OnCppApplyBitrateClick" Margin="0,2,6,2"/>
-                                                        <Button Content="Probe DXGI + H.264" Style="{StaticResource BtnStyle}" Padding="10,6" FontSize="11.5" Click="OnCppProbeEngineClick" Margin="0,2,6,2"/>
-                                                        <Button Content="Run C++ Self-Tests (7/7)" Style="{StaticResource BtnStyle}" Padding="10,6" FontSize="11.5" Click="OnCppRunSelfTestsClick" Margin="0,2,6,2"/>
-                                                        <Button Content="C++ System Health JSON" Style="{StaticResource BtnStyle}" Padding="10,6" FontSize="11.5" Click="OnCppSystemHealthClick" Margin="0,2,6,2"/>
-                                                        <Button Content="Ping Pipe" Style="{StaticResource BtnStyle}" Padding="10,6" FontSize="11.5" Click="OnCppPingPipeClick" Margin="0,2,6,2"/>
-                                                        <Button Content="Restart C++ Pipe Server" Style="{StaticResource BtnStyle}" Padding="10,6" FontSize="11.5" Click="OnCppRestartSupervisorClick" Margin="0,2,6,2"/>
-                                                        <Button Content="Stop Pipe Server" Style="{StaticResource DangerBtnStyle}" Padding="10,6" FontSize="11.5" Click="OnCppStopSupervisorClick" Margin="0,2,6,2"/>
+                                                        <Button Content="Apply Bitrate Live" Style="{StaticResource PrimaryBtnStyle}" Padding="10,6" FontSize="11.5" Click="OnCppApplyBitrateClick" Margin="0,2,6,2" ToolTip="Push the bitrate setting to the running stream"/>
+                                                        <Button Content="Test Capture + Encode" Style="{StaticResource BtnStyle}" Padding="10,6" FontSize="11.5" Click="OnCppProbeEngineClick" Margin="0,2,6,2" ToolTip="Advanced: DXGI capture + H.264 encode probe"/>
+                                                        <Button Content="Run Engine Self-Tests" Style="{StaticResource BtnStyle}" Padding="10,6" FontSize="11.5" Click="OnCppRunSelfTestsClick" Margin="0,2,6,2" ToolTip="Advanced: run the native 7/7 self-test suite"/>
+                                                        <Button Content="Engine Health" Style="{StaticResource BtnStyle}" Padding="10,6" FontSize="11.5" Click="OnCppSystemHealthClick" Margin="0,2,6,2" ToolTip="Advanced: dump native system health JSON"/>
+                                                        <Button Content="Ping Pipe" Style="{StaticResource BtnStyle}" Padding="10,6" FontSize="11.5" Click="OnCppPingPipeClick" Margin="0,2,6,2" ToolTip="Check the desktop named-pipe service"/>
+                                                        <Button Content="Restart Pipe Service" Style="{StaticResource BtnStyle}" Padding="10,6" FontSize="11.5" Click="OnCppRestartSupervisorClick" Margin="0,2,6,2"/>
+                                                        <Button Content="Stop Pipe Service" Style="{StaticResource DangerBtnStyle}" Padding="10,6" FontSize="11.5" Click="OnCppStopSupervisorClick" Margin="0,2,6,2"/>
                                                         <Button Content="Release Held Keys" Style="{StaticResource DangerBtnStyle}" Padding="10,6" FontSize="11.5" Click="OnCppReleaseKeysClick" Margin="0,2,0,2"/>
                                                     </WrapPanel>
 
                                                     <TextBox x:Name="SetCppConsoleBox" Height="130" Background="{DynamicResource ConsoleCardBg}" Foreground="#CBD5E1"
                                                              BorderThickness="0" FontFamily="Consolas" FontSize="11" IsReadOnly="True" Padding="10"
                                                              TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
-                                                             Text="Click 'Probe DXGI + H.264' or 'Run C++ Self-Tests (7/7)' to inspect the native C++20 engine."/>
+                                                             Text="Use Test Capture + Encode or Run Engine Self-Tests to inspect the native desktop engine."/>
                                                 </StackPanel>
                                             </Border>
 
@@ -1376,7 +1407,7 @@
                                                 <StackPanel DockPanel.Dock="Bottom" Margin="0,10,0,0">
                                                     <Border Background="{DynamicResource BgCard}" BorderBrush="{DynamicResource BorderHairline}" BorderThickness="1" CornerRadius="10" Padding="10" Margin="0,0,0,8">
                                                         <StackPanel>
-                                                            <TextBlock x:Name="AgPollerStateText" Text="Worker: Stopped" FontSize="11" FontWeight="SemiBold" Foreground="{DynamicResource TextMuted}"/>
+                                                            <TextBlock x:Name="AgPollerStateText" Text="Fleet poller: Stopped" FontSize="11" FontWeight="SemiBold" Foreground="{DynamicResource TextMuted}"/>
                                                             <TextBlock x:Name="AgPipeStateText" Text="Desktop Pipe: Not Running" FontSize="11" Foreground="{DynamicResource WarningText}" Margin="0,2,0,0"/>
                                                             <TextBlock x:Name="AgPollerMetaText" Text="Local tools ready" FontSize="10.5" FontFamily="Consolas" Foreground="{DynamicResource TextMuted}" Margin="0,2,0,0" TextTrimming="CharacterEllipsis"/>
                                                         </StackPanel>
@@ -1425,13 +1456,16 @@
                                             <!-- Top Model / Mode Bar (wraps cleanly so controls never clip) -->
                                             <Border Grid.Row="0" BorderBrush="{DynamicResource BorderHairline}" BorderThickness="0,0,0,1" Padding="14,8">
                                                 <WrapPanel VerticalAlignment="Center" ItemHeight="30">
-                                                    <ComboBox x:Name="AgChatModeCombo" Style="{StaticResource SaaSComboBoxStyle}" Width="210" SelectedIndex="0" FontSize="11.5" Margin="0,2,8,2">
+                                                    <ComboBox x:Name="AgChatModeCombo" Style="{StaticResource SaaSComboBoxStyle}" Width="210" SelectedIndex="0" FontSize="11.5" Margin="0,2,8,2"
+                                                              ToolTip="Chat profile for this conversation. Transport/API details are under Agent Settings → Routing.">
                                                         <ComboBoxItem Content="AI Bridge Copilot (Auto + Local)" Tag="auto"/>
                                                         <ComboBoxItem Content="OpenAI · GPT-4o (This Device)" Tag="openai"/>
                                                         <ComboBoxItem Content="Anthropic · Claude (This Device)" Tag="anthropic"/>
                                                         <ComboBoxItem Content="Google · Gemini (This Device)" Tag="gemini"/>
                                                         <ComboBoxItem Content="Local Windows Tools Only (Offline)" Tag="local"/>
                                                     </ComboBox>
+                                                    <Button x:Name="AgShowChatsBtn" Content="Show Chats" Style="{StaticResource BtnStyle}" Padding="9,4" FontSize="11" Margin="0,2,6,2"
+                                                            Visibility="Collapsed" Click="OnAgShowChatsClick" ToolTip="Restore the conversation list"/>
                                                     <Button x:Name="AgFullPcBtn" Content="Full PC: Off" Style="{StaticResource BtnStyle}" Padding="9,4" FontSize="11" Margin="0,2,6,2"
                                                             Click="OnAgToggleFullPcClick" ToolTip="Grant or revoke full access to all PC drives/files, PowerShell, processes, and apps (asks confirmation first)"/>
                                                     <Button x:Name="AgFullUiBtn" Content="Full UI: Off" Style="{StaticResource BtnStyle}" Padding="9,4" FontSize="11" Margin="0,2,6,2"
@@ -1564,7 +1598,8 @@
                                                             <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
                                                                 <Button x:Name="AgMicBtn" Content="🎤 Voice" Style="{StaticResource GhostBtnStyle}" Padding="8,5" FontSize="11.5" Click="OnAgVoiceInputClick" Margin="0,0,4,0" ToolTip="Push-to-Talk voice command (Windows Speech Recognition)"/>
                                                                 <Button Content="Attach" Style="{StaticResource GhostBtnStyle}" Padding="8,5" FontSize="11.5" Click="OnAgAttachFileClick" Margin="0,0,4,0" ToolTip="Attach an image or text file to your message"/>
-                                                                <Button Content="Clear" Style="{StaticResource GhostBtnStyle}" Padding="8,5" FontSize="11.5" Click="OnAgNewChatClick" Margin="0,0,6,0"/>
+                                                                <Button Content="New Chat" Style="{StaticResource GhostBtnStyle}" Padding="8,5" FontSize="11.5" Click="OnAgNewChatClick" Margin="0,0,6,0"
+                                                                        ToolTip="Start a new conversation thread"/>
                                                                 <Button x:Name="AgSendBtn" Content="Send ↑" Style="{StaticResource PrimaryBtnStyle}" Padding="14,6" FontSize="12" Click="OnAgSendChatClick"/>
                                                             </StackPanel>
                                                         </Grid>
@@ -1638,23 +1673,24 @@
                                                             <Border Background="{DynamicResource BgCard}" BorderBrush="{DynamicResource BorderHairline}" BorderThickness="1" CornerRadius="10" Padding="12" Margin="0,0,0,10">
                                                                 <StackPanel>
                                                                     <TextBlock Text="AI API Connection" FontSize="12" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}" Margin="0,0,0,6"/>
-                                                                    <TextBlock Text="Routing Mode" FontSize="10.5" Foreground="{DynamicResource TextMuted}" Margin="0,0,0,3"/>
-                                                                    <ComboBox x:Name="AgSetConnModeCombo" Style="{StaticResource SaaSComboBoxStyle}" SelectedIndex="0" Margin="0,0,0,6">
-                                                                        <ComboBoxItem Content="Auto (Direct API Key if set → Local Tools)" Tag="direct_or_local"/>
-                                                                        <ComboBoxItem Content="Direct AI API (Execute Tools Directly on This PC)" Tag="direct_api"/>
-                                                                        <ComboBoxItem Content="Via Control Plane (/api/ai/chat)" Tag="control_plane"/>
-                                                                        <ComboBoxItem Content="Local Windows Tools Only (No AI API)" Tag="local_only"/>
+                                                                    <TextBlock Text="How chat reaches a model (separate from the toolbar chat profile)" FontSize="10.5" Foreground="{DynamicResource TextMuted}" Margin="0,0,0,3" TextWrapping="Wrap"/>
+                                                                    <ComboBox x:Name="AgSetConnModeCombo" Style="{StaticResource SaaSComboBoxStyle}" SelectedIndex="0" Margin="0,0,0,6"
+                                                                              ToolTip="Advanced transport. The Agents toolbar chat profile picks the model family.">
+                                                                        <ComboBoxItem Content="Auto (API key if set → local tools)" Tag="direct_or_local"/>
+                                                                        <ComboBoxItem Content="Direct AI API on this PC" Tag="direct_api"/>
+                                                                        <ComboBoxItem Content="Via Control Plane chat API" Tag="control_plane"/>
+                                                                        <ComboBoxItem Content="Local Windows tools only (no AI API)" Tag="local_only"/>
                                                                     </ComboBox>
 
                                                                     <UniformGrid Columns="2" Margin="0,0,0,6">
                                                                         <StackPanel Margin="0,0,4,0">
                                                                             <TextBlock Text="AI Provider" FontSize="10.5" Foreground="{DynamicResource TextMuted}" Margin="0,0,0,3"/>
                                                                             <ComboBox x:Name="AgSetProviderCombo" Style="{StaticResource SaaSComboBoxStyle}" SelectionChanged="OnAgSettingsProviderChanged">
-                                                                                <ComboBoxItem Content="openai" Tag="openai"/>
-                                                                                <ComboBoxItem Content="anthropic" Tag="anthropic"/>
-                                                                                <ComboBoxItem Content="gemini" Tag="gemini"/>
-                                                                                <ComboBoxItem Content="ollama" Tag="ollama"/>
-                                                                                <ComboBoxItem Content="custom" Tag="custom"/>
+                                                                                <ComboBoxItem Content="OpenAI" Tag="openai"/>
+                                                                                <ComboBoxItem Content="Anthropic" Tag="anthropic"/>
+                                                                                <ComboBoxItem Content="Google Gemini" Tag="gemini"/>
+                                                                                <ComboBoxItem Content="Ollama (local)" Tag="ollama"/>
+                                                                                <ComboBoxItem Content="Custom endpoint" Tag="custom"/>
                                                                             </ComboBox>
                                                                         </StackPanel>
                                                                         <StackPanel Margin="4,0,0,0">
@@ -1833,12 +1869,12 @@
                         </StackPanel>
                         <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
                             <Button Style="{StaticResource BtnStyle}" Padding="7,6" WindowChrome.IsHitTestVisibleInChrome="True"
-                                    Click="OnToggleThemeClick" Margin="0,0,8,0" ToolTip="Toggle Dark / Light Theme">
+                                    Click="OnToggleThemeClick" Margin="0,0,8,0" ToolTip="Cycle theme: Dark → Light → Follow Windows">
                                 <TextBlock x:Name="SignInThemeIcon" Text="&#xE708;" FontFamily="Segoe MDL2 Assets" FontSize="12"/>
                             </Button>
                             <Button Content="&#xE921;" Style="{StaticResource CaptionBtnStyle}" Click="OnMinimizeWindowClick" ToolTip="Minimize"/>
                             <Button Content="&#xE922;" Style="{StaticResource CaptionBtnStyle}" Click="OnMaximizeRestoreClick" ToolTip="Maximize / Restore"/>
-                            <Button Content="&#xE8BB;" Style="{StaticResource CaptionBtnStyle}" Click="OnCloseToTrayClick" ToolTip="Close"/>
+                            <Button Content="&#xE8BB;" Style="{StaticResource CaptionBtnStyle}" Click="OnCloseToTrayClick" ToolTip="Minimize to tray (Exit from tray menu)"/>
                         </StackPanel>
                     </Grid>
                 </Border>
@@ -1975,7 +2011,8 @@
                                 <TextBlock x:Name="DrawerTitleText" Text="Workstation Inspector" FontSize="16" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}"/>
                                 <TextBlock x:Name="DrawerSubtitleText" Text="Live runtime metadata" FontSize="12" Foreground="{DynamicResource TextSecondary}" Margin="0,2,0,0"/>
                             </StackPanel>
-                            <Button Grid.Column="1" Content="&#xE8BB;" Style="{StaticResource IconBtnStyle}" Click="OnCloseDrawerClick" ToolTip="Close Drawer"/>
+                            <Button Grid.Column="1" Content="&#xE8BB;" Style="{StaticResource IconBtnStyle}" Click="OnCloseDrawerClick" ToolTip="Close Drawer"
+                                    AutomationProperties.Name="Close inspector drawer"/>
                         </Grid>
 
                         <Border DockPanel.Dock="Bottom" BorderBrush="{DynamicResource BorderHairline}" BorderThickness="0,1,0,0" Padding="0,14,0,0" Margin="0,14,0,0">
@@ -1997,11 +2034,24 @@
                 </Border>
             </Grid>
 
-            <!-- TOAST -->
-            <Border x:Name="ToastBanner" Grid.Row="1" Visibility="Collapsed" HorizontalAlignment="Right" VerticalAlignment="Bottom"
-                    Margin="0,0,22,20" Background="{DynamicResource BgCard}" BorderBrush="{DynamicResource BorderHover}" BorderThickness="1" CornerRadius="10" Padding="14,9">
-                <TextBlock x:Name="ToastText" Text="" FontSize="12" FontWeight="Medium" Foreground="{DynamicResource TextPrimary}"/>
-            </Border>
+            <!-- TOAST STACK -->
+            <ItemsControl x:Name="ToastStack" Grid.Row="1" HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                          Margin="0,0,22,20" IsHitTestVisible="False"
+                          AutomationProperties.Name="Notification toasts">
+                <ItemsControl.ItemsPanel>
+                    <ItemsPanelTemplate>
+                        <StackPanel Orientation="Vertical" VerticalAlignment="Bottom"/>
+                    </ItemsPanelTemplate>
+                </ItemsControl.ItemsPanel>
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                        <Border Margin="0,0,0,8" Background="{DynamicResource BgCard}" BorderBrush="{DynamicResource BorderHover}"
+                                BorderThickness="1" CornerRadius="10" Padding="14,9" MaxWidth="420">
+                            <TextBlock Text="{Binding Message}" FontSize="12" FontWeight="Medium" Foreground="{DynamicResource TextPrimary}" TextWrapping="Wrap"/>
+                        </Border>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
 
             <!-- COMMAND PALETTE MODAL (Ctrl+K) -->
             <Grid x:Name="CommandPaletteOverlay" Grid.RowSpan="2" Visibility="Collapsed" Background="#88000000" MouseDown="OnOverlayBackdropClick">
@@ -2017,9 +2067,15 @@
                         </Grid>
                         <TextBox x:Name="CommandSearchBox" Style="{StaticResource FieldStyle}" Tag="Search commands or views..."
                                  TextChanged="OnCommandSearchChanged" PreviewKeyDown="OnCommandBoxKeyDown" Margin="0,0,0,8"/>
-                        <ListBox x:Name="CommandResultsList" MaxHeight="240" Background="Transparent"
-                                 Foreground="{DynamicResource TextPrimary}" BorderThickness="0" DisplayMemberPath="Label"
-                                 MouseDoubleClick="OnCommandItemDoubleClick"/>
+                        <Grid>
+                            <ListBox x:Name="CommandResultsList" MaxHeight="240" Background="Transparent"
+                                     Foreground="{DynamicResource TextPrimary}" BorderThickness="0" DisplayMemberPath="Label"
+                                     MouseDoubleClick="OnCommandItemDoubleClick"
+                                     AutomationProperties.Name="Command palette results"/>
+                            <TextBlock x:Name="CommandPaletteEmptyText" Text="No matching commands"
+                                       FontSize="12" Foreground="{DynamicResource TextMuted}" HorizontalAlignment="Center"
+                                       Margin="0,24,0,8" Visibility="Collapsed" IsHitTestVisible="False"/>
+                        </Grid>
                     </StackPanel>
                 </Border>
             </Grid>
@@ -2075,7 +2131,9 @@
                 <Border Width="500" VerticalAlignment="Center" Background="{DynamicResource BgCard}" BorderBrush="#F59E0B" BorderThickness="1" CornerRadius="12" Padding="20">
                     <StackPanel>
                         <TextBlock Text="WORKSTATION APPROVAL REQUIRED" FontSize="11" FontWeight="SemiBold" Foreground="#F59E0B"/>
-                        <TextBlock x:Name="ApprovalTitleText" Text="Task Execution Request" FontSize="16" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}" Margin="0,4,0,10"/>
+                        <TextBlock x:Name="ApprovalTitleText" Text="Task Execution Request" FontSize="16" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}" Margin="0,4,0,6"/>
+                        <TextBlock Text="Approve Once allows only this request. Always Allow turns off future local approval and mutating-function prompts until you re-enable them in Security &amp; Policy."
+                                   FontSize="12" Foreground="{DynamicResource TextSecondary}" TextWrapping="Wrap" Margin="0,0,0,10"/>
                         <Border Background="{DynamicResource ConsoleCardBg}" BorderBrush="#1A1E2B" BorderThickness="1" CornerRadius="8" Padding="12" Margin="0,0,0,14">
                             <TextBox x:Name="ApprovalArgsBox" Height="150" Background="Transparent" Foreground="#CBD5E1"
                                      BorderThickness="0" FontFamily="Consolas" FontSize="12" IsReadOnly="True"
@@ -2083,8 +2141,10 @@
                         </Border>
                         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
                             <Button Content="Deny" Style="{StaticResource DangerBtnStyle}" Click="OnDenyLocalApprovalClick" Margin="0,0,8,0"/>
-                            <Button Content="Approve Once" Style="{StaticResource BtnStyle}" Click="OnApproveLocalApprovalClick" Margin="0,0,8,0"/>
-                            <Button Content="Always Allow (Don't Ask Again)" Style="{StaticResource PrimaryBtnStyle}" Click="OnApproveAlwaysLocalApprovalClick"/>
+                            <Button Content="Approve Once" Style="{StaticResource BtnStyle}" Click="OnApproveLocalApprovalClick" Margin="0,0,8,0"
+                                    ToolTip="Allow this single request only"/>
+                            <Button Content="Always Allow…" Style="{StaticResource PrimaryBtnStyle}" Click="OnApproveAlwaysLocalApprovalClick"
+                                    ToolTip="Disable future approval prompts on this device (confirmation required)"/>
                         </StackPanel>
                     </StackPanel>
                 </Border>

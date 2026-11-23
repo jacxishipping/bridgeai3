@@ -185,12 +185,17 @@ public static class AgentTakeoverService
         }
     });
 
-    /// <summary>User clicked "Return Control to Agent".</summary>
+    /// <summary>
+    /// User clicked "Return Control to Agent": resume agent desktop input and re-lock
+    /// physical input under the takeover glow (does not end the takeover session).
+    /// </summary>
     public static void ReturnControlToAgent() => RunOnUi(() =>
     {
         if (_state == TakeoverState.UserControl)
         {
-            SetState(TakeoverState.Idle);
+            _lastActivityTick = Environment.TickCount64;
+            _paused = false;
+            SetState(TakeoverState.AgentControlling);
         }
     });
 

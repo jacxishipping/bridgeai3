@@ -304,12 +304,13 @@ public sealed class AgentTakeoverPillWindow : Window
 
         _pauseButton = new System.Windows.Controls.Button
         {
-            Content = "Pause",
+            Content = "Pause Input",
             Padding = new Thickness(11, 6, 11, 6),
             Margin = new Thickness(0, 0, 8, 0),
             FontSize = 12,
             FontWeight = FontWeights.SemiBold,
             Foreground = System.Windows.Media.Brushes.White,
+            ToolTip = "Pause or resume AI desktop input only (does not pause the fleet poller)",
             Background = new SolidColorBrush(System.Windows.Media.Color.FromRgb(0x33, 0x41, 0x55)),
             BorderThickness = new Thickness(0),
             Cursor = System.Windows.Input.Cursors.Hand,
@@ -318,7 +319,7 @@ public sealed class AgentTakeoverPillWindow : Window
         _pauseButton.Click += (_, _) =>
         {
             AgentTakeoverService.TogglePause();
-            _pauseButton.Content = AgentTakeoverService.IsPaused ? "Resume" : "Pause";
+            _pauseButton.Content = AgentTakeoverService.IsPaused ? "Resume Input" : "Pause Input";
         };
 
         _button = new System.Windows.Controls.Button
@@ -386,10 +387,13 @@ public sealed class AgentTakeoverPillWindow : Window
         bool agent = state == TakeoverState.AgentControlling;
         _label.Text = agent
             ? "AI agent is controlling your screen  ·  Ctrl+Alt+T"
-            : "You are in control  ·  agent input paused";
+            : "You are in control  ·  Return Control resumes agent input";
         _pauseButton.Visibility = agent ? Visibility.Visible : Visibility.Collapsed;
-        _pauseButton.Content = AgentTakeoverService.IsPaused ? "Resume" : "Pause";
+        _pauseButton.Content = AgentTakeoverService.IsPaused ? "Resume Input" : "Pause Input";
         _button.Content = agent ? "Take Over" : "Return Control to Agent";
+        _button.ToolTip = agent
+            ? "Reclaim mouse and keyboard (Ctrl+Alt+T)"
+            : "Resume AI desktop input and re-lock physical input";
         _button.Background = new SolidColorBrush(agent
             ? System.Windows.Media.Color.FromRgb(0xEF, 0x44, 0x44)
             : System.Windows.Media.Color.FromRgb(0x10, 0xB9, 0x81));
