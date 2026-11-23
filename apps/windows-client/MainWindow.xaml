@@ -1,17 +1,18 @@
 <Window x:Class="AIBridgeClient.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="AI Bridge — Minimal Enterprise Windows Control Plane"
+        Title="AI Bridge"
         Width="1300" Height="840"
         MinWidth="740" MinHeight="560"
         Background="{DynamicResource BgCanvas}"
         Foreground="{DynamicResource TextPrimary}"
         PreviewKeyDown="OnWindowPreviewKeyDown"
         SizeChanged="OnWindowSizeChanged"
-        WindowStartupLocation="CenterScreen">
+        WindowStartupLocation="CenterScreen"
+        FontFamily="Segoe UI Variable Text, Segoe UI">
 
     <WindowChrome.WindowChrome>
-        <WindowChrome CaptionHeight="48" ResizeBorderThickness="6" GlassFrameThickness="0" CornerRadius="10"/>
+        <WindowChrome CaptionHeight="48" ResizeBorderThickness="6" GlassFrameThickness="0" CornerRadius="12"/>
     </WindowChrome.WindowChrome>
 
     <Border BorderBrush="{DynamicResource BorderHairline}" BorderThickness="1">
@@ -38,43 +39,43 @@
                 </Grid.ColumnDefinitions>
 
                 <!-- SIDEBAR -->
-                <Border Grid.Column="0" Background="{DynamicResource BgSidebar}" BorderBrush="{DynamicResource BorderHairline}" BorderThickness="0,0,1,0" Padding="12,16">
+                <Border Grid.Column="0" Background="{DynamicResource BgSidebar}" BorderBrush="{DynamicResource BorderHairline}" BorderThickness="0,0,1,0" Padding="12,18">
                     <DockPanel>
                         <!-- Brand Row -->
-                        <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="8,0,0,24">
-                            <Border Width="28" Height="28" CornerRadius="7" Background="{DynamicResource AccentPrimary}" Margin="0,0,10,0">
-                                <TextBlock Text="AI" FontSize="11.5" FontWeight="SemiBold" Foreground="#FFFFFF"
+                        <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="6,0,0,28">
+                            <Border Width="32" Height="32" CornerRadius="9" Background="{DynamicResource AccentPrimary}" Margin="0,0,11,0">
+                                <TextBlock Text="AI" FontSize="12" FontWeight="Bold" Foreground="#FFFFFF"
                                            HorizontalAlignment="Center" VerticalAlignment="Center"/>
                             </Border>
-                            <StackPanel x:Name="SidebarBrandText" Orientation="Horizontal" VerticalAlignment="Center">
-                                <TextBlock Text="AI Bridge" FontSize="13.5" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}" VerticalAlignment="Center"/>
-                                <TextBlock Text="v0.3.0" FontSize="10.5" FontFamily="Consolas" Foreground="{DynamicResource TextMuted}" Margin="7,2,0,0" VerticalAlignment="Center"/>
+                            <StackPanel x:Name="SidebarBrandText" VerticalAlignment="Center">
+                                <TextBlock Text="AI Bridge" FontSize="14" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}"/>
+                                <TextBlock Text="Workstation · v0.3.0" FontSize="10.5" Foreground="{DynamicResource TextMuted}" Margin="0,1,0,0"/>
                             </StackPanel>
                         </StackPanel>
 
                         <!-- Bottom Control Plane Card + Footer Version -->
                         <StackPanel DockPanel.Dock="Bottom">
-                            <Border Background="{DynamicResource BgCard}" BorderBrush="{DynamicResource BorderHairline}" BorderThickness="1" CornerRadius="12" Padding="12"
+                            <Border Background="{DynamicResource BgCard}" BorderBrush="{DynamicResource BorderHairline}" BorderThickness="1" CornerRadius="14" Padding="13,12"
                                     Cursor="Hand" MouseLeftButtonUp="OnOpenNodeDrawerClick" ToolTip="Inspect workstation details">
                                 <StackPanel>
-                                    <Grid Margin="0,0,0,4">
+                                    <Grid Margin="0,0,0,5">
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="*"/>
                                             <ColumnDefinition Width="Auto"/>
                                         </Grid.ColumnDefinitions>
-                                        <TextBlock x:Name="SidebarLinkTitle" Grid.Column="0" Text="Control Plane Link" FontSize="11" FontWeight="Medium" Foreground="{DynamicResource TextSecondary}"/>
-                                        <Ellipse x:Name="SidebarStatusDot" Grid.Column="1" Width="6" Height="6" Fill="#94A3B8" VerticalAlignment="Center"/>
+                                        <TextBlock x:Name="SidebarLinkTitle" Grid.Column="0" Text="Control Plane" FontSize="11" FontWeight="Medium" Foreground="{DynamicResource TextSecondary}"/>
+                                        <Ellipse x:Name="SidebarStatusDot" Grid.Column="1" Width="8" Height="8" Fill="#94A3B8" VerticalAlignment="Center"/>
                                     </Grid>
-                                    <TextBlock x:Name="SidebarStatusText" Text="Disconnected" FontSize="12" FontWeight="SemiBold" Foreground="{DynamicResource TextSecondary}"/>
-                                    <TextBlock x:Name="SidebarLinkSub" Text="Outbound-only poller" FontSize="11" Foreground="{DynamicResource TextMuted}" Margin="0,2,0,0"/>
+                                    <TextBlock x:Name="SidebarStatusText" Text="Disconnected" FontSize="12.5" FontWeight="SemiBold" Foreground="{DynamicResource TextSecondary}"/>
+                                    <TextBlock x:Name="SidebarLinkSub" Text="Outbound-only poller" FontSize="11" Foreground="{DynamicResource TextMuted}" Margin="0,3,0,0"/>
                                 </StackPanel>
                             </Border>
-                            <TextBlock x:Name="SidebarFooterVersion" Text="AI Bridge v0.3.0" FontSize="11" Foreground="{DynamicResource TextMuted}" Margin="6,10,0,0"/>
+                            <TextBlock x:Name="SidebarFooterVersion" Text="AI Bridge for Windows" FontSize="10.5" Foreground="{DynamicResource TextMuted}" Margin="8,12,0,0"/>
                         </StackPanel>
 
                         <!-- Navigation -->
                         <StackPanel>
-                            <TextBlock x:Name="NavGroupOpsText" Text="OPERATIONS" FontSize="10.5" FontWeight="Medium" Foreground="{DynamicResource TextMuted}" Margin="10,0,0,6"/>
+                            <TextBlock x:Name="NavGroupOpsText" Text="OPERATIONS" FontSize="10" FontWeight="SemiBold" Foreground="{DynamicResource TextMuted}" Margin="12,0,0,8"/>
 
                             <Button x:Name="NavOverviewBtn" Style="{StaticResource NavButtonActiveStyle}" Click="OnNavClick" Tag="0" Margin="0,0,0,2" ToolTip="Overview"
                                     AutomationProperties.Name="Overview">
@@ -116,7 +117,7 @@
                                 </StackPanel>
                             </Button>
 
-                            <TextBlock x:Name="NavGroupGovText" Text="GOVERNANCE" FontSize="10.5" FontWeight="Medium" Foreground="{DynamicResource TextMuted}" Margin="10,0,0,6"/>
+                            <TextBlock x:Name="NavGroupGovText" Text="GOVERNANCE" FontSize="10" FontWeight="SemiBold" Foreground="{DynamicResource TextMuted}" Margin="12,4,0,8"/>
 
                             <Button x:Name="NavSecurityBtn" Style="{StaticResource NavButtonStyle}" Click="OnNavClick" Tag="4" Margin="0,0,0,2" ToolTip="Security &amp; Policy"
                                     AutomationProperties.Name="Security and Policy">
@@ -169,11 +170,11 @@
                                         WindowChrome.IsHitTestVisibleInChrome="True" Click="OnTopTakeoverClick"
                                         Margin="0,0,8,0" ToolTip="Reclaim mouse &amp; keyboard (Ctrl+Alt+T). After takeover, Return Control resumes agent input."/>
 
-                                <Border Background="{DynamicResource BgCard}" BorderBrush="{DynamicResource BorderHairline}" BorderThickness="1"
-                                        CornerRadius="14" Padding="10,4.5" Margin="0,0,8,0" VerticalAlignment="Center"
+                                <Border Background="{DynamicResource BgElevated}" BorderBrush="{DynamicResource BorderHairline}" BorderThickness="1"
+                                        CornerRadius="16" Padding="11,5" Margin="0,0,8,0" VerticalAlignment="Center"
                                         Cursor="Hand" MouseLeftButtonUp="OnOpenNodeDrawerClick" ToolTip="Open Node Inspector Drawer">
                                     <StackPanel Orientation="Horizontal">
-                                        <Grid Width="12" Height="12" VerticalAlignment="Center" Margin="0,0,5,0">
+                                        <Grid Width="12" Height="12" VerticalAlignment="Center" Margin="0,0,7,0">
                                             <Ellipse x:Name="TopStatusPulse" Width="12" Height="12" Fill="#10B981" Opacity="0" RenderTransformOrigin="0.5,0.5">
                                                 <Ellipse.RenderTransform>
                                                     <ScaleTransform ScaleX="1" ScaleY="1"/>
@@ -181,7 +182,7 @@
                                             </Ellipse>
                                             <Ellipse x:Name="TopStatusDot" Width="7" Height="7" Fill="#94A3B8" HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                         </Grid>
-                                        <TextBlock x:Name="TopStatusText" Text="Disconnected" FontSize="11.5" FontWeight="Medium" Foreground="{DynamicResource TextSecondary}" VerticalAlignment="Center"/>
+                                        <TextBlock x:Name="TopStatusText" Text="Disconnected" FontSize="11.5" FontWeight="SemiBold" Foreground="{DynamicResource TextSecondary}" VerticalAlignment="Center"/>
                                     </StackPanel>
                                 </Border>
 
@@ -254,8 +255,8 @@
                             </Grid.RowDefinitions>
 
                             <StackPanel Grid.Row="0" Grid.Column="0" Margin="0,0,14,0">
-                                <TextBlock x:Name="PageTitleText" Text="Overview" FontSize="22" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}"/>
-                                <TextBlock x:Name="PageSubtitleText" Text="Agent status, connection, and live activity" FontSize="13" Foreground="{DynamicResource TextSecondary}" Margin="0,3,0,0"/>
+                                <TextBlock x:Name="PageTitleText" Text="Overview" FontSize="24" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}"/>
+                                <TextBlock x:Name="PageSubtitleText" Text="Agent status, connection, and live activity" FontSize="13" Foreground="{DynamicResource TextSecondary}" Margin="0,4,0,0"/>
                             </StackPanel>
 
                             <WrapPanel x:Name="HeaderActionsWrap" Grid.Row="0" Grid.Column="1" VerticalAlignment="Center" HorizontalAlignment="Right">
@@ -295,79 +296,79 @@
                                         </Grid.RowDefinitions>
 
                                         <!-- 4 Minimal KPI Cards -->
-                                        <UniformGrid x:Name="OverviewKpiGrid" Grid.Row="0" Columns="4" Margin="-7,0,-7,10">
-                                            <Border Background="{DynamicResource BgCard}" BorderBrush="{DynamicResource BorderHairline}" BorderThickness="1" CornerRadius="12" Padding="16" Margin="7" Cursor="Hand" MouseLeftButtonUp="OnCardGoToSettings">
+                                        <UniformGrid x:Name="OverviewKpiGrid" Grid.Row="0" Columns="4" Margin="-7,0,-7,12">
+                                            <Border Style="{StaticResource SurfaceCardStyle}" Margin="7" Cursor="Hand" MouseLeftButtonUp="OnCardGoToSettings">
                                                 <Grid>
                                                     <Grid.ColumnDefinitions>
                                                         <ColumnDefinition Width="Auto"/>
                                                         <ColumnDefinition Width="*"/>
                                                         <ColumnDefinition Width="Auto"/>
                                                     </Grid.ColumnDefinitions>
-                                                    <Border Grid.Column="0" Width="34" Height="34" CornerRadius="17" Background="{DynamicResource BadgeBlueBg}" VerticalAlignment="Center" Margin="0,0,12,0">
+                                                    <Border Grid.Column="0" Width="36" Height="36" CornerRadius="18" Background="{DynamicResource BadgeBlueBg}" VerticalAlignment="Center" Margin="0,0,12,0">
                                                         <TextBlock Text="&#xE71B;" FontFamily="Segoe MDL2 Assets" FontSize="14" Foreground="{DynamicResource BadgeBlueFg}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                                     </Border>
                                                     <StackPanel Grid.Column="1" VerticalAlignment="Center">
-                                                        <TextBlock Text="CONNECTION" FontSize="10.5" FontWeight="SemiBold" Foreground="{DynamicResource TextMuted}"/>
-                                                        <StackPanel Orientation="Horizontal" Margin="0,2,0,0">
+                                                        <TextBlock Text="CONNECTION" FontSize="10" FontWeight="SemiBold" Foreground="{DynamicResource TextMuted}"/>
+                                                        <StackPanel Orientation="Horizontal" Margin="0,3,0,0">
                                                             <TextBlock x:Name="KpiStatusText" Text="Disconnected" FontSize="17" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}" VerticalAlignment="Center"/>
                                                             <Ellipse x:Name="KpiStatusDot" Width="7" Height="7" Fill="#94A3B8" VerticalAlignment="Center" Margin="7,1,0,0"/>
                                                         </StackPanel>
-                                                        <TextBlock Text="HTTP · WS Side-Channel" FontSize="11" Foreground="{DynamicResource TextMuted}" Margin="0,2,0,0"/>
+                                                        <TextBlock Text="HTTP · WS side-channel" FontSize="11" Foreground="{DynamicResource TextMuted}" Margin="0,3,0,0"/>
                                                     </StackPanel>
                                                     <TextBlock Grid.Column="2" Text="&#xE76C;" FontFamily="Segoe MDL2 Assets" FontSize="10" Foreground="{DynamicResource TextMuted}" VerticalAlignment="Center" Margin="6,0,0,0"/>
                                                 </Grid>
                                             </Border>
 
-                                            <Border Background="{DynamicResource BgCard}" BorderBrush="{DynamicResource BorderHairline}" BorderThickness="1" CornerRadius="12" Padding="16" Margin="7" Cursor="Hand" MouseLeftButtonUp="OnCardGoToTasks">
+                                            <Border Style="{StaticResource SurfaceCardStyle}" Margin="7" Cursor="Hand" MouseLeftButtonUp="OnCardGoToTasks">
                                                 <Grid>
                                                     <Grid.ColumnDefinitions>
                                                         <ColumnDefinition Width="Auto"/>
                                                         <ColumnDefinition Width="*"/>
                                                         <ColumnDefinition Width="Auto"/>
                                                     </Grid.ColumnDefinitions>
-                                                    <Border Grid.Column="0" Width="34" Height="34" CornerRadius="17" Background="{DynamicResource BadgePurpleBg}" VerticalAlignment="Center" Margin="0,0,12,0">
+                                                    <Border Grid.Column="0" Width="36" Height="36" CornerRadius="18" Background="{DynamicResource BadgePurpleBg}" VerticalAlignment="Center" Margin="0,0,12,0">
                                                         <TextBlock Text="&#xE8FD;" FontFamily="Segoe MDL2 Assets" FontSize="14" Foreground="{DynamicResource BadgePurpleFg}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                                     </Border>
                                                     <StackPanel Grid.Column="1" VerticalAlignment="Center">
-                                                        <TextBlock Text="TASKS RECORDED" FontSize="10.5" FontWeight="SemiBold" Foreground="{DynamicResource TextMuted}"/>
-                                                        <TextBlock x:Name="KpiTasksText" Text="0" FontSize="17" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}" Margin="0,2,0,0"/>
-                                                        <TextBlock Text="Local persisted history" FontSize="11" Foreground="{DynamicResource TextMuted}" Margin="0,2,0,0"/>
+                                                        <TextBlock Text="TASKS RECORDED" FontSize="10" FontWeight="SemiBold" Foreground="{DynamicResource TextMuted}"/>
+                                                        <TextBlock x:Name="KpiTasksText" Text="0" FontSize="17" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}" Margin="0,3,0,0"/>
+                                                        <TextBlock Text="Local persisted history" FontSize="11" Foreground="{DynamicResource TextMuted}" Margin="0,3,0,0"/>
                                                     </StackPanel>
                                                     <TextBlock Grid.Column="2" Text="&#xE76C;" FontFamily="Segoe MDL2 Assets" FontSize="10" Foreground="{DynamicResource TextMuted}" VerticalAlignment="Center" Margin="6,0,0,0"/>
                                                 </Grid>
                                             </Border>
 
-                                            <Border Background="{DynamicResource BgCard}" BorderBrush="{DynamicResource BorderHairline}" BorderThickness="1" CornerRadius="12" Padding="16" Margin="7">
+                                            <Border Style="{StaticResource SurfaceCardStyle}" Margin="7">
                                                 <Grid>
                                                     <Grid.ColumnDefinitions>
                                                         <ColumnDefinition Width="Auto"/>
                                                         <ColumnDefinition Width="*"/>
                                                     </Grid.ColumnDefinitions>
-                                                    <Border Grid.Column="0" Width="34" Height="34" CornerRadius="17" Background="{DynamicResource BadgeGreenBg}" VerticalAlignment="Center" Margin="0,0,12,0">
+                                                    <Border Grid.Column="0" Width="36" Height="36" CornerRadius="18" Background="{DynamicResource BadgeGreenBg}" VerticalAlignment="Center" Margin="0,0,12,0">
                                                         <TextBlock Text="&#xE945;" FontFamily="Segoe MDL2 Assets" FontSize="14" Foreground="{DynamicResource BadgeGreenFg}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                                     </Border>
                                                     <StackPanel Grid.Column="1" VerticalAlignment="Center">
-                                                        <TextBlock Text="SERVER LATENCY" FontSize="10.5" FontWeight="SemiBold" Foreground="{DynamicResource TextMuted}"/>
-                                                        <TextBlock x:Name="KpiLatencyText" Text="-- ms" FontSize="17" FontWeight="SemiBold" FontFamily="Consolas" Foreground="{DynamicResource SuccessText}" Margin="0,2,0,0"/>
-                                                        <TextBlock Text="Control plane /health" FontSize="11" Foreground="{DynamicResource TextMuted}" Margin="0,2,0,0"/>
+                                                        <TextBlock Text="SERVER LATENCY" FontSize="10" FontWeight="SemiBold" Foreground="{DynamicResource TextMuted}"/>
+                                                        <TextBlock x:Name="KpiLatencyText" Text="-- ms" FontSize="17" FontWeight="SemiBold" FontFamily="Consolas" Foreground="{DynamicResource SuccessText}" Margin="0,3,0,0"/>
+                                                        <TextBlock Text="Control plane /health" FontSize="11" Foreground="{DynamicResource TextMuted}" Margin="0,3,0,0"/>
                                                     </StackPanel>
                                                 </Grid>
                                             </Border>
 
-                                            <Border Background="{DynamicResource BgCard}" BorderBrush="{DynamicResource BorderHairline}" BorderThickness="1" CornerRadius="12" Padding="16" Margin="7" Cursor="Hand" MouseLeftButtonUp="OnCardGoToSecurity">
+                                            <Border Style="{StaticResource SurfaceCardStyle}" Margin="7" Cursor="Hand" MouseLeftButtonUp="OnCardGoToSecurity">
                                                 <Grid>
                                                     <Grid.ColumnDefinitions>
                                                         <ColumnDefinition Width="Auto"/>
                                                         <ColumnDefinition Width="*"/>
                                                         <ColumnDefinition Width="Auto"/>
                                                     </Grid.ColumnDefinitions>
-                                                    <Border Grid.Column="0" Width="34" Height="34" CornerRadius="17" Background="{DynamicResource BadgeIndigoBg}" VerticalAlignment="Center" Margin="0,0,12,0">
+                                                    <Border Grid.Column="0" Width="36" Height="36" CornerRadius="18" Background="{DynamicResource BadgeIndigoBg}" VerticalAlignment="Center" Margin="0,0,12,0">
                                                         <TextBlock Text="&#xEA18;" FontFamily="Segoe MDL2 Assets" FontSize="14" Foreground="{DynamicResource BadgeIndigoFg}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                                     </Border>
                                                     <StackPanel Grid.Column="1" VerticalAlignment="Center">
-                                                        <TextBlock Text="TOKEN VAULT" FontSize="10.5" FontWeight="SemiBold" Foreground="{DynamicResource TextMuted}"/>
-                                                        <TextBlock Text="DPAPI Sealed" FontSize="17" FontWeight="SemiBold" Foreground="{DynamicResource IndigoText}" Margin="0,2,0,0"/>
-                                                        <TextBlock Text="User-scoped CryptProtect" FontSize="11" Foreground="{DynamicResource TextMuted}" Margin="0,2,0,0"/>
+                                                        <TextBlock Text="TOKEN VAULT" FontSize="10" FontWeight="SemiBold" Foreground="{DynamicResource TextMuted}"/>
+                                                        <TextBlock Text="DPAPI Sealed" FontSize="17" FontWeight="SemiBold" Foreground="{DynamicResource IndigoText}" Margin="0,3,0,0"/>
+                                                        <TextBlock Text="User-scoped CryptProtect" FontSize="11" Foreground="{DynamicResource TextMuted}" Margin="0,3,0,0"/>
                                                     </StackPanel>
                                                     <TextBlock Grid.Column="2" Text="&#xE76C;" FontFamily="Segoe MDL2 Assets" FontSize="10" Foreground="{DynamicResource TextMuted}" VerticalAlignment="Center" Margin="6,0,0,0"/>
                                                 </Grid>
@@ -1485,37 +1486,57 @@
                                             <!-- Chat Stream + Empty Starter Grid -->
                                             <ScrollViewer x:Name="AgChatScroll" Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Padding="24,18">
                                                 <Grid MaxWidth="780" HorizontalAlignment="Stretch">
-                                                    <!-- Empty / Welcome Screen (ChatGPT style) -->
-                                                    <StackPanel x:Name="AgWelcomePanel" VerticalAlignment="Center" HorizontalAlignment="Center" Margin="0,36,0,24">
-                                                        <Border Width="42" Height="42" CornerRadius="12" Background="{DynamicResource AccentPrimary}" HorizontalAlignment="Center" Margin="0,0,0,14">
-                                                            <TextBlock Text="AI" FontSize="16" FontWeight="Bold" Foreground="#FFFFFF" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                                    <!-- Empty / Welcome Screen -->
+                                                    <StackPanel x:Name="AgWelcomePanel" VerticalAlignment="Center" HorizontalAlignment="Center" Margin="0,28,0,20">
+                                                        <Border Width="48" Height="48" CornerRadius="14" Background="{DynamicResource AccentPrimary}" HorizontalAlignment="Center" Margin="0,0,0,16">
+                                                            <TextBlock Text="AI" FontSize="17" FontWeight="Bold" Foreground="#FFFFFF" HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                                         </Border>
-                                                        <TextBlock Text="What can I help with on this Windows PC?" FontSize="21" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}" HorizontalAlignment="Center" TextAlignment="Center" TextWrapping="Wrap"/>
-                                                        <TextBlock x:Name="AgWelcomeSubText" Text="Scoped exclusively to this installed device — never dispatches to other hosts." FontSize="12.5" Foreground="{DynamicResource TextMuted}" HorizontalAlignment="Center" TextAlignment="Center" TextWrapping="Wrap" Margin="0,6,0,24"/>
+                                                        <TextBlock Text="What can I help with on this PC?" FontSize="22" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}" HorizontalAlignment="Center" TextAlignment="Center" TextWrapping="Wrap"/>
+                                                        <TextBlock x:Name="AgWelcomeSubText" Text="Local to this workstation — tools and files stay on this device." FontSize="13" Foreground="{DynamicResource TextMuted}" HorizontalAlignment="Center" TextAlignment="Center" TextWrapping="Wrap" Margin="0,8,0,26"/>
 
-                                                        <UniformGrid Columns="2" MaxWidth="660">
-                                                            <Button Style="{StaticResource BtnStyle}" Margin="0,0,6,10" Padding="14,12" HorizontalContentAlignment="Left" Click="OnAgStarterClick" Tag="/ui">
-                                                                <StackPanel>
-                                                                    <TextBlock Text="Inspect Active Windows UI" FontSize="12.5" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}"/>
-                                                                    <TextBlock Text="List interactive buttons, inputs &amp; coordinates" FontSize="11" Foreground="{DynamicResource TextMuted}" Margin="0,2,0,0"/>
+                                                        <UniformGrid Columns="2" MaxWidth="680">
+                                                            <Button Style="{StaticResource StarterTileStyle}" Margin="0,0,7,10" Click="OnAgStarterClick" Tag="/ui">
+                                                                <StackPanel Orientation="Horizontal">
+                                                                    <Border Width="30" Height="30" CornerRadius="8" Background="{DynamicResource BadgeIndigoBg}" Margin="0,0,11,0" VerticalAlignment="Top">
+                                                                        <TextBlock Text="&#xE8A9;" FontFamily="Segoe MDL2 Assets" FontSize="13" Foreground="{DynamicResource BadgeIndigoFg}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                                                    </Border>
+                                                                    <StackPanel>
+                                                                        <TextBlock Text="Inspect Active Windows UI" FontSize="12.5" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}"/>
+                                                                        <TextBlock Text="Buttons, inputs &amp; screen coordinates" FontSize="11" Foreground="{DynamicResource TextMuted}" Margin="0,3,0,0"/>
+                                                                    </StackPanel>
                                                                 </StackPanel>
                                                             </Button>
-                                                            <Button Style="{StaticResource BtnStyle}" Margin="6,0,0,10" Padding="14,12" HorizontalContentAlignment="Left" Click="OnAgStarterClick" Tag="/som">
-                                                                <StackPanel>
-                                                                    <TextBlock Text="Set-of-Marks Screen Map" FontSize="12.5" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}"/>
-                                                                    <TextBlock Text="Capture desktop with numbered [1]..[N] UI badges" FontSize="11" Foreground="{DynamicResource TextMuted}" Margin="0,2,0,0"/>
+                                                            <Button Style="{StaticResource StarterTileStyle}" Margin="7,0,0,10" Click="OnAgStarterClick" Tag="/som">
+                                                                <StackPanel Orientation="Horizontal">
+                                                                    <Border Width="30" Height="30" CornerRadius="8" Background="{DynamicResource BadgeBlueBg}" Margin="0,0,11,0" VerticalAlignment="Top">
+                                                                        <TextBlock Text="&#xE7F4;" FontFamily="Segoe MDL2 Assets" FontSize="13" Foreground="{DynamicResource BadgeBlueFg}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                                                    </Border>
+                                                                    <StackPanel>
+                                                                        <TextBlock Text="Set-of-Marks Screen Map" FontSize="12.5" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}"/>
+                                                                        <TextBlock Text="Numbered badges over the desktop" FontSize="11" Foreground="{DynamicResource TextMuted}" Margin="0,3,0,0"/>
+                                                                    </StackPanel>
                                                                 </StackPanel>
                                                             </Button>
-                                                            <Button Style="{StaticResource BtnStyle}" Margin="0,0,6,0" Padding="14,12" HorizontalContentAlignment="Left" Click="OnAgStarterClick" Tag="/windows">
-                                                                <StackPanel>
-                                                                    <TextBlock Text="Manage Open Windows" FontSize="12.5" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}"/>
-                                                                    <TextBlock Text="List, focus, maximize, minimize, resize or close apps" FontSize="11" Foreground="{DynamicResource TextMuted}" Margin="0,2,0,0"/>
+                                                            <Button Style="{StaticResource StarterTileStyle}" Margin="0,0,7,0" Click="OnAgStarterClick" Tag="/windows">
+                                                                <StackPanel Orientation="Horizontal">
+                                                                    <Border Width="30" Height="30" CornerRadius="8" Background="{DynamicResource BadgePurpleBg}" Margin="0,0,11,0" VerticalAlignment="Top">
+                                                                        <TextBlock Text="&#xE8A7;" FontFamily="Segoe MDL2 Assets" FontSize="13" Foreground="{DynamicResource BadgePurpleFg}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                                                    </Border>
+                                                                    <StackPanel>
+                                                                        <TextBlock Text="Manage Open Windows" FontSize="12.5" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}"/>
+                                                                        <TextBlock Text="Focus, resize, maximize, or close" FontSize="11" Foreground="{DynamicResource TextMuted}" Margin="0,3,0,0"/>
+                                                                    </StackPanel>
                                                                 </StackPanel>
                                                             </Button>
-                                                            <Button Style="{StaticResource BtnStyle}" Margin="6,0,0,0" Padding="14,12" HorizontalContentAlignment="Left" Click="OnAgStarterClick" Tag="/sysinfo">
-                                                                <StackPanel>
-                                                                    <TextBlock Text="System Health &amp; Pipe" FontSize="12.5" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}"/>
-                                                                    <TextBlock Text="CPU, RAM, top processes &amp; C++ pipe status" FontSize="11" Foreground="{DynamicResource TextMuted}" Margin="0,2,0,0"/>
+                                                            <Button Style="{StaticResource StarterTileStyle}" Margin="7,0,0,0" Click="OnAgStarterClick" Tag="/sysinfo">
+                                                                <StackPanel Orientation="Horizontal">
+                                                                    <Border Width="30" Height="30" CornerRadius="8" Background="{DynamicResource BadgeGreenBg}" Margin="0,0,11,0" VerticalAlignment="Top">
+                                                                        <TextBlock Text="&#xE9D9;" FontFamily="Segoe MDL2 Assets" FontSize="13" Foreground="{DynamicResource BadgeGreenFg}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                                                    </Border>
+                                                                    <StackPanel>
+                                                                        <TextBlock Text="System Health" FontSize="12.5" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}"/>
+                                                                        <TextBlock Text="CPU, memory, processes &amp; pipe" FontSize="11" Foreground="{DynamicResource TextMuted}" Margin="0,3,0,0"/>
+                                                                    </StackPanel>
                                                                 </StackPanel>
                                                             </Button>
                                                         </UniformGrid>
@@ -1572,8 +1593,8 @@
                                             </ScrollViewer>
 
                                             <!-- Floating Rounded Composer -->
-                                            <Border Grid.Row="2" Padding="20,6,20,18">
-                                                <Border MaxWidth="780" Background="{DynamicResource BgElevated}" BorderBrush="{DynamicResource BorderHover}" BorderThickness="1" CornerRadius="16" Padding="14,10,12,10"
+                                            <Border Grid.Row="2" Padding="20,8,20,20">
+                                                <Border MaxWidth="780" Background="{DynamicResource BgElevated}" BorderBrush="{DynamicResource BorderHover}" BorderThickness="1" CornerRadius="18" Padding="14,11,12,11"
                                                         AllowDrop="True" PreviewDragOver="OnAgComposerDragOver" Drop="OnAgComposerDrop">
                                                     <StackPanel>
                                                         <Border x:Name="AgAttachmentBar" Visibility="Collapsed" Background="{DynamicResource BgCard}" BorderBrush="{DynamicResource BorderHairline}" BorderThickness="1" CornerRadius="8" Padding="8,4" Margin="0,0,0,6">
@@ -1881,16 +1902,16 @@
 
                 <!-- Centered SaaS Sign-In & Onboarding Wizard Card -->
                 <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-                    <Border Width="472" VerticalAlignment="Center" HorizontalAlignment="Center" Margin="24"
-                            Background="{DynamicResource BgCard}" BorderBrush="{DynamicResource BorderHairline}" BorderThickness="1" CornerRadius="14" Padding="28">
+                    <Border Width="480" VerticalAlignment="Center" HorizontalAlignment="Center" Margin="24"
+                            Background="{DynamicResource BgCard}" BorderBrush="{DynamicResource BorderHairline}" BorderThickness="1" CornerRadius="18" Padding="30,28">
                         <StackPanel PreviewKeyDown="OnSignInKeyDown">
-                            <StackPanel Orientation="Horizontal" Margin="0,0,0,14">
-                                <Border Width="34" Height="34" CornerRadius="9" Background="{DynamicResource AccentPrimary}" Margin="0,0,12,0">
-                                    <TextBlock Text="AI" FontSize="13" FontWeight="Bold" Foreground="#FFFFFF" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            <StackPanel Orientation="Horizontal" Margin="0,0,0,18">
+                                <Border Width="40" Height="40" CornerRadius="11" Background="{DynamicResource AccentPrimary}" Margin="0,0,14,0">
+                                    <TextBlock Text="AI" FontSize="14" FontWeight="Bold" Foreground="#FFFFFF" HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                 </Border>
                                 <StackPanel VerticalAlignment="Center">
-                                    <TextBlock Text="Sign in to AI Bridge" FontSize="18" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}"/>
-                                    <TextBlock Text="Enroll this Windows workstation with your Control Plane" FontSize="12" Foreground="{DynamicResource TextSecondary}" Margin="0,2,0,0"/>
+                                    <TextBlock Text="Sign in to AI Bridge" FontSize="19" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}"/>
+                                    <TextBlock Text="Enroll this Windows workstation with your control plane" FontSize="12.5" Foreground="{DynamicResource TextSecondary}" Margin="0,3,0,0"/>
                                 </StackPanel>
                             </StackPanel>
 
@@ -2046,8 +2067,12 @@
                 <ItemsControl.ItemTemplate>
                     <DataTemplate>
                         <Border Margin="0,0,0,8" Background="{DynamicResource BgCard}" BorderBrush="{DynamicResource BorderHover}"
-                                BorderThickness="1" CornerRadius="10" Padding="14,9" MaxWidth="420">
-                            <TextBlock Text="{Binding Message}" FontSize="12" FontWeight="Medium" Foreground="{DynamicResource TextPrimary}" TextWrapping="Wrap"/>
+                                BorderThickness="1" CornerRadius="12" Padding="0" MaxWidth="420" MinWidth="220">
+                            <Grid>
+                                <Border Width="3" HorizontalAlignment="Left" Background="{DynamicResource AccentPrimary}" CornerRadius="12,0,0,12"/>
+                                <TextBlock Text="{Binding Message}" FontSize="12.5" FontWeight="Medium" Foreground="{DynamicResource TextPrimary}"
+                                           TextWrapping="Wrap" Margin="14,10,14,10"/>
+                            </Grid>
                         </Border>
                     </DataTemplate>
                 </ItemsControl.ItemTemplate>

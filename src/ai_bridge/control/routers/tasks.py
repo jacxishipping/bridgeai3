@@ -381,10 +381,14 @@ def create_tasks_router(ctx: ControlContext) -> APIRouter:
         return {"deleted_count": cur.rowcount}
 
     @router.get("/api/approvals")
-    def list_approvals(x_admin_token: str | None = Header(default=None), x_session_token: str | None = Header(default=None)):
-        require_role("viewer", x_admin_token, x_session_token)
+    def list_approvals(
+        x_admin_token: str | None = Header(default=None),
+        x_session_token: str | None = Header(default=None),
+        authorization: str | None = Header(default=None),
+    ):
+        require_role("viewer", x_admin_token, x_session_token, authorization)
         expire_pending_approvals()
-        tenant, _is_legacy = session_tenant_for_request(x_admin_token, x_session_token)
+        tenant, _is_legacy = session_tenant_for_request(x_admin_token, x_session_token, authorization)
         rows = conn.execute(
             "SELECT a.* FROM approvals a LEFT JOIN tasks t ON t.id=a.task_id "
             "WHERE (a.task_id IS NULL AND a.tenant=?) OR (t.tenant=?) "
@@ -392,8 +396,14 @@ def create_tasks_router(ctx: ControlContext) -> APIRouter:
         return [approval_detail(r) for r in rows]
 
     @router.post("/api/approvals/{approval_id}/decide")
-    def decide_approval(approval_id: str, body: ApprovalDecision, x_admin_token: str | None = Header(default=None), x_session_token: str | None = Header(default=None)):
-        actor = require_admin(x_admin_token, x_session_token)
+    def decide_approval(
+        approval_id: str,
+        body: ApprovalDecision,
+        x_admin_token: str | None = Header(default=None),
+        x_session_token: str | None = Header(default=None),
+        authorization: str | None = Header(default=None),
+    ):
+        actor = require_admin(x_admin_token, x_session_token, authorization)
         expire_pending_approvals()
         if body.decision not in {"approved", "denied"}:
             raise HTTPException(status_code=400, detail="decision must be approved or denied.")
@@ -403,9 +413,9 @@ def create_tasks_router(ctx: ControlContext) -> APIRouter:
         if row["task_id"]:
             _t = conn.execute("SELECT tenant FROM tasks WHERE id=?", (row["task_id"],)).fetchone()
             if _t is not None:
-                _require_row_tenant(_t, x_admin_token, x_session_token)
+                _require_row_tenant(_t, x_admin_token, x_session_token, authorization)
         else:
-            _require_row_tenant(row, x_admin_token, x_session_token)
+            _require_row_tenant(row, x_admin_token, x_session_token, authorization)
         if row["status"] != "pending":
             raise HTTPException(status_code=409, detail=f"Approval is already {row['status']}.")
         if row["expires_at"] is not None and row["expires_at"] <= dbmod.now():

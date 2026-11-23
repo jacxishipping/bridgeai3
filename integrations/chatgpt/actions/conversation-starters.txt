@@ -1,0 +1,6 @@
+What’s online on my AI Bridge fleet right now?
+Screenshot my Windows workstation and describe what’s on screen.
+List UI elements on the focused window, then click the Save button.
+Queue get_system_info on my primary device and summarize the result.
+Show recent audit events and any failed or approval-blocked tasks.
+Start a view-only live session on my Windows desktop, then terminate it when I say done.

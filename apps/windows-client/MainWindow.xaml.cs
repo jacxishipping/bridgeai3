@@ -857,7 +857,7 @@ public partial class MainWindow : Window
     private void SelectTab(int idx)
     {
         MainTabs.SelectedIndex = idx;
-        MainTabs.BeginAnimation(OpacityProperty, new DoubleAnimation(0.75, 1.0, TimeSpan.FromMilliseconds(140)));
+        MainTabs.BeginAnimation(OpacityProperty, new DoubleAnimation(0.82, 1.0, TimeSpan.FromMilliseconds(160)));
         if (idx >= 0 && idx < TabMeta.Length)
         {
             PageTitleText.Text = TabMeta[idx].Title;

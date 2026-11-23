@@ -84,7 +84,12 @@ public partial class App : System.Windows.Application
         var hwnd = existing.MainWindowHandle;
         if (hwnd == IntPtr.Zero)
         {
-            hwnd = FindWindow(null, "AI Bridge — Minimal Enterprise Windows Control Plane");
+            hwnd = FindWindow(null, "AI Bridge");
+            if (hwnd == IntPtr.Zero)
+            {
+                // Compat with older builds still running under the long window title.
+                hwnd = FindWindow(null, "AI Bridge — Minimal Enterprise Windows Control Plane");
+            }
             if (hwnd == IntPtr.Zero)
             {
                 hwnd = FindWindow(null, "AI Bridge Windows Client (Native C#)");

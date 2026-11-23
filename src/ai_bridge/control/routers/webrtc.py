@@ -48,9 +48,11 @@ def create_webrtc_router(ctx: ControlContext) -> APIRouter:
         quality: int = 70,
         x_admin_token: str | None = Header(default=None),
         x_session_token: str | None = Header(default=None),
+        authorization: str | None = Header(default=None),
     ):
-        require_role("viewer", x_admin_token, x_session_token)
-        _require_device_tenant(device_id, x_admin_token, x_session_token)
+        # ChatGPT Custom GPT Actions send Bearer via Authorization; keep header tokens too.
+        require_role("viewer", x_admin_token, x_session_token, authorization)
+        _require_device_tenant(device_id, x_admin_token, x_session_token, authorization)
         return _fetch_desktop_frame(device_id, scale, quality)
 
     @router.get("/api/devices/{device_id}/desktop/live.jpg")
@@ -85,9 +87,10 @@ def create_webrtc_router(ctx: ControlContext) -> APIRouter:
         os: str | None = None,
         x_admin_token: str | None = Header(default=None),
         x_session_token: str | None = Header(default=None),
+        authorization: str | None = Header(default=None),
     ):
-        require_role("operator", x_admin_token, x_session_token)
-        tenant = resolve_request_tenant(None, x_admin_token, x_session_token)
+        require_role("operator", x_admin_token, x_session_token, authorization)
+        tenant = resolve_request_tenant(None, x_admin_token, x_session_token, authorization)
         query = "SELECT id, name, hostname, os, status, last_seen FROM devices WHERE revoked=0 AND tenant=?"
         params: list[str] = [tenant]
         if os:
@@ -120,10 +123,11 @@ def create_webrtc_router(ctx: ControlContext) -> APIRouter:
         body: DesktopInputIn,
         x_admin_token: str | None = Header(default=None),
         x_session_token: str | None = Header(default=None),
+        authorization: str | None = Header(default=None),
     ):
-        actor = require_role("operator", x_admin_token, x_session_token)
-        _require_device_tenant(device_id, x_admin_token, x_session_token)
-        tenant = resolve_request_tenant(None, x_admin_token, x_session_token)
+        actor = require_role("operator", x_admin_token, x_session_token, authorization)
+        _require_device_tenant(device_id, x_admin_token, x_session_token, authorization)
+        tenant = resolve_request_tenant(None, x_admin_token, x_session_token, authorization)
         abs_x, abs_y = None, None
         if body.x is not None and body.y is not None:
             if body.normalized and 0.0 <= body.x <= 1.0 and 0.0 <= body.y <= 1.0:
