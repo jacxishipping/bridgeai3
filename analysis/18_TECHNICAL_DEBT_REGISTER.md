@@ -1,3 +1,5 @@
+> **HISTORICAL analysis.** Current production assessment: [PRODUCTION_READINESS.md](./PRODUCTION_READINESS.md).
+
 # 18 — Technical Debt Register
 
 > **Scope.** Deduplicated debt items: duplication, large modules, dead/vestigial code, inconsistent patterns, missing interfaces, weak typing, missing tests-as-debt, and process debt (unlocked deps, unwired suites). Security defects that are also debt are **not** repeated here in full — they live in report 17 with their IDs; this register cross-references them where the debt is the root cause. **Cost** = ongoing price of carrying the debt (maintenance, bug risk, onboarding). **Payoff** = what fixing it buys. **Priority** is this synthesis's judgement (P1 = blocks other work / high bug risk; P2 = significant drag; P3 = tidy-up). No new debt was invented; every item traces to a source report section or a file cited there.

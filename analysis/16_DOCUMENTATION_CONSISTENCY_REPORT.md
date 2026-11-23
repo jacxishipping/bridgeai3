@@ -1,3 +1,5 @@
+> **HISTORICAL analysis.** Current production assessment: [PRODUCTION_READINESS.md](./PRODUCTION_READINESS.md).
+
 # 16 — Documentation Consistency Report (AI Bridge v0.3.0)
 
 **Scope:** Every top-level and `docs/` document compared against the code in

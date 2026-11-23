@@ -1,98 +1,110 @@
-# Implementation status — v0.3.0 (honest report)
+# Implementation status
 
-## v0.3.0 — security batch (this release)
-- Short-lived device tokens (7 days by default, `AI_BRIDGE_DEVICE_TOKEN_TTL_DAYS`), checked on every agent call, with a rotation endpoint that invalidates the old token immediately.
-- Local users with PBKDF2 password hashes, 8-hour sessions, and roles (viewer/operator/admin). The legacy shared admin token still works unless `AI_BRIDGE_DISABLE_LEGACY_ADMIN_TOKEN=1`.
-- Versioned policies via `/api/policies` (audited); Tier-3 tasks now need approval unless the current versioned policy allows Tier 3.
-- Signed releases: Ed25519 manifest signing/verification in `src/ai_bridge/updates.py` + agent `--check-update` (verifies before any download; installation remains an operator step).
-- Sandboxed task execution: minimal env (secrets dropped), workspace cwd, CPU/memory/file-size rlimits.
-- Dashboard: username/password login alongside the admin token, plus a Policies view.
-- Control-plane hardening follow-up: approval context includes task args,
-  device, tier, and policy version; decisions record the authenticated actor
-  and expire after a configurable TTL. Audit records are hash-chained and
-  cannot be modified through ordinary API writes, but an admin retention
-  operation can prune them — they are not unconditionally append-only.
-  Export and explicit retention pruning exist. Session logout revokes
-  the server-side session; policy simulation previews proposed tier gates.
-- Implemented since v0.3 (needs activation or a machine to verify):
-  OIDC login (provider-gated via AI_BRIDGE_OIDC_*; crypto verified offline,
-  full flow needs a registered provider app), network-namespace egress
-  control for the bounded task runner (AI_BRIDGE_TASK_NETNS=1, fail-closed),
-  reverse-proxy mTLS plus plane-side device fingerprint gate
-  (`AI_BRIDGE_DEVICE_MTLS` / `control/device_mtls.py`), macOS agent code +
-  launchd unit (import-tested only — never run on macOS). Still NOT
-  verified end-to-end: Windows full installer/service E2E on a dedicated
-  fleet image.
+**Updated:** 23 November 2026  
+**HEAD context:** `fix/windows-desktop-stack-gaps` @ `78fdbb4`+ (Release 1 evidence anchor `5eb8750`)  
+**Verdict:** see [analysis/PRODUCTION_READINESS.md](../analysis/PRODUCTION_READINESS.md) · platforms: [support-matrix.md](./support-matrix.md) · roadmap: [ROADMAP.md](./ROADMAP.md)
 
-Implemented and tested on Linux (this environment, pytest run — see CHANGELOG):
-- MCP stdio server + Streamable HTTP entrypoint; tools list/call verified
-  by an MCP stdio test; live HTTP round-trip in
-  `tests/integration/test_mcp_http_roundtrip.py` + `deployment/smoke_check.py`.
-- Workspace confinement (traversal, absolute, NUL, symlink escape),
-  secret-name blocking, redaction, atomic writes, backups.
-- Risk tiers 1-4 with server-side enforcement, approval queue, emergency stop.
-- Control plane: enrollment (hashed token, shown once), revocation,
-  task queue, agent polling with bounded backoff, audit, tenant filtering.
-- Linux agent (systemd unit, unprivileged), Docker/process/service/log/git
-  diagnostics, allowlisted tests/linter, staging deploy with backup.
-- Dashboard (React/TS/Vite): login, devices, tasks, approvals,
-  audit, emergency stop, policies. Built output is NOT included in this
-  tree (`apps/dashboard/dist/` does not exist here); rebuild with
-  `npm install && npm run build`. The dashboard defaults to the login
-  screen; the seeded demo is opt-in only and labelled as simulated data.
-Honest residuals / gated paths:
-- Signed agent updates: verification in v0.3; silent auto-install is
-  **gated** behind `AI_BRIDGE_ALLOW_AUTO_UPDATE=1` (default off — verify then apply).
-- OIDC login: code present, flow unverified until E2E passes. It is
-  in-tree and env-activated (`control/oidc.py` + `/api/auth/oidc/*`
-  when `AI_BRIDGE_OIDC_*` is set). Local password accounts remain the default
-  interim path when OIDC provider env is unset.
-- Postgres is required by production readiness when `AI_BRIDGE_PROFILE=production`
-  (`DATABASE_URL`); SQLite remains the local/dev default. Redis is required for
-  multi-host WebRTC throttle in production when
-  `AI_BRIDGE_REQUIRE_REDIS` / `AI_BRIDGE_MULTI_HOST` is set (`durable_ratelimit` + readiness).
-- macOS agent entrypoints under `agents/macos/` are import-tested on
-  GitHub `macos-agent` CI. They have never been run on macOS: launchd
-  behaviour end to end is unverified, so macOS is not a supported
-  platform yet.
-- Windows: Python agent + installer exist; full installer E2E remains
-  documented-but-unverified on a dedicated host.
-- Plane-side device mTLS: code present, end-to-end verification pending.
-  The fingerprint gate is in-tree and env-gated (`AI_BRIDGE_DEVICE_MTLS=1`,
-  `control/device_mtls.py`); the fingerprint is taken from reverse-proxy
-  headers, so enforcement depends on TLS termination at the proxy. Vault/AWS
-  SM secrets, Linux netns/gVisor wrappers, and WORM SIEM sinks are in-tree
-  (env-gated). C++ PeerConnection path (libdatachannel) is verified by
-  `windows-native-webrtc` + `scripts/libwebrtc_e2e_harness.py` (offer/answer,
-  ICE connected, track, input datachannel). Fleet Live Desktop prefers
-  `ai_bridge_desktop` (libdatachannel) when the exe is present on Windows
-  (`AI_BRIDGE_NATIVE_WEBRTC=auto`); otherwise Python aiortc.
+This file is the honest “what exists / what is verified” report. Prefer it over older analysis-wave notes when status conflicts.
 
-## WebRTC / desktop streaming (Phases 2–9, current)
-- Dispatch defaults **fps=30** and forwards `monitor_index` / `bitrate_kbps` (`dispatch._start_webrtc_from_task`).
-- ICE servers from `webrtc_stream.get_configured_ice_servers`: `AI_BRIDGE_ICE_SERVERS`,
-  `AI_BRIDGE_TURN_URL` (+ username/credential), or ephemeral TURN via `AI_BRIDGE_TURN_HOST` +
-  `AI_BRIDGE_TURN_SECRET` (required when `AI_BRIDGE_PROFILE=production`). See `docs/streaming.md` §2.
-- Desktop audio (**F11**) is **off by default**; opt in with `AI_BRIDGE_DESKTOP_AUDIO=1` (silent PCM
-  frames until WASAPI loopback is production-ready). Covered by `tests/unit/test_phase9_deep.py`.
-- Canonical session API is `POST /api/v1/sessions`; legacy device WebRTC create returns
-  **410** in production (`AI_BRIDGE_ALLOW_LEGACY_WEBRTC` opt-in). Native C++ PeerConnection
-  dashboard-path E2E is covered by the harness checklist.
+---
 
-## Browser Intelligence (Phase 4 deepen)
-- Playwright device presets via `browser_set_viewport` (`desktop`, `desktop_1080`, `iphone`, `pixel`, `tablet`) with viewport metadata on screenshots/session info.
-- Website test helpers: `browser_expect`, `browser_wait_for_url`, `browser_diagnostics`, `browser_compare_screenshot` (workspace baselines under `.ai-bridge/visual-baselines/`).
-- Workflow verify supports `mode: visual` → `browser_compare_screenshot` (in addition to text/`desktop_verify_action`).
-- Browserbase durable CDP: `browserbase_connect` / navigate without closing; `browserbase_screenshot`; optional attach into local `browser_*` tools; `end_session` on Browser Operator allowlist.
-- Research: `firecrawl_crawl` plus Firecrawl/You tools exposed on MCP `server.py`. Tests: `tests/unit/test_browser_intelligence.py`.
+## Production posture (summary)
 
-## ServerAI MCP + orchestration (latency / reliability)
-- MCP → control plane uses a **process-wide keep-alive `httpx.Client`** in `device_routing.py`
-  (no per-call client); `run_device_tool` relies on `?wait=` long-poll (no extra sleep) and can
-  abort via `should_abort` → `cancel_device_task`. Responses include `queue_ms` / `exec_ms`.
-- Short TTL cache on OAuth verify (token hash → device_id) when not using the in-process verify hook.
-- Agents keep HTTP claim (`GET /api/agent/tasks/next`) as lease source of truth; optional
-  **`WS /api/agent/ws`** side-channel pushes `task_available` / `cancel` / `emergency_stop`
-  (`agent_channel.py` + poller `start_side_channel`). HTTP long-poll remains the fallback.
-- Cooperative cancel deepened on shell (`_run_argv`), `wait_for_text`, and sliced
-  `browser_wait_for_selector` waits. Tests: `tests/unit/test_serverai_mcp_orchestration.py`.
+| Class | Status |
+|---|---|
+| Local / lab | **GO** |
+| Small controlled production fleet | **CONDITIONAL GO** — hosted/physical RC evidence still required |
+| Public multi-tenant SaaS | **NO-GO** (deferred) |
+
+Remaining RC sign-offs: Windows reboot soak, hosted staging gate, hosted Postgres restore drill, cross-NAT TURN. Details in [PRODUCTION_READINESS.md](../analysis/PRODUCTION_READINESS.md) and [release-1-verification.md](./release-1-verification.md).
+
+---
+
+## Control plane & security
+
+- Device tokens: TTL (default 7 days), rotation, hashed at rest; revoke exits agents with code `2`.
+- Local users: PBKDF2 passwords, sessions, RBAC (`viewer` / `operator` / `admin`); CSRF on session mutations; shared `AI_BRIDGE_CSRF_SECRET` required for multi-worker.
+- Legacy admin token: off by default in production; optional via explicit enable + token.
+- Policies: versioned, simulated, audited; Tier 3/4 opt-in; single `task_service.create_task` gate for HTTP/v1/AI API paths.
+- Approvals: actor, args, device, tier, expiry; workflow approvals cannot cover Tier 4.
+- Audit: hash-chained; export + retention prune (not unconditionally append-only).
+- Emergency stop: **durable** via `plane_state` / settings (not process-memory-only).
+- OIDC: in-tree (`AI_BRIDGE_OIDC_*`); PKCE; pending state in shared settings for multi-worker; live provider E2E is environment-dependent.
+- Device mTLS fingerprint gate: env-gated (`AI_BRIDGE_DEVICE_MTLS`); depends on reverse-proxy headers.
+- Secrets: Fernet at rest for MCP OAuth secrets (`AI_BRIDGE_MCP_TOKEN_KEY`); child env scrubbed.
+- Signed updates: Ed25519 manifests; auto-install gated (`AI_BRIDGE_ALLOW_AUTO_UPDATE`).
+
+Production readiness hard-fails without Postgres, TURN/ICE, admin access, durable e-stop, and Redis when multi-worker — see `src/ai_bridge/control/production_readiness.py`.
+
+---
+
+## Data & multi-worker
+
+- SQLite: local/dev default.
+- PostgreSQL: required for `AI_BRIDGE_PROFILE=production`; CI `postgres-boot` (parity, boot, logical restore, PITR).
+- Redis: required for multi-host / production `AI_BRIDGE_WORKERS > 1` (rate limits, WS fan-out).
+- Task lifecycle: leases, retries, DLQ, progress, retention (migration `017` era).
+- Schema: migrations `001`–`017`; parity tooling in CI.
+
+---
+
+## Platforms
+
+| Platform | Status | Evidence |
+|---|---|---|
+| Windows agent + installer + DPAPI | **Supported** | CI `windows-python-e2e` + local installer/live agent E2E (`7/7` at R1) |
+| Windows WPF client | **Supported** | CI `windows-client` |
+| Native C++ WebRTC (`ai_bridge_desktop`) | **Preview** | CI `windows-native-webrtc`; preferred when present (`AI_BRIDGE_NATIVE_WEBRTC=auto`) |
+| Linux agent (systemd) | **Supported** | CI `test` + deployment-config |
+| macOS agent (launchd) | **Preview** | CI `macos-agent` launchd E2E; physical reboot optional |
+
+Do **not** claim macOS as fully Supported until physical reboot is signed off (or keep Preview).
+
+---
+
+## Desktop / WebRTC
+
+- Canonical API: `POST /api/v1/sessions` (legacy create **410** in production unless `AI_BRIDGE_ALLOW_LEGACY_WEBRTC=1`).
+- View-only / human takeover enforced agent-side (default-deny input).
+- Real-browser E2E: CI Chromium + local Chrome ↔ aiortc (**7/7** at R1).
+- TURN required in production profile.
+- Desktop audio: off by default (`AI_BRIDGE_DESKTOP_AUDIO=1` = silent PCM stub until WASAPI is real).
+- Cross-NAT public TURN: still a hosted RC item.
+
+---
+
+## Dashboard & operator UX
+
+- React/Vite live workspace: honest empty/offline/denied/degraded states; demo opt-in and labelled.
+- Fleet pagination, policy inheritance matrix, approvals with blast radius, Live Desktop view-only safety.
+- Build: `npm --prefix apps/dashboard run build` (dist not committed).
+
+---
+
+## MCP & AI clients
+
+- Stdio MCP: Claude, Codex, Gemini, generic — `integrations/*/`.
+- Remote Streamable HTTP + OAuth: ChatGPT connectors, Copilot Studio — `docs/remote-access.md`, `integrations/chatgpt/`, `integrations/copilot365/`.
+- **ChatGPT Custom GPT Actions** pack: `integrations/chatgpt/actions/` (OpenAPI + instructions); plane accepts Bearer on desktop frame/input and approvals.
+
+---
+
+## Residuals (tracked, not “unsupported”)
+
+- Windows service launcher token still ACL-locked in `run-agent.cmd` (DPAPI migration planned).
+- Some supervisor / WebRTC queue inserts not fully unified onto `task_service`.
+- Update anti-rollback floor + HTTPS-only URL enforcement.
+- C# `AllowedCommands` metacharacter tightening.
+- Hosted RC evidence (§ Production posture).
+
+---
+
+## Related docs
+
+| Doc | Role |
+|---|---|
+| [PRODUCTION_READINESS.md](../analysis/PRODUCTION_READINESS.md) | Current go / conditional-go / no-go |
+| [release-1-verification.md](./release-1-verification.md) | R1 gate evidence @ `5eb8750` |
+| [support-matrix.md](./support-matrix.md) | Supported vs Preview |
+| [production-readiness.md](./production-readiness.md) | Operator deploy checklist |
+| [ROADMAP.md](./ROADMAP.md) | Release themes |

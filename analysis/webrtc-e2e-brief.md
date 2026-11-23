@@ -1,3 +1,5 @@
+> **HISTORICAL analysis.** Current production assessment: [PRODUCTION_READINESS.md](./PRODUCTION_READINESS.md).
+
 # Wave 5C — Real-Browser WebRTC E2E: Parent Brief (browser run)
 
 **Date:** 17 Nov 2026. **Worker:** Wave 5C subagent. **Status:** harness + brief ready,

@@ -1,4 +1,7 @@
 # Troubleshooting
+
+**Updated:** 23 November 2026 · Status: [implementation-status.md](./implementation-status.md) · [PRODUCTION_READINESS.md](../analysis/PRODUCTION_READINESS.md)
+
 - MCP server exits immediately: run `python -m ai_bridge.server` in a
   terminal — stdio servers are meant to be driven by the client; an
   immediate exit usually means a bad `AI_BRIDGE_WORKSPACE` path or a

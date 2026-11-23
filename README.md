@@ -10,6 +10,9 @@
 > [!IMPORTANT]
 > **This is not a remote root shell.** There is no unrestricted shell endpoint, no arbitrary PowerShell executor, and no tool that can escalate its own permissions. All actions pass through server-side policy enforcement, 4-tier risk gating, path confinement, secret redaction, and hash-chained audit logging (see [docs/security.md](docs/security.md)).
 
+> [!NOTE]
+> **Production readiness (23 Nov 2026):** local/lab **GO** · small controlled fleet **CONDITIONAL GO** (hosted/physical RC evidence still required) · public multi-tenant SaaS **NO-GO**. See [analysis/PRODUCTION_READINESS.md](analysis/PRODUCTION_READINESS.md), [docs/support-matrix.md](docs/support-matrix.md), and [docs/implementation-status.md](docs/implementation-status.md).
+
 ---
 
 ## Architecture

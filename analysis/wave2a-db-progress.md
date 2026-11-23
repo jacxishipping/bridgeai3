@@ -1,3 +1,5 @@
+> **HISTORICAL analysis.** Current production assessment: [PRODUCTION_READINESS.md](./PRODUCTION_READINESS.md).
+
 # Wave 2A — Progress: database, audit chain, secrets encryption, migration 013
 
 Owner: Wave 2A subagent (DB/audit/secrets). Repo: `/home/hatch/workspace/ai-bridge-main`,

@@ -1,3 +1,5 @@
+> **HISTORICAL analysis.** Current production assessment: [PRODUCTION_READINESS.md](./PRODUCTION_READINESS.md).
+
 # Wave 2A — Distributed Reliability (dist child) — Progress
 
 Owner: Wave 2A dist subagent. Repo: `/home/hatch/workspace/ai-bridge-main`,

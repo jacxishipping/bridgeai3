@@ -1,5 +1,7 @@
 # Security & Permissions Model (`docs/security.md`)
 
+**Updated:** 23 November 2026 · Production posture: [PRODUCTION_READINESS.md](../analysis/PRODUCTION_READINESS.md) · Threat model: [threat-model.md](./threat-model.md)
+
 ## 1. Local Agent Security & Secret Storage
 - **DPAPI Secret Protection**: On Windows, device tokens and local secrets are encrypted at rest using Windows Data Protection API (`CryptProtectData` / `CryptUnprotectData` in `windows-agent/src/security/local_security.cpp`).
 - **ACL-Restricted Named Pipe IPC**: Communication between the Session 0 Windows Service (`ai_bridge_service.exe`) and the Interactive Desktop Agent (`ai_bridge_desktop.exe`) uses `\\.\pipe\AIBridgeDesktopPipe` with a strict SDDL security descriptor (`D:(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;AU)`) and per-message HMAC-SHA256 authentication tags (`shared/protocols/named_pipe_protocol.json`).

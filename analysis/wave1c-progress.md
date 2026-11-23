@@ -1,3 +1,5 @@
+> **HISTORICAL analysis.** Current production assessment: [PRODUCTION_READINESS.md](./PRODUCTION_READINESS.md).
+
 # Wave 1C — Progress: MCP policy gate, tiers, audit writer, unrestricted policy
 
 Owner: Wave 1C subagent. Repo: `/home/hatch/workspace/ai-bridge-main`.

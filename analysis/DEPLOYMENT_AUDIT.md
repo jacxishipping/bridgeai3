@@ -1,3 +1,5 @@
+> **HISTORICAL analysis.** Current production assessment: [PRODUCTION_READINESS.md](./PRODUCTION_READINESS.md).
+
 # Deployment Audit (Appendix to reports 09–10)
 
 **Scope:** every deployment artefact in the repo: `docker-compose*.yml`,

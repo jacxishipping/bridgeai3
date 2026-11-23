@@ -1,3 +1,5 @@
+> **HISTORICAL analysis.** Current production assessment: [PRODUCTION_READINESS.md](./PRODUCTION_READINESS.md).
+
 # Wave 4 progress — follow-up patches from Wave 3 + remaining P1/P2 wiring
 
 **Base:** commit `88ad591` (Wave 3). No reset/rebase. No commit. No `pip install`.

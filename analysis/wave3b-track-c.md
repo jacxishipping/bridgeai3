@@ -1,3 +1,5 @@
+> **HISTORICAL analysis.** Current production assessment: [PRODUCTION_READINESS.md](./PRODUCTION_READINESS.md).
+
 # Wave 3B Track C — error taxonomy + secrets hygiene + MCP gate + config
 
 Status: DONE. No commits made. No reset/rebase. No pip installs. No files

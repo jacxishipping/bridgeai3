@@ -1,5 +1,7 @@
 # Deploying AI Bridge on Render (test deployment)
 
+**Updated:** 23 November 2026 · Treat Render as **staging/test** unless hosted RC evidence is archived ([PRODUCTION_READINESS.md](../analysis/PRODUCTION_READINESS.md)).
+
 ## What this deploys
 - `ai-bridge-control`: the FastAPI control plane as a native Python web
   service (`pip install -e .`, then `python -m ai_bridge.control`). It

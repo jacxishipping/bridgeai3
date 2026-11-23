@@ -1,3 +1,5 @@
+> **HISTORICAL analysis.** Current production assessment: [PRODUCTION_READINESS.md](./PRODUCTION_READINESS.md).
+
 # Distributed Reliability Audit — AI Bridge
 
 Scope: behaviour of the system as a distributed system — clients, control

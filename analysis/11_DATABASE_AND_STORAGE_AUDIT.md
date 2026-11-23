@@ -1,3 +1,5 @@
+> **HISTORICAL analysis.** Current production assessment: [PRODUCTION_READINESS.md](./PRODUCTION_READINESS.md).
+
 # 11 — Database and Storage Audit — AI Bridge
 
 Scope: persistence layers only — SQLite, PostgreSQL, Redis, migrations,

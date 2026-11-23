@@ -7,6 +7,7 @@
 - `apps/dashboard/` is the React/Vite management UI; `apps/windows-client/` is the .NET WPF client. Native C++ Windows code is in `windows-agent/`.
 - `tests/` holds Python unit, integration, security, and end-to-end tests. Database migrations live in `migrations/`; deployment assets and operational scripts are under `deployment/` and `scripts/`.
 - Put client setup examples in `integrations/` and longer operational material in `docs/`.
+- Production posture lives in `analysis/PRODUCTION_READINESS.md` (not historical `analysis/21_*` / removed FINAL snapshot). Platform claims: `docs/support-matrix.md`.
 
 ## Build, Test, and Development Commands
 

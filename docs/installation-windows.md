@@ -1,5 +1,7 @@
 # Installation — Windows
 
+**Updated:** 23 November 2026 · Support: **Supported** ([support-matrix.md](./support-matrix.md)) · Reboot soak still a hosted RC item ([PRODUCTION_READINESS.md](../analysis/PRODUCTION_READINESS.md)).
+
 The canonical installer is the setup wizard: double-click
 `deployment\windows\Setup.bat`, or run
 `python deployment\windows\installer_gui.py --silent` for automation.

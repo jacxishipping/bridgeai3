@@ -1,3 +1,5 @@
+> **HISTORICAL analysis.** Current production assessment: [PRODUCTION_READINESS.md](./PRODUCTION_READINESS.md).
+
 # Wave 3A progress — Phase 2 distributed reliability + database
 
 **Base:** commit `19747b2` (Wave 2 fix-up). No reset/rebase. No commit. No `pip install`.

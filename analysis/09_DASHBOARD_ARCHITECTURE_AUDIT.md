@@ -1,3 +1,5 @@
+> **HISTORICAL analysis.** Current production assessment: [PRODUCTION_READINESS.md](./PRODUCTION_READINESS.md).
+
 # 09 — Dashboard Architecture Audit
 
 **Scope:** `apps/dashboard/` (React 18 + TypeScript + Vite + Tailwind v4), plus the

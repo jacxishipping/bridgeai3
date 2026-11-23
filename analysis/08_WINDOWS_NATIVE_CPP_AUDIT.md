@@ -1,3 +1,5 @@
+> **HISTORICAL analysis.** Current production assessment: [PRODUCTION_READINESS.md](./PRODUCTION_READINESS.md).
+
 # 08 — Windows Native C++ Audit
 
 **Scope:** `windows-agent/` only (C++20), plus its Python `ctypes` bridge

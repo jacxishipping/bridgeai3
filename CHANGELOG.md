@@ -1,4 +1,17 @@
 # Changelog
+
+## Unreleased — 2026-11-23
+- Documentation: replaced stale `analysis/FINAL_PRODUCTION_READINESS.md` with
+  [analysis/PRODUCTION_READINESS.md](analysis/PRODUCTION_READINESS.md) (lab GO;
+  controlled fleet CONDITIONAL GO; SaaS NO-GO). Rewrote
+  `docs/implementation-status.md`, `docs/production-readiness.md`,
+  `docs/operations.md`, `docs/mcp-clients.md`, `docs/remote-access.md`; updated
+  README, support matrix, release-1 verification pointers, and SECURITY.md.
+- ChatGPT Custom GPT Actions pack under `integrations/chatgpt/actions/`;
+  Bearer accepted on desktop frame/input, fleet frames, and approvals.
+- Windows WPF client UX polish (poller vs Agents, takeover, visuals).
+- Native WebRTC preference on Windows fleet dispatch (`ai_bridge_desktop`).
+
 ## 0.3.1 — 2026-11-17 (Wave 1 remediation; see analysis/20_REFACTORING_ROADMAP.md)
 - P0 fixes: env-var auth/DNS bypasses removed; one MCP policy gate on all
   tools; `unrestricted`/Tier-4 approval fixed; MCP audit logging; agent
@@ -33,7 +46,8 @@
     `control/device_mtls.py`, fingerprint taken from reverse-proxy
     headers); end-to-end verification pending.
   - macOS agent: code exists (`agents/macos/agent_main.py`, launchd unit
-    in `deployment/macos/`); never run on macOS — import-tested only.
+    in `deployment/macos/`). **Later (Release 1):** CI `macos-agent` launchd
+    E2E green; support tier remains **Preview** — see docs/support-matrix.md.
 ## 0.2.0 — 2026-10-24
 - Hardened starter core: secret-name blocking, redaction, output caps,
   resolved-root confinement, atomic writes, backups.

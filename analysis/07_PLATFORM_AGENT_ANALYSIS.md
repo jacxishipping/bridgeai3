@@ -1,3 +1,5 @@
+> **HISTORICAL analysis.** Current production assessment: [PRODUCTION_READINESS.md](./PRODUCTION_READINESS.md).
+
 # 07 — Platform Agent Analysis
 
 **Scope:** Python platform agents only (`agents/` + the control-plane agent endpoints they talk to).

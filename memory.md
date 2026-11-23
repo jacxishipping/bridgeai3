@@ -2,6 +2,9 @@
 
 This document captures the architecture, build/test workflows, local runtime paths, design decisions, and solved pitfalls for the **AI Bridge** repository so future sessions and contributors can ramp up immediately.
 
+**Production readiness (authoritative):** [analysis/PRODUCTION_READINESS.md](analysis/PRODUCTION_READINESS.md) — lab GO · controlled fleet CONDITIONAL GO · SaaS NO-GO (23 Nov 2026).  
+**Living status docs:** [docs/implementation-status.md](docs/implementation-status.md) · [docs/support-matrix.md](docs/support-matrix.md) · [docs/ROADMAP.md](docs/ROADMAP.md).
+
 ---
 
 ## 1. Project Overview & Architecture

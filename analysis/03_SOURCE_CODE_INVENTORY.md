@@ -1,3 +1,5 @@
+> **HISTORICAL analysis.** Current production assessment: [PRODUCTION_READINESS.md](./PRODUCTION_READINESS.md).
+
 # 03 — Source Code Inventory (AI Bridge v0.3.0)
 
 **Scope:** Complete file and line inventory of the repository at `/home/hatch/workspace/ai-bridge-main`

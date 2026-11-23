@@ -1,3 +1,5 @@
+> **HISTORICAL analysis.** Current production assessment: [PRODUCTION_READINESS.md](./PRODUCTION_READINESS.md).
+
 # Wave 2A — signed updates + child-env scrub + native installer sealing: progress record
 
 Date: 2026-11-17. Base: git commit `726bed2` (no reset/rebase, no commit, no pip install).

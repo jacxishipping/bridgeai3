@@ -1,3 +1,5 @@
+> **HISTORICAL analysis.** Current production assessment: [PRODUCTION_READINESS.md](./PRODUCTION_READINESS.md).
+
 # Wave 2 fix-up progress — dashboard tests, stream tickets, DPAPI readers, signed installers, v1/mcp_servers leftovers
 
 Repo: `/home/hatch/workspace/ai-bridge-main`, on top of git commit `3712b81`

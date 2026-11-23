@@ -1,5 +1,7 @@
 # Dashboard language support
 
+**Updated:** 23 November 2026 · Not a production localisation certification — core nav/sign-in preview only.
+
 ## Current coverage: core UI preview, not full translation
 
 The language picker ships 20 locale choices: English, Arabic, Bengali, Simplified

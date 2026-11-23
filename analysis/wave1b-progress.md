@@ -1,3 +1,5 @@
+> **HISTORICAL analysis.** Current production assessment: [PRODUCTION_READINESS.md](./PRODUCTION_READINESS.md).
+
 # Wave 1B — Agents / Native Windows C++ / WebRTC — Progress
 
 Date: 2026-11-17. Scope: R-P0-07, R-P0-08, R-P0-09, R-P0-13, F13-01, F13-02,

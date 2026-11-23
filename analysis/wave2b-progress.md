@@ -1,3 +1,5 @@
+> **HISTORICAL analysis.** Current production assessment: [PRODUCTION_READINESS.md](./PRODUCTION_READINESS.md).
+
 # Wave 2B progress — dashboard honesty, docs, integrations (2026-11-17)
 
 Repo: `/home/hatch/workspace/ai-bridge-main`, on top of git commit `726bed2`

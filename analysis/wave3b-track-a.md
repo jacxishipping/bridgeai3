@@ -1,3 +1,5 @@
+> **HISTORICAL analysis.** Current production assessment: [PRODUCTION_READINESS.md](./PRODUCTION_READINESS.md).
+
 # Wave 3B Track A — app.py APIRouter split: progress
 
 Owner: Track A subagent. Repo: `~/workspace/ai-bridge-main`, base commit

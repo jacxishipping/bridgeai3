@@ -1,6 +1,6 @@
 # AI Bridge Product Roadmap
 
-**Planning baseline:** 20 November 2026
+**Planning baseline:** 20 November 2026 · **Assessment refresh:** 23 November 2026 ([PRODUCTION_READINESS.md](../analysis/PRODUCTION_READINESS.md))  
 **Purpose:** Canonical, outcome-oriented product roadmap. It distinguishes code that exists from work verified in a production-like environment. Historical technical detail remains in [ai-bridge_ADVANCED_ROADMAP.md](./ai-bridge_ADVANCED_ROADMAP.md).
 
 ## Direction

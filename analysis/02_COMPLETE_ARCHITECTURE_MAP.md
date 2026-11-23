@@ -11,7 +11,9 @@
 
 ## 1. What AI Bridge is (VERIFIED)
 
-AI Bridge is a real, substantial codebase — not a mock — that lets MCP-compatible AI clients and a React dashboard submit operations to a control plane, which queues them for outbound-polling agents on Linux/Windows/macOS endpoints, or executes them locally on the control-plane host. It is **not** a finished production system: the honest docs (`docs/implementation-status.md`, `docs/production-readiness.md`) say so, and the audits confirm it (report 01, OV-01–OV-10; report 22 §2).
+> **HISTORICAL architecture snapshot.** Current production assessment: [PRODUCTION_READINESS.md](./PRODUCTION_READINESS.md).
+
+AI Bridge is a real, substantial codebase — not a mock — that lets MCP-compatible AI clients and a React dashboard submit operations to a control plane, which queues them for outbound-polling agents on Linux/Windows/macOS endpoints, or executes them locally on the control-plane host. At the time of this report it was **not** yet a signed production RC; see the current assessment for lab GO / controlled-fleet CONDITIONAL GO / SaaS NO-GO.
 
 Inventory (report 03, VERIFIED): `src/ai_bridge/` 75 files / ~29,112 lines incl. egg-info; core 11,452 lines + connectors 994; `control/` 38 files / 16,666 lines; `agents/` ~6,546 lines; `windows-agent/` ~3,671 lines C++20 (+147 test lines); dashboard 29,723 TS/TSX lines in 74 files; `integrations/custom-ai/` 480 lines Python — the only integration with code (ChatGPT/Claude/Codex/Gemini are README + JSON config only, INV-07).
 

@@ -1,5 +1,7 @@
 # Installation & Management — Linux Agent & Control Plane
 
+**Updated:** 23 November 2026 · Support: **Supported** ([support-matrix.md](./support-matrix.md)).
+
 ## Fast Track: All-in-One Linux Agent Runner (A to Z)
 
 To set up, enroll, and manage an **AI Bridge Linux Agent** on any Debian/Ubuntu, RHEL/Rocky, Fedora, or Arch Linux machine:

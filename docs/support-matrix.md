@@ -1,5 +1,8 @@
 # Platform & Capability Support Matrix
 
+**Updated:** 23 November 2026  
+**Verdict companion:** [analysis/PRODUCTION_READINESS.md](../analysis/PRODUCTION_READINESS.md)
+
 This document is the single canonical source of truth for what is **supported**, **preview/experimental**, and **verified in CI** for AI Bridge. Support claims must never outrun tested evidence.
 
 ## Control Plane & Data Tier
@@ -33,9 +36,12 @@ This document is the single canonical source of truth for what is **supported**,
 | End-to-End Traceability (`X-Correlation-ID` → `GET /api/traces/{trace_id}`) | **Supported** | Propagated across dashboard, MCP, control plane, agent spool, task events, and audit chain. | [runbooks.md](./runbooks.md) |
 | Staged Rollout Rings (`canary` → `early` → `general`) | **Supported** | Health-gate auto-pause, pause/resume, and `rollback_fleet_agent`. | [fleet-limits.md](./fleet-limits.md) |
 | Supply Chain (CycloneDX SBOM, Signed Releases, Evidence Bundle) | **Supported** | `scripts/generate_sbom.py`, `scripts/assemble_release_evidence.py`, `.github/workflows/release.yml`. | [release-1-verification.md](./release-1-verification.md) |
+| ChatGPT Custom GPT Actions | **Supported** (integration pack) | OpenAPI Actions + Bearer against TLS plane; policy/approvals unchanged. | [integrations/chatgpt/](../integrations/chatgpt/) · [mcp-clients.md](./mcp-clients.md) |
+| ChatGPT / Copilot remote MCP | **Supported** (where plan allows) | Streamable HTTP behind TLS + bearer/OAuth gateway. | [remote-access.md](./remote-access.md) |
 
 ## Explicitly Unsupported / Deferred
 
-- Multi-region / active-active multi-plane federation.
+- Multi-region / active-active multi-plane federation / public multi-tenant SaaS.
 - Unattended Tier-4 execution or AI-driven auto-approval by default.
 - Native C++ WebRTC as the default transport before full production soak.
+- Claiming a **signed production RC** before hosted reboot soak, staging gate, backup drill, and cross-NAT TURN evidence ([PRODUCTION_READINESS.md](../analysis/PRODUCTION_READINESS.md) §2).

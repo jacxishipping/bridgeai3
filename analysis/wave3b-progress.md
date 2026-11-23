@@ -1,3 +1,5 @@
+> **HISTORICAL analysis.** Current production assessment: [PRODUCTION_READINESS.md](./PRODUCTION_READINESS.md).
+
 # Wave 3B — Phase 4 architecture consolidation + error taxonomy + secrets hygiene: progress
 
 Base commit: `19747b2` (Wave 2 fix-up). No reset/rebase/commit. No packages

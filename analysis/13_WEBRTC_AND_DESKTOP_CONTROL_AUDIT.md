@@ -1,3 +1,5 @@
+> **HISTORICAL analysis.** Current production assessment: [PRODUCTION_READINESS.md](./PRODUCTION_READINESS.md).
+
 # 13 — WebRTC and Desktop Control Audit
 
 **Scope:** the complete desktop-interaction path — Python `aiortc` shipping path,

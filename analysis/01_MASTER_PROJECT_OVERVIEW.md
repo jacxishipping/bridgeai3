@@ -1,5 +1,7 @@
 # 01 — Master Project Overview (AI Bridge v0.3.0)
 
+> **HISTORICAL.** Current status: [PRODUCTION_READINESS.md](./PRODUCTION_READINESS.md) · [docs/implementation-status.md](../docs/implementation-status.md)
+
 **Scope:** What AI Bridge actually is today, verified against the repository at
 `/home/hatch/workspace/ai-bridge-main`. Every capability claim below is labelled
 VERIFIED (observed in code/config), INFERRED (reasonable reading, needs deeper verification),
