@@ -148,6 +148,12 @@ def build_capability_matrix(*, include_host: bool = True) -> dict[str, Any]:
         )
     else:
         audio_reason = "desktop audio off by default (set AI_BRIDGE_DESKTOP_AUDIO=1 to attach track)"
+    try:
+        from ai_bridge import screen_relay as screen_relay_mod
+
+        relay_status = screen_relay_mod.describe_screen_relay_status()
+    except Exception:
+        relay_status = {"available": False, "protocol": "nsl1", "mode": "unavailable"}
     return {
         "schema": "ai-bridge-desktop-capabilities/v1",
         "host_os": host_os,
@@ -163,6 +169,11 @@ def build_capability_matrix(*, include_host: bool = True) -> dict[str, Any]:
             "probe": probe,
             "scope": "control_plane_host",
             "reason": audio_reason,
+        },
+        "screen_relay": {
+            **relay_status,
+            "supported_platforms": ["Windows", "Darwin", "Linux"],
+            "scope": "control_plane_host",
         },
         "residual_gaps": residuals,
     }
@@ -208,6 +219,7 @@ def device_desktop_capabilities(device_row: dict[str, Any], effective_policy: di
         "read_only_status_supported": True,
         "screenshot_supported": screenshot_supported,
         "webrtc_stream_supported": webrtc_supported,
+        "screen_relay_supported": (not revoked) and family in ("Windows", "Linux", "Darwin"),
         "interactive_input_supported": interactive_supported,
         "policy_desktop_enabled": policy_desktop,
         "advertised_mode": mode,

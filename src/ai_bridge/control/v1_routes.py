@@ -42,6 +42,7 @@ from . import task_service as task_service_mod
 
 VALID_SESSION_MODES = {"view_only", "human_control", "ai_assisted"}
 VALID_VIDEO_CODECS = {"H264", "VP8", "VP9", "AV1"}
+VALID_TRANSPORTS = {"webrtc", "screen_relay"}
 
 # Global in-process registry of human takeover state by device_id so MCP tools and
 # REST/WebSocket handlers share immediate human-takeover enforcement.
@@ -217,11 +218,15 @@ def format_session_v1(sess: dict[str, Any]) -> dict[str, Any]:
     offer_obj = sess.get("offer")
     offer_sdp = offer_obj.get("sdp") if isinstance(offer_obj, dict) else None
     offer_type = offer_obj.get("type", "offer") if isinstance(offer_obj, dict) else "offer"
+    transport = str(sess.get("transport") or "webrtc")
+    protocol = str(sess.get("protocol") or ("nsl1" if transport == "screen_relay" else "webrtc"))
     return {
         "session_id": sid,
         "device_id": str(sess.get("device_id") or "local"),
         "user_id": str(sess.get("user_id") or "admin"),
         "mode": str(sess.get("mode") or "ai_assisted"),
+        "transport": transport,
+        "protocol": protocol,
         "video": video,
         "permissions": sess.get("permissions")
         or {
@@ -249,6 +254,7 @@ def format_session_v1(sess: dict[str, Any]) -> dict[str, Any]:
 class CreateSessionV1In(BaseModel):
     device_id: str = "local"
     mode: str = "ai_assisted"
+    transport: str = "webrtc"
     codec: str = "H264"
     width: int = Field(default=1920, ge=120, le=7680)
     height: int = Field(default=1080, ge=120, le=4320)
@@ -281,6 +287,9 @@ def attach_v1_routes(
     from . import agent_channel
 
     ws_subscribers: dict[str, set[WebSocket]] = {}
+    ws_roles: dict[str, dict[WebSocket, str]] = {}
+    ws_control_owner: dict[str, WebSocket | None] = {}
+    ws_event_loop: dict[str, Any] = {"loop": None}
 
     async def _deliver_local_ws(session_id: str, event: dict[str, Any]) -> None:
         peers = list(ws_subscribers.get(session_id) or [])
@@ -289,6 +298,27 @@ def attach_v1_routes(
                 await ws.send_json(event)
             except Exception:
                 ws_subscribers.get(session_id, set()).discard(ws)
+
+    async def _deliver_local_binary(session_id: str, data: bytes, *, target_role: str = "viewer") -> None:
+        role_map = ws_roles.get(session_id) or {}
+        peers = [ws for ws, r in list(role_map.items()) if r == target_role]
+        for ws in peers:
+            try:
+                await ws.send_bytes(data)
+            except Exception:
+                ws_subscribers.get(session_id, set()).discard(ws)
+                role_map.pop(ws, None)
+
+    def _emit_binary_from_thread(session_id: str, data: bytes) -> None:
+        loop = ws_event_loop.get("loop") or getattr(agent_channel, "_loop", None)
+        if loop is None:
+            return
+        try:
+            import asyncio
+
+            asyncio.run_coroutine_threadsafe(_deliver_local_binary(session_id, data, target_role="viewer"), loop)
+        except Exception:
+            pass
 
     agent_channel.register_webrtc_fanout_handler(_deliver_local_ws)
 
@@ -616,17 +646,19 @@ def attach_v1_routes(
     ):
         actor, _role = auth_context(x_admin_token, x_session_token, authorization)
         mode = body.mode if body.mode in VALID_SESSION_MODES else "ai_assisted"
+        transport = body.transport.strip().lower() if body.transport.strip().lower() in VALID_TRANSPORTS else "webrtc"
         codec = body.codec.upper() if body.codec.upper() in VALID_VIDEO_CODECS else "H264"
         even_w = max(120, (int(body.width) // 2) * 2)
         even_h = max(120, (int(body.height) // 2) * 2)
-        fps = max(1, min(60, int(body.fps)))
+        max_fps = 120 if transport == "screen_relay" else 60
+        fps = max(1, min(max_fps, int(body.fps)))
         bitrate_kbps = max(250, min(50000, int(body.bitrate_kbps)))
 
         import platform as _platform
 
         from . import desktop_capabilities as desktop_capabilitiesmod
 
-        # Reject non-Windows hosts before creating a session or queueing start_webrtc_stream.
+        # Reject unsupported OS before creating a session or queueing stream tasks.
         dev_row = None
         if body.device_id == "local":
             device_os = _platform.system()
@@ -640,21 +672,36 @@ def attach_v1_routes(
                 device_os = None
             if device_os is None and hasattr(dev_row, "keys"):
                 device_os = dict(dev_row).get("os")
-        gate = desktop_capabilitiesmod.stream_gate_for_os(device_os)
-        if not gate.get("allowed") or not desktop_capabilitiesmod.platform_supports_webrtc_desktop_stream(device_os):
-            detail = (
-                f"WebRTC desktop stream unavailable for platform "
-                f"{gate.get('platform') or device_os or 'unknown'}: {gate.get('detail') or gate.get('reason')}. "
-                "Live Desktop streaming is supported on Windows desktop hosts only."
-            )
-            audit(
-                actor,
-                body.device_id,
-                "v1_create_session",
-                {"mode": mode, "gate": gate, "device_os": device_os},
-                "denied",
-            )
-            raise HTTPException(status_code=400, detail=detail)
+        if transport == "screen_relay":
+            family = desktop_capabilitiesmod.normalize_platform_family(device_os)
+            if family not in ("Windows", "Linux", "Darwin"):
+                audit(
+                    actor,
+                    body.device_id,
+                    "v1_create_session",
+                    {"mode": mode, "transport": transport, "device_os": device_os},
+                    "denied",
+                )
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Screen Relay streaming unavailable for unknown platform {device_os or 'unknown'}.",
+                )
+        else:
+            gate = desktop_capabilitiesmod.stream_gate_for_os(device_os)
+            if not gate.get("allowed") or not desktop_capabilitiesmod.platform_supports_webrtc_desktop_stream(device_os):
+                detail = (
+                    f"WebRTC desktop stream unavailable for platform "
+                    f"{gate.get('platform') or device_os or 'unknown'}: {gate.get('detail') or gate.get('reason')}. "
+                    "Live Desktop streaming is supported on Windows desktop hosts only."
+                )
+                audit(
+                    actor,
+                    body.device_id,
+                    "v1_create_session",
+                    {"mode": mode, "gate": gate, "device_os": device_os},
+                    "denied",
+                )
+                raise HTTPException(status_code=400, detail=detail)
 
         eff_policy = get_effective_device_policy(body.device_id)
         if body.device_id == "local":
@@ -671,6 +718,8 @@ def attach_v1_routes(
             "device_id": body.device_id,
             "user_id": actor,
             "mode": mode,
+            "transport": transport,
+            "protocol": "nsl1" if transport == "screen_relay" else "webrtc",
             "video": {
                 "codec": codec,
                 "width": even_w,
@@ -697,20 +746,33 @@ def attach_v1_routes(
             actor,
             body.device_id,
             "v1_create_session",
-            {"session_id": session_id, "mode": mode, "codec": codec, "fps": fps},
+            {"session_id": session_id, "mode": mode, "transport": transport, "codec": codec, "fps": fps},
             "allowed",
         )
 
         if body.device_id == "local":
             try:
-                webrtc_stream.start_stream(
-                    session_id,
-                    webrtc_stream.DictSignaling(sess),
-                    scale=body.scale,
-                    fps=fps,
-                    monitor_index=body.monitor_index,
-                    bitrate_kbps=bitrate_kbps,
-                )
+                if transport == "screen_relay":
+                    from .. import screen_relay as screen_relay_mod
+
+                    screen_relay_mod.start_relay_session(
+                        session_id,
+                        fps=fps,
+                        scale=body.scale,
+                        bitrate_kbps=bitrate_kbps,
+                        monitor_index=int(body.monitor_index or 0),
+                        on_binary_frame=lambda b, _sid=session_id: _emit_binary_from_thread(_sid, b),
+                    )
+                    sess["status"] = "streaming"
+                else:
+                    webrtc_stream.start_stream(
+                        session_id,
+                        webrtc_stream.DictSignaling(sess),
+                        scale=body.scale,
+                        fps=fps,
+                        monitor_index=body.monitor_index,
+                        bitrate_kbps=bitrate_kbps,
+                    )
             except Exception as exc:
                 sess["status"] = "error"
                 sess["error"] = str(exc)
@@ -726,13 +788,14 @@ def attach_v1_routes(
                 "monitor_index": body.monitor_index,
                 "bitrate_kbps": bitrate_kbps,
             }
+            stream_tool = "start_screen_relay_stream" if transport == "screen_relay" else "start_webrtc_stream"
             task_service_mod.create_task(
                 conn,
                 actor=actor,
                 role="operator",
                 tenant=dev_row["tenant"],
                 device_id=body.device_id,
-                tool="start_webrtc_stream",
+                tool=stream_tool,
                 args=args,
                 human_initiated=True,
                 preauthorized_stream=True,
@@ -900,6 +963,12 @@ def attach_v1_routes(
         device_id = str(sess.get("device_id") or "local")
         set_device_human_takeover(device_id, False, actor=actor, session_id=session_id, conn=conn)
         webrtc_stream.stop_stream(session_id)
+        try:
+            from .. import screen_relay as screen_relay_mod
+
+            screen_relay_mod.stop_relay_session(session_id)
+        except Exception:
+            pass
         audit(actor, device_id, "v1_terminate_session", {"session_id": session_id}, "allowed")
         await _broadcast_ws(session_id, {"type": "session_terminated", "session_id": session_id})
         return format_session_v1(sess)
@@ -1086,13 +1155,99 @@ def attach_v1_routes(
             return
 
         await websocket.accept()
-        ws_subscribers.setdefault(session_id, set()).add(websocket)
         try:
+            import asyncio
+
+            ws_event_loop["loop"] = asyncio.get_running_loop()
+        except Exception:
+            pass
+        ws_role = "agent" if dev_tok else "viewer"
+        ws_subscribers.setdefault(session_id, set()).add(websocket)
+        ws_roles.setdefault(session_id, {})[websocket] = ws_role
+        try:
+            from .. import screen_relay as screen_relay_mod
+            from . import plane_state as _ps
+
             sess = load_webrtc_session_db(conn, app.state, session_id)
             if sess is not None:
                 await websocket.send_json({"type": "session_snapshot", "session": format_session_v1(sess)})
+                if ws_role == "viewer":
+                    local_relay = screen_relay_mod.get_relay_session(session_id)
+                    if local_relay is not None:
+                        local_relay.request_keyframe()
             while True:
-                msg = await websocket.receive_json()
+                packet = await websocket.receive()
+                if packet.get("type") == "websocket.disconnect":
+                    break
+                raw_bytes = packet.get("bytes")
+                if raw_bytes is not None:
+                    data = bytes(raw_bytes)
+                    if ws_role == "agent":
+                        # Downstream agent -> viewers NSL1 video/cursor broadcast
+                        if len(data) >= screen_relay_mod.NSL1_HEADER_SIZE and data[:4] == screen_relay_mod.NSL1_MAGIC:
+                            await _deliver_local_binary(session_id, data, target_role="viewer")
+                        continue
+
+                    # Upstream viewer -> agent/local NSL1 ACK/CONTROL/INPUT
+                    try:
+                        frame = screen_relay_mod.decode_nsl1_frame(data)
+                    except ValueError:
+                        await websocket.send_json({"type": "error", "detail": "Invalid NSL1 binary frame."})
+                        continue
+                    local_relay = screen_relay_mod.get_relay_session(session_id)
+                    if frame.msg_type == screen_relay_mod.NSL1_MSG_ACK:
+                        if local_relay is not None:
+                            local_relay.note_ack(frame.seq)
+                        else:
+                            await _deliver_local_binary(session_id, data, target_role="agent")
+                        continue
+                    if frame.msg_type == screen_relay_mod.NSL1_MSG_CONTROL:
+                        if local_relay is not None:
+                            local_relay.request_keyframe()
+                        else:
+                            await _deliver_local_binary(session_id, data, target_role="agent")
+                        continue
+                    if frame.msg_type == screen_relay_mod.NSL1_MSG_INPUT:
+                        if _ps.is_emergency_stop(conn, app.state):
+                            await websocket.send_json({"type": "input_denied", "reason": "emergency_stop_active"})
+                            continue
+                        sess = load_webrtc_session_db(conn, app.state, session_id)
+                        if sess is None:
+                            await websocket.send_json({"type": "input_denied", "reason": "session_not_found"})
+                            continue
+                        mode_now = str(sess.get("mode") or "view_only").lower()
+                        perms_now = sess.get("permissions") or {}
+                        if mode_now == "view_only" or not (
+                            perms_now.get("control_mouse") or perms_now.get("control_keyboard")
+                        ):
+                            await websocket.send_json({"type": "input_denied", "reason": "session_is_view_only"})
+                            continue
+                        # Exclusive control ownership (screen-relay 4003 busy semantics)
+                        owner = ws_control_owner.get(session_id)
+                        if owner is not None and owner is not websocket and owner in (ws_subscribers.get(session_id) or set()):
+                            await websocket.send_json(
+                                {
+                                    "type": "control_denied",
+                                    "code": screen_relay_mod.NSL1_CLOSE_BUSY,
+                                    "reason": "busy",
+                                }
+                            )
+                            continue
+                        ws_control_owner[session_id] = websocket
+                        if local_relay is not None:
+                            try:
+                                local_relay.handle_binary_input(frame.payload)
+                            except Exception as exc:
+                                await websocket.send_json({"type": "input_error", "detail": str(exc)})
+                        else:
+                            await _deliver_local_binary(session_id, data, target_role="agent")
+                        continue
+                    continue
+
+                raw_text = packet.get("text")
+                if not raw_text:
+                    continue
+                msg = json.loads(raw_text)
                 mtype = str(msg.get("type") or "").lower()
                 sess = load_webrtc_session_db(conn, app.state, session_id)
                 if sess is None:
@@ -1116,6 +1271,36 @@ def attach_v1_routes(
                         sess.setdefault("viewer_candidates", []).append(msg["candidate"])
                     save_webrtc_session_db(conn, app.state, sess)
                     await _broadcast_ws(session_id, {"type": "ice", "from": side, "candidate": msg["candidate"]})
+                elif mtype in ("switch_monitor", "set_monitor") and "monitor_index" in msg:
+                    req_idx = max(0, int(msg["monitor_index"]))
+                    local_relay = screen_relay_mod.get_relay_session(session_id)
+                    if local_relay is not None:
+                        local_relay.switch_monitor(req_idx)
+                        await websocket.send_json({"type": "monitor_switched", "ok": True, "monitor_index": req_idx})
+                    else:
+                        await _broadcast_ws(session_id, {"type": "switch_monitor", "monitor_index": req_idx})
+                elif mtype == "request_keyframe":
+                    local_relay = screen_relay_mod.get_relay_session(session_id)
+                    if local_relay is not None:
+                        local_relay.request_keyframe()
+                    else:
+                        await _broadcast_ws(session_id, {"type": "request_keyframe"})
+                elif mtype == "claim_control" and ws_role == "viewer":
+                    mode_now = str(sess.get("mode") or "view_only").lower()
+                    perms_now = sess.get("permissions") or {}
+                    if mode_now == "view_only" or not (perms_now.get("control_mouse") or perms_now.get("control_keyboard")):
+                        await websocket.send_json({"type": "control_denied", "code": screen_relay_mod.NSL1_CLOSE_BUSY, "reason": "view_only"})
+                    else:
+                        prev_owner = ws_control_owner.get(session_id)
+                        ws_control_owner[session_id] = websocket
+                        if prev_owner is not None and prev_owner is not websocket:
+                            try:
+                                await prev_owner.send_json(
+                                    {"type": "control_revoked", "code": screen_relay_mod.NSL1_CLOSE_TAKEN, "reason": "taken"}
+                                )
+                            except Exception:
+                                pass
+                        await websocket.send_json({"type": "control_granted", "ok": True})
                 elif mtype == "ping":
                     await websocket.send_json(
                         {
@@ -1131,6 +1316,9 @@ def attach_v1_routes(
             pass
         finally:
             ws_subscribers.get(session_id, set()).discard(websocket)
+            (ws_roles.get(session_id) or {}).pop(websocket, None)
+            if ws_control_owner.get(session_id) is websocket:
+                ws_control_owner.pop(session_id, None)
 
     # ------------------------------------------------------------------
     # 4. Task Orchestrator (/api/v1/tasks)

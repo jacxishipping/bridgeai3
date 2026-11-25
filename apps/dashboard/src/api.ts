@@ -927,6 +927,7 @@ export class ApiClient {
   async createWebRtcSession(payload: {
     device_id: string;
     mode?: "view_only" | "human_control" | "ai_assisted";
+    transport?: "webrtc" | "screen_relay";
     fps?: number;
     scale?: number;
     monitor_index?: number;
@@ -938,6 +939,25 @@ export class ApiClient {
       method: "POST",
       body: JSON.stringify(payload),
     });
+  }
+
+  async mintStreamTicket(
+    deviceId: string,
+    sessionId: string,
+  ): Promise<{ ticket: string; device_id: string; session_id: string; expires_in: number }> {
+    return this.request("/api/stream-ticket", {
+      method: "POST",
+      body: JSON.stringify({ device_id: deviceId, session_id: sessionId }),
+    });
+  }
+
+  async buildSessionWsUrl(deviceId: string, sessionId: string): Promise<string> {
+    const { ticket } = await this.mintStreamTicket(deviceId, sessionId);
+    const httpUrl = this.resolveUrl(`/api/v1/ws/sessions/${encodeURIComponent(sessionId)}?ticket=${encodeURIComponent(ticket)}`);
+    if (httpUrl.startsWith("https://")) return `wss://${httpUrl.slice("https://".length)}`;
+    if (httpUrl.startsWith("http://")) return `ws://${httpUrl.slice("http://".length)}`;
+    const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+    return `${proto}//${window.location.host}${httpUrl}`;
   }
 
   async getWebRtcSession(sessionId: string): Promise<WebRtcSessionV1> {

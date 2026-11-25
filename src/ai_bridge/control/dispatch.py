@@ -87,6 +87,32 @@ def _stop_webrtc_from_task(a: dict) -> dict:
     }
 
 
+def _start_screen_relay_from_task(a: dict) -> dict:
+    """Start an outbound-only NSL1 screen-relay stream (Windows, macOS, Linux)."""
+    ctx = webrtc_stream._AGENT_CONTEXT
+    if not ctx.get("control_url") or not ctx.get("device_token"):
+        raise RuntimeError("Agent context (control URL / device token) is not set; cannot start screen-relay stream.")
+    from .. import screen_relay
+
+    return screen_relay.start_relay_session(
+        str(a["session_id"]),
+        fps=int(a.get("fps", 30)),
+        scale=float(a.get("scale", 0.85)),
+        bitrate_kbps=int(a.get("bitrate_kbps", 3500)),
+        monitor_index=int(a.get("monitor_index") or 0),
+        control_url=str(ctx["control_url"]),
+        device_token=str(ctx["device_token"]),
+    )
+
+
+def _stop_screen_relay_from_task(a: dict) -> dict:
+    from .. import screen_relay
+
+    sid = str(a.get("session_id") or "")
+    res = screen_relay.stop_relay_session(sid) if sid else {"session_id": "", "status": "not_running"}
+    return {"screen_relay": res, "ok": res.get("status") == "stopped"}
+
+
 def _supervisor_enqueue_handoff(a: dict) -> dict:
     return supervisor.dispatch_supervisor_enqueue_handoff(a or {})
 
@@ -576,6 +602,8 @@ def dispatch(tool: str, args: dict, *, policy: Policy | None = None, approval_gr
         "start_webrtc_stream": lambda a: _start_webrtc_from_task(a),
         "get_system_monitors": lambda a: {"monitors": tools.get_system_monitors()},
         "stop_webrtc_stream": lambda a: _stop_webrtc_from_task(a),
+        "start_screen_relay_stream": lambda a: _start_screen_relay_from_task(a),
+        "stop_screen_relay_stream": lambda a: _stop_screen_relay_from_task(a),
         "read_file": lambda a: tools.read_file(a["path"], int(a.get("max_chars", 100000)), is_admin=is_admin, policy=policy),
         "write_file": lambda a: tools.write_file(
             a["path"],

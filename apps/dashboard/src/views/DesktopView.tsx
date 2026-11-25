@@ -26,8 +26,17 @@ import type {
   PolicyState,
 } from "../types";
 import { Button, Chip, StateBanner, StatusBadge, SurfaceCard } from "../components/ui";
+import {
+  NSL1_MSG_VIDEO,
+  decodeNsl1Packet,
+  decodeNsl1VideoPayload,
+  encodeNsl1Ack,
+  encodeNsl1Click,
+  encodeNsl1Text,
+  webCodecsSupported,
+} from "../nsl1";
 
-type TransportMode = "jpeg" | "webrtc";
+type TransportMode = "jpeg" | "webrtc" | "screen_relay";
 
 export function DesktopView({
   api,
@@ -52,6 +61,8 @@ export function DesktopView({
   const [typeText, setTypeText] = useState("");
   const [hotkey, setHotkey] = useState("ctrl+c");
   const [webrtcStatus, setWebrtcStatus] = useState<string>("idle");
+  const [relayStatus, setRelayStatus] = useState<string>("idle");
+  const [relayFrames, setRelayFrames] = useState<number>(0);
   const [audioTrackActive, setAudioTrackActive] = useState(false);
   const [audioMuted, setAudioMuted] = useState(true);
   const [audioBackend, setAudioBackend] = useState<string>("");
@@ -68,8 +79,13 @@ export function DesktopView({
   const [a11yHeaded, setA11yHeaded] = useState(false);
   const lastObjectUrl = useRef<string | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const inputDcRef = useRef<RTCDataChannel | null>(null);
+  const relayWsRef = useRef<WebSocket | null>(null);
+  const decoderRef = useRef<VideoDecoder | null>(null);
+  const relayGotKeyframeRef = useRef<boolean>(false);
+  const relaySeqRef = useRef<number>(1);
   const sessionIdRef = useRef<string | null>(null);
   const seenAgentIce = useRef(0);
   const pollTimerRef = useRef<number | null>(null);
@@ -119,6 +135,10 @@ export function DesktopView({
     deviceCaps?.webrtc_stream_supported ||
       (selectedDevice?.os || "").toLowerCase().includes("win") ||
       deviceId === "local",
+  );
+
+  const screenRelayAvailable = Boolean(
+    webCodecsSupported() && !selectedDevice?.revoked && (deviceCaps?.screen_relay_supported ?? true),
   );
 
   const effectiveDesktopEnabled = useMemo(() => {
@@ -430,16 +450,191 @@ export function DesktopView({
     }
   }, [api, controlArmed, controlBlockedReason, deviceId, stopWebrtc, onToast]);
 
+  const stopScreenRelay = useCallback(async () => {
+    const ws = relayWsRef.current;
+    relayWsRef.current = null;
+    relayGotKeyframeRef.current = false;
+    if (ws) {
+      try {
+        ws.close();
+      } catch {
+        // ignore
+      }
+    }
+    const dec = decoderRef.current;
+    decoderRef.current = null;
+    if (dec) {
+      try {
+        if (dec.state !== "closed") dec.close();
+      } catch {
+        // ignore
+      }
+    }
+    const sid = sessionIdRef.current;
+    sessionIdRef.current = null;
+    if (sid) {
+      try {
+        await api.terminateWebRtcSession(sid);
+      } catch {
+        // already ended
+      }
+    }
+    setRelayStatus("idle");
+    setRelayFrames(0);
+  }, [api]);
+
+  const startScreenRelay = useCallback(async () => {
+    if (!webCodecsSupported()) {
+      throw new Error("Browser WebCodecs VideoDecoder is not supported; use WebRTC or JPEG.");
+    }
+    setRelayStatus("connecting");
+    setRelayFrames(0);
+    setFrameError("");
+    relayGotKeyframeRef.current = false;
+    try {
+      const mode = controlArmed && !controlBlockedReason ? "ai_assisted" : "view_only";
+      const sess = await api.createWebRtcSession({
+        device_id: deviceId,
+        mode,
+        transport: "screen_relay",
+        fps: 30,
+        scale: 0.85,
+        monitor_index: selectedMonitorRef.current,
+        bitrate_kbps: 3500,
+      });
+      const sessionId = sess.session_id;
+      sessionIdRef.current = sessionId;
+
+      const wsUrl = await api.buildSessionWsUrl(deviceId, sessionId);
+      const decoder = new VideoDecoder({
+        output: (frame) => {
+          const canvas = canvasRef.current;
+          if (canvas) {
+            if (canvas.width !== frame.displayWidth || canvas.height !== frame.displayHeight) {
+              canvas.width = frame.displayWidth;
+              canvas.height = frame.displayHeight;
+            }
+            const ctx = canvas.getContext("2d");
+            if (ctx) ctx.drawImage(frame, 0, 0);
+          }
+          frame.close();
+          setRelayFrames((n) => n + 1);
+          setRelayStatus("streaming");
+        },
+        error: (err) => {
+          relayGotKeyframeRef.current = false;
+          setFrameError(`WebCodecs decode error: ${err.message}`);
+          if (relayWsRef.current?.readyState === WebSocket.OPEN) {
+            relayWsRef.current.send(JSON.stringify({ type: "request_keyframe" }));
+          }
+        },
+      });
+      decoder.configure({
+        codec: "avc1.42E01F",
+        optimizeForLatency: true,
+      });
+      decoderRef.current = decoder;
+
+      const ws = new WebSocket(wsUrl);
+      ws.binaryType = "arraybuffer";
+      relayWsRef.current = ws;
+
+      ws.onopen = () => {
+        setRelayStatus("connected");
+        ws.send(JSON.stringify({ type: "request_keyframe" }));
+      };
+
+      ws.onmessage = (ev) => {
+        if (ev.data instanceof ArrayBuffer) {
+          const pkt = decodeNsl1Packet(ev.data);
+          if (!pkt) return;
+          if (pkt.msgType === NSL1_MSG_VIDEO) {
+            const video = decodeNsl1VideoPayload(pkt.payload);
+            if (!video) return;
+            if (!relayGotKeyframeRef.current) {
+              if (!pkt.isKeyframe) return;
+              relayGotKeyframeRef.current = true;
+            }
+            const dec = decoderRef.current;
+            if (dec && dec.state === "configured") {
+              try {
+                dec.decode(
+                  new EncodedVideoChunk({
+                    type: pkt.isKeyframe ? "key" : "delta",
+                    timestamp: video.timestampUs,
+                    data: video.annexb,
+                  }),
+                );
+              } catch {
+                relayGotKeyframeRef.current = false;
+                if (ws.readyState === WebSocket.OPEN) {
+                  ws.send(JSON.stringify({ type: "request_keyframe" }));
+                }
+              }
+            }
+            if (ws.readyState === WebSocket.OPEN) {
+              ws.send(encodeNsl1Ack(pkt.seq, pkt.generation));
+            }
+          }
+          return;
+        }
+        if (typeof ev.data === "string") {
+          try {
+            const msg = JSON.parse(ev.data) as {
+              type?: string;
+              ok?: boolean;
+              monitor_index?: number;
+              reason?: string;
+              detail?: string;
+            };
+            if (msg.type === "monitor_switched") {
+              relayGotKeyframeRef.current = false;
+              onToast(`Screen Relay switched to Display ${msg.monitor_index ?? selectedMonitorRef.current}`);
+            } else if (msg.type === "control_denied" || msg.type === "input_denied") {
+              onToast(`Control denied: ${msg.reason || "view_only"}`);
+            } else if (msg.type === "control_revoked") {
+              setControlArmed(false);
+              onToast("Control taken by another operator — returned to View-Only");
+            } else if (msg.type === "session_terminated") {
+              setStreaming(false);
+              onToast("Screen Relay session terminated");
+            }
+          } catch {
+            // ignore
+          }
+        }
+      };
+
+      ws.onerror = () => {
+        setFrameError("Screen Relay WebSocket error");
+        setRelayStatus("failed");
+      };
+
+      ws.onclose = () => {
+        if (relayWsRef.current === ws) {
+          setRelayStatus("closed");
+        }
+      };
+    } catch (err) {
+      setFrameError(err instanceof Error ? err.message : "Screen Relay start failed");
+      setRelayStatus("failed");
+      await stopScreenRelay();
+      throw err;
+    }
+  }, [api, controlArmed, controlBlockedReason, deviceId, onToast, stopScreenRelay]);
+
   useEffect(() => {
     return () => {
       if (lastObjectUrl.current) URL.revokeObjectURL(lastObjectUrl.current);
       void stopWebrtc();
+      void stopScreenRelay();
     };
-  }, [stopWebrtc]);
+  }, [stopWebrtc, stopScreenRelay]);
 
   useEffect(() => {
     if (!streaming) {
       void stopWebrtc();
+      void stopScreenRelay();
       return;
     }
 
@@ -455,6 +650,19 @@ export function DesktopView({
       };
     }
 
+    if (transport === "screen_relay") {
+      void startScreenRelay().catch((err) => {
+        if (!cancelled) {
+          onToast(err instanceof Error ? err.message : "Screen Relay failed — falling back to JPEG");
+          setTransport("jpeg");
+        }
+      });
+      return () => {
+        cancelled = true;
+        void stopScreenRelay();
+      };
+    }
+
     void startWebrtc().catch((err) => {
       if (!cancelled) {
         onToast(err instanceof Error ? err.message : "WebRTC failed — falling back to JPEG");
@@ -465,17 +673,26 @@ export function DesktopView({
       cancelled = true;
       void stopWebrtc();
     };
-  }, [streaming, transport, pullFrame, startWebrtc, stopWebrtc, onToast]);
+  }, [streaming, transport, pullFrame, startWebrtc, stopWebrtc, startScreenRelay, stopScreenRelay, onToast]);
 
   useEffect(() => {
-    if (!streaming || transport !== "webrtc" || !sessionIdRef.current) return;
+    if (!streaming || (transport !== "webrtc" && transport !== "screen_relay") || !sessionIdRef.current) return;
     const mode = controlArmed && !controlBlockedReason ? "ai_assisted" : "view_only";
     void api.setWebRtcSessionMode(sessionIdRef.current, mode).catch(() => undefined);
+    if (transport === "screen_relay" && mode !== "view_only" && relayWsRef.current?.readyState === WebSocket.OPEN) {
+      relayWsRef.current.send(JSON.stringify({ type: "claim_control" }));
+    }
   }, [api, controlArmed, controlBlockedReason, streaming, transport]);
 
   async function dispatchClick(nx: number, ny: number, button: "left" | "right") {
     if (!controlArmed || controlBlockedReason) return;
     const activeMon = monitors[selectedMonitor];
+    if (transport === "screen_relay" && relayWsRef.current?.readyState === WebSocket.OPEN) {
+      const seq = relaySeqRef.current++;
+      relayWsRef.current.send(encodeNsl1Click(nx, ny, button, seq));
+      onToast(`Click via Screen Relay nsl1 (${Math.round(nx * 100)}%, ${Math.round(ny * 100)}%)`);
+      return;
+    }
     const dc = inputDcRef.current;
     if (transport === "webrtc" && dc && dc.readyState === "open") {
       dc.send(
@@ -504,7 +721,7 @@ export function DesktopView({
     }
   }
 
-  async function handleImageClick(e: React.MouseEvent<HTMLImageElement | HTMLVideoElement>) {
+  async function handleImageClick(e: React.MouseEvent<HTMLImageElement | HTMLVideoElement | HTMLCanvasElement>) {
     if (!controlArmed || controlBlockedReason) return;
     const rect = e.currentTarget.getBoundingClientRect();
     const nx = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
@@ -660,7 +877,9 @@ export function DesktopView({
                   : streaming
                     ? transport === "webrtc"
                       ? `WebRTC · ${webrtcStatus}`
-                      : "Connected · JPEG Live"
+                      : transport === "screen_relay"
+                        ? `Screen Relay · ${relayStatus}${relayFrames > 0 ? ` (${relayFrames}f)` : ""}`
+                        : "Connected · JPEG Live"
                     : "Feed Idle"
             }
           />
@@ -860,6 +1079,17 @@ export function DesktopView({
                       monitor_index: nextIdx,
                     }),
                   );
+                } else if (
+                  streaming &&
+                  transport === "screen_relay" &&
+                  relayWsRef.current?.readyState === WebSocket.OPEN
+                ) {
+                  relayWsRef.current.send(
+                    JSON.stringify({
+                      type: "switch_monitor",
+                      monitor_index: nextIdx,
+                    }),
+                  );
                 }
               }}
             >
@@ -878,15 +1108,18 @@ export function DesktopView({
           <select
             aria-label="Stream transport"
             className="field mono"
-            style={{ width: 160 }}
+            style={{ width: 205 }}
             value={transport}
             disabled={streaming}
             onChange={(e) => setTransport(e.target.value as TransportMode)}
-            title={webrtcAvailable ? "JPEG poll (~1.2s) or WebRTC H.264" : "WebRTC requires a Windows desktop agent"}
+            title="JPEG fallback, Screen Relay WebCodecs H.264 (Win/Mac/Linux, zero TURN), or WebRTC H.264 P2P (Windows)"
           >
             <option value="jpeg">JPEG · ~1.2s</option>
+            <option value="screen_relay" disabled={!screenRelayAvailable}>
+              Screen Relay · WebCodecs
+            </option>
             <option value="webrtc" disabled={!webrtcAvailable}>
-              WebRTC · H.264
+              WebRTC · H.264 P2P
             </option>
           </select>
 
@@ -953,7 +1186,49 @@ export function DesktopView({
             position: "relative",
           }}
         >
-          {transport === "webrtc" && streaming ? (
+          {transport === "screen_relay" && streaming ? (
+            <div style={{ position: "relative", display: "inline-block", maxWidth: "100%" }}>
+              <canvas
+                ref={canvasRef}
+                aria-label={`Live Screen Relay WebCodecs desktop for ${selectedDevice?.name || deviceId}`}
+                onClick={(e) => void handleImageClick(e)}
+                onContextMenu={(e) => {
+                  if (controlArmed && !controlBlockedReason) {
+                    e.preventDefault();
+                    void handleImageClick(e);
+                  }
+                }}
+                style={{
+                  width: "100%",
+                  maxHeight: "68vh",
+                  objectFit: "contain",
+                  cursor: controlArmed ? "crosshair" : "default",
+                  display: "block",
+                  background: "#000",
+                }}
+              />
+              {highlightBoxStyle && activeHighlightNode && (
+                <div style={highlightBoxStyle}>
+                  <span
+                    className="mono"
+                    style={{
+                      position: "absolute",
+                      top: -20,
+                      left: 0,
+                      background: "#0891b2",
+                      color: "#fff",
+                      fontSize: 10.5,
+                      padding: "1px 6px",
+                      borderRadius: 4,
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {activeHighlightNode.ref} · {activeHighlightNode.role}
+                  </span>
+                </div>
+              )}
+            </div>
+          ) : transport === "webrtc" && streaming ? (
             <div style={{ position: "relative", display: "inline-block", maxWidth: "100%" }}>
               <video
                 ref={videoRef}
@@ -1340,9 +1615,11 @@ export function DesktopView({
               disabled={!typeText}
               onClick={async () => {
                 try {
-                  const dc = inputDcRef.current;
-                  if (transport === "webrtc" && dc && dc.readyState === "open") {
-                    dc.send(JSON.stringify({ type: "type", action: "type", text: typeText }));
+                  if (transport === "screen_relay" && relayWsRef.current?.readyState === WebSocket.OPEN) {
+                    const seq = relaySeqRef.current++;
+                    relayWsRef.current.send(encodeNsl1Text(typeText, seq));
+                  } else if (transport === "webrtc" && inputDcRef.current && inputDcRef.current.readyState === "open") {
+                    inputDcRef.current.send(JSON.stringify({ type: "type", action: "type", text: typeText }));
                   } else {
                     await api.sendDesktopInput(deviceId, { action: "type", text: typeText });
                   }

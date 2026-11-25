@@ -15,6 +15,11 @@ on:
         type: boolean
         required: false
         default: false
+      bundle_screen_relay:
+        description: "Build & bundle optional cross-platform vercel-labs/screen-relay relay-engine binaries"
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: read
@@ -169,9 +174,59 @@ jobs:
           path: out/
           retention-days: 90
 
+  bundle-screen-relay:
+    name: Bundle optional screen-relay engine (${{ matrix.os }})
+    if: inputs.bundle_screen_relay == true || vars.AI_BRIDGE_BUNDLE_SCREEN_RELAY == '1'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: linux-x64
+            bin_name: relay-engine
+          - os: macos-latest
+            target: macos-arm64
+            bin_name: relay-engine
+          - os: windows-latest
+            target: windows-x64
+            bin_name: relay-engine.exe
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout vercel-labs/screen-relay
+        uses: actions/checkout@v4
+        with:
+          repository: vercel-labs/screen-relay
+          path: screen-relay-src
+      - name: Install Linux screen-relay C++ build dependencies
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq cmake ninja-build pkg-config libx264-dev libwebsockets-dev libx11-dev libxdamage-dev libxfixes-dev libxtst-dev libxext-dev libwayland-dev
+      - name: Build relay-engine binary
+        working-directory: screen-relay-src
+        shell: bash
+        run: |
+          cmake -S src/engine -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --config Release
+      - name: Package & checksum relay-engine binary
+        shell: bash
+        run: |
+          mkdir -p out
+          BIN_PATH=$(find screen-relay-src/build -type f \( -name "relay-engine" -o -name "relay-engine.exe" \) | head -n 1)
+          if [ -n "$BIN_PATH" ]; then
+            EXT=$([[ "${{ matrix.os }}" == "windows-latest" ]] && echo ".exe" || echo "")
+            cp "$BIN_PATH" "out/relay-engine-${{ matrix.target }}${EXT}"
+            (cd out && sha256sum * > "relay-engine-${{ matrix.target }}.sha256")
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: screen-relay-${{ matrix.target }}-${{ github.ref_name }}
+          path: out/
+          retention-days: 90
+
   publish-github-release:
     name: Publish GitHub Release
-    needs: [build-sign-and-bundle, build-windows-installer, bundle-agent-desktop]
+    needs: [build-sign-and-bundle, build-windows-installer, bundle-agent-desktop, bundle-screen-relay]
     if: always() && startsWith(github.ref, 'refs/tags/v') && needs.build-sign-and-bundle.result == 'success' && needs.build-windows-installer.result == 'success'
     runs-on: ubuntu-latest
     permissions:
@@ -190,6 +245,7 @@ jobs:
             -o -name "sbom.cdx.json" -o -name "SHA256SUMS.txt" -o -name "release-evidence.json" \
             -o -name "AIBridgeSetup.exe" -o -name "AIBridgeSetup.exe.sha256" \
             -o -name "agent-desktop-*" -o -name "*agent_desktop_ffi*" \
+            -o -name "relay-engine-*" \
           \) -exec cp {} upload/ \;
           gh release create "${GITHUB_REF_NAME}" upload/* \
             --title "AI Bridge ${GITHUB_REF_NAME}" \

@@ -3,7 +3,7 @@
 > Generated from `src/ai_bridge/` and `agents/` by `scripts/generate_env_reference.py`.
 > Run `python scripts/generate_env_reference.py` after adding or removing configuration variables.
 
-Total documented variables: **146**
+Total documented variables: **147**
 
 ## Control plane & runtime
 
@@ -51,6 +51,7 @@ Total documented variables: **146**
 | `AI_BRIDGE_NATIVE_WEBRTC` | `'auto'` | `src/ai_bridge/native_webrtc.py` |
 | `AI_BRIDGE_POLICY_SIGNING_KEY` | — | `src/ai_bridge/control/policy_bundle.py` |
 | `AI_BRIDGE_PROFILE` | `''` | `src/ai_bridge/control/production_readiness.py`, `src/ai_bridge/server.py` |
+| `AI_BRIDGE_SCREEN_RELAY_BIN` | `''` | `src/ai_bridge/screen_relay.py` |
 | `AI_BRIDGE_SLOW_QUERY_MS` | `'250'` | `src/ai_bridge/control/db.py` |
 | `AI_BRIDGE_SOM_SYNTHETIC_FALLBACK` | `'0'` | `src/ai_bridge/tools/desktop_api.py` |
 | `AI_BRIDGE_STALE_TASK_REQUEUE` | `'0'` | `src/ai_bridge/control/orchestration.py` |

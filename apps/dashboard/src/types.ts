@@ -535,6 +535,7 @@ export interface DeviceDesktopCapabilities {
   read_only_status_supported: boolean;
   screenshot_supported: boolean;
   webrtc_stream_supported: boolean;
+  screen_relay_supported?: boolean;
   interactive_input_supported: boolean;
   policy_desktop_enabled: boolean;
   advertised_mode: "interactive" | "view_only" | "unavailable";
@@ -552,6 +553,8 @@ export interface WebRtcSessionV1 {
   session_id: string;
   device_id: string;
   mode: "view_only" | "human_control" | "ai_assisted" | string;
+  transport?: "webrtc" | "screen_relay" | string;
+  protocol?: string;
   status: string;
   offer?: { sdp?: string; type?: string } | null;
   answer?: { sdp?: string; type?: string } | null;
