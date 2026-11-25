@@ -1011,12 +1011,28 @@ def a11y_snapshot(
         is_pw = _is_sensitive_node({"name": el_name, "role": el_role, **el})
         val = "[REDACTED]" if is_pw else str(el.get("value") or "")
         ref_id = f"@{snapshot_id}:e{idx}"
-        bounds = {
-            "x": int(el.get("x", 0)),
-            "y": int(el.get("y", 0)),
-            "width": int(el.get("width", 0)),
-            "height": int(el.get("height", 0)),
-        }
+        raw_bounds = el.get("bounds")
+        if isinstance(raw_bounds, (list, tuple)) and len(raw_bounds) >= 4:
+            bounds = {
+                "x": int(raw_bounds[0]),
+                "y": int(raw_bounds[1]),
+                "width": int(raw_bounds[2]),
+                "height": int(raw_bounds[3]),
+            }
+        elif isinstance(raw_bounds, dict):
+            bounds = {
+                "x": int(raw_bounds.get("x", 0)),
+                "y": int(raw_bounds.get("y", 0)),
+                "width": int(raw_bounds.get("width", 0)),
+                "height": int(raw_bounds.get("height", 0)),
+            }
+        else:
+            bounds = {
+                "x": int(el.get("x", 0)),
+                "y": int(el.get("y", 0)),
+                "width": int(el.get("width", 0)),
+                "height": int(el.get("height", 0)),
+            }
         entry = _RefEntry(
             ref=ref_id,
             snapshot_id=snapshot_id,

@@ -693,6 +693,8 @@ class LocalNsl1Streamer:
                     _RELAY_SESSIONS.pop(self.session_id, None)
 
     def _encode_frame_loop_iter(self, codec_ctx_holder: dict[str, Any]) -> bytes | None:
+        import fractions
+
         import av
 
         from .webrtc_stream import grab_screen
@@ -711,6 +713,7 @@ class LocalNsl1Streamer:
             ctx.width = w
             ctx.height = h
             ctx.pix_fmt = "yuv420p"
+            ctx.time_base = fractions.Fraction(1, self.fps)
             ctx.bit_rate = self.bitrate_kbps * 1000
             ctx.options = {
                 "preset": "ultrafast",
@@ -726,7 +729,7 @@ class LocalNsl1Streamer:
 
         vframe = av.VideoFrame.from_image(img).reformat(width=w, height=h, format="yuv420p")
         if self._force_keyframe.is_set():
-            vframe.pict_type = "I"
+            vframe.pict_type = getattr(getattr(av.video.frame, "PictureType", None), "I", 1)
             self._force_keyframe.clear()
         vframe.pts = self._seq
         packets = ctx.encode(vframe)

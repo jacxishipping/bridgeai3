@@ -464,7 +464,13 @@ def _collect_uia_elements(
         50033: "splitbutton",
     }
     elements: list[dict[str, Any]] = []
+    com_inited = False
     try:
+        try:
+            comtypes.CoInitialize()
+            com_inited = True
+        except Exception:
+            pass
         # Generate / load UIAutomation typelib once.
         uia_mod = comtypes.client.GetModule("UIAutomationCore.dll")
         CUIAutomation = getattr(uia_mod, "CUIAutomation", None) or getattr(uia_mod, "CUIAutomation8", None)
@@ -528,6 +534,12 @@ def _collect_uia_elements(
         return elements, "uia_ok" if elements else "uia_empty"
     except Exception as exc:  # noqa: BLE001
         return [], f"uia_error:{type(exc).__name__}"
+    finally:
+        if com_inited:
+            try:
+                comtypes.CoUninitialize()
+            except Exception:
+                pass
 
 
 def desktop_get_ui_elements(
