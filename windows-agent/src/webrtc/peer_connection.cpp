@@ -3,6 +3,7 @@
 #include "../input/sendinput_controller.hpp"
 #include "../security/local_security.hpp"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdio>
@@ -13,6 +14,7 @@
 #include <memory>
 #include <mutex>
 #include <random>
+#include <sstream>
 #include <string>
 #include <thread>
 
@@ -126,28 +128,42 @@ public:
             }
         }
 
-        // F08-10: monitor geometry for input, enumerated ONCE per
-        // session (not per input event). The Python path passes explicit
-        // monitor offsets; the old C++ path passed none, so
-        // normalized coordinates were resolved against the virtual
-        // desktop origin and multi-monitor clicks landed on the wrong
-        // monitor. Geometry comes from the session's monitor index.
-        int mon_left = 0, mon_top = 0, mon_width = 1920, mon_height = 1080;
-        {
+        // F08-10 + Live Monitor Switch: track active monitor geometry under a mutex
+        // so live switch_monitor requests update input mapping atomically without
+        // tearing down the PeerConnection.
+        struct LiveMonitorGeometry {
+            std::mutex mtx;
+            int index = 0;
+            int left = 0;
+            int top = 0;
+            int width = 1920;
+            int height = 1080;
+        };
+        auto mon_geom = std::make_shared<LiveMonitorGeometry>();
+        auto refresh_monitor_geometry = [&](int target_idx) -> bool {
             aibridge::capture::DxgiDesktopCapturer mon_probe;
             auto monitors = mon_probe.EnumerateMonitors();
             const aibridge::capture::MonitorDescriptor* mon = nullptr;
             for (const auto& m : monitors) {
-                if (m.index == cfg_.monitor_index) { mon = &m; break; }
+                if (m.index == target_idx) { mon = &m; break; }
             }
             if (!mon && !monitors.empty()) mon = &monitors[0];
-            if (mon) {
-                mon_left = mon->left;
-                mon_top = mon->top;
-                mon_width = mon->width;
-                mon_height = mon->height;
-            }
-        }
+            if (!mon) return false;
+            std::lock_guard<std::mutex> lk(mon_geom->mtx);
+            mon_geom->index = mon->index;
+            mon_geom->left = mon->left;
+            mon_geom->top = mon->top;
+            mon_geom->width = mon->width;
+            mon_geom->height = mon->height;
+            return true;
+        };
+        refresh_monitor_geometry(cfg_.monitor_index);
+
+        std::atomic<int> pending_monitor_switch{-1};
+        std::atomic<int> pending_bitrate_kbps{-1};
+        std::atomic<bool> pending_keyframe{false};
+        std::atomic<bool> was_connected{false};
+        std::atomic<bool> reconnect_requested{false};
 
         aibridge::input::WindowsInputController input_ctrl;
         // Deny-by-default; grant from PeerConnectionConfig + plane poll + session_permissions.json.
@@ -162,14 +178,21 @@ public:
         apply_input_permissions(cfg_.allow_mouse, cfg_.allow_keyboard, cfg_.allow_clipboard);
 
         auto pc = std::make_shared<rtc::PeerConnection>(rtc_cfg);
-        pc->onStateChange([this, &input_ctrl](rtc::PeerConnection::State state) {
+        pc->onStateChange([this, &input_ctrl, &was_connected, &reconnect_requested](rtc::PeerConnection::State state) {
             {
                 std::lock_guard<std::mutex> lock(state_mutex_);
                 ice_state_ = std::to_string(static_cast<int>(state));
             }
-            if (state == rtc::PeerConnection::State::Disconnected ||
-                state == rtc::PeerConnection::State::Failed ||
-                state == rtc::PeerConnection::State::Closed) {
+            if (state == rtc::PeerConnection::State::Connected) {
+                was_connected.store(true);
+                reconnect_requested.store(false);
+            } else if (state == rtc::PeerConnection::State::Disconnected ||
+                       state == rtc::PeerConnection::State::Failed) {
+                input_ctrl.ReleaseAllHeldKeys();
+                if (was_connected.load()) {
+                    reconnect_requested.store(true);
+                }
+            } else if (state == rtc::PeerConnection::State::Closed) {
                 input_ctrl.ReleaseAllHeldKeys();
             }
         });
@@ -216,7 +239,7 @@ public:
         input_dc->onClosed([&input_ctrl]() {
             input_ctrl.ReleaseAllHeldKeys();
         });
-        input_dc->onMessage([input_dc, &input_ctrl, mon_left, mon_top, mon_width, mon_height](rtc::message_variant msg) {
+        input_dc->onMessage([input_dc, &input_ctrl, mon_geom, &pending_monitor_switch, &pending_bitrate_kbps, &pending_keyframe](rtc::message_variant msg) {
             std::string text;
             if (std::holds_alternative<std::string>(msg)) {
                 text = std::get<std::string>(msg);
@@ -232,6 +255,32 @@ public:
                 } catch (...) {
                 }
                 return;
+            }
+            if (mtype == "switch_monitor" || mtype == "set_monitor") {
+                int target_mon = static_cast<int>(ExtractJsonNum(text, "monitor_index", 0.0));
+                if (target_mon >= 0) {
+                    pending_monitor_switch.store(target_mon);
+                }
+                return;
+            }
+            if (mtype == "set_bitrate") {
+                int target_kbps = static_cast<int>(ExtractJsonNum(text, "bitrate_kbps", 0.0));
+                if (target_kbps >= 300) {
+                    pending_bitrate_kbps.store(target_kbps);
+                }
+                return;
+            }
+            if (mtype == "request_keyframe") {
+                pending_keyframe.store(true);
+                return;
+            }
+            int mon_left = 0, mon_top = 0, mon_width = 1920, mon_height = 1080;
+            {
+                std::lock_guard<std::mutex> lk(mon_geom->mtx);
+                mon_left = mon_geom->left;
+                mon_top = mon_geom->top;
+                mon_width = mon_geom->width;
+                mon_height = mon_geom->height;
             }
             if (mtype == "mouse_move") {
                 double x = ExtractJsonNum(text, "x", 0.5);
@@ -401,8 +450,120 @@ public:
         // below still runs at cfg_.fps in between. The signalling
         // client also reuses one persistent WinHTTP connection.
         auto last_poll = std::chrono::steady_clock::now() - std::chrono::seconds(1);
+        auto last_abr_check = std::chrono::steady_clock::now();
+        auto last_reconnect_at = std::chrono::steady_clock::now() - std::chrono::seconds(10);
+        int reconnect_attempts = 0;
+        constexpr int kMaxReconnectAttempts = 3;
+        int current_bitrate_kbps = cfg_.bitrate_kbps > 0 ? cfg_.bitrate_kbps : 4500;
+        int max_bitrate_kbps = current_bitrate_kbps;
+        int clean_abr_windows = 0;
+        uint64_t prev_dropped = 0;
+        uint64_t prev_encoded = 0;
+        uint64_t window_send_errors = 0;
+
         while (stop_flag == nullptr || !stop_flag->load()) {
             auto now = std::chrono::steady_clock::now();
+
+            // 1. Live monitor switch without PeerConnection teardown
+            int req_mon = pending_monitor_switch.exchange(-1);
+            if (req_mon >= 0) {
+                bool sw_ok = pipeline.SwitchMonitor(req_mon);
+                refresh_monitor_geometry(req_mon);
+                int mw = 1920, mh = 1080;
+                {
+                    std::lock_guard<std::mutex> lk(mon_geom->mtx);
+                    mw = mon_geom->width;
+                    mh = mon_geom->height;
+                }
+                std::cout << "{\"event\":\"monitor_switched\",\"monitor_index\":" << req_mon
+                          << ",\"width\":" << mw << ",\"height\":" << mh << "}" << std::endl;
+                if (input_dc && input_dc->isOpen()) {
+                    try {
+                        input_dc->send(
+                            "{\"type\":\"monitor_switched\",\"ok\":" + std::string(sw_ok ? "true" : "false") +
+                            ",\"monitor_index\":" + std::to_string(req_mon) +
+                            ",\"width\":" + std::to_string(mw) +
+                            ",\"height\":" + std::to_string(mh) + "}"
+                        );
+                    } catch (...) {
+                    }
+                }
+            }
+
+            // 2. Manual bitrate override / keyframe requests over DataChannel
+            int req_kbps = pending_bitrate_kbps.exchange(-1);
+            if (req_kbps >= 300) {
+                if (pipeline.UpdateBitrateKbps(req_kbps)) {
+                    current_bitrate_kbps = req_kbps;
+                    max_bitrate_kbps = req_kbps;
+                    clean_abr_windows = 0;
+                    std::cout << "{\"event\":\"bitrate_updated\",\"bitrate_kbps\":" << req_kbps << "}" << std::endl;
+                }
+            }
+            if (pending_keyframe.exchange(false)) {
+                pipeline.ForceKeyframe();
+            }
+
+            // 3. Cross-NAT TURN/ICE reconnection with fresh plane ICE credentials
+            if (reconnect_requested.load() &&
+                reconnect_attempts < kMaxReconnectAttempts &&
+                (now - last_reconnect_at) >= std::chrono::seconds(2)) {
+                reconnect_requested.store(false);
+                last_reconnect_at = now;
+                ++reconnect_attempts;
+                std::vector<IceServerConfig> fresh_ice;
+                signaling.FetchIceServers(&fresh_ice, nullptr);
+                try {
+                    pc->setLocalDescription();
+                    auto sdp_opt = pc->localDescription();
+                    if (sdp_opt.has_value()) {
+                        std::string restart_sdp = std::string(*sdp_opt);
+                        if (!restart_sdp.empty() && signaling.PostOffer(restart_sdp, "offer", nullptr)) {
+                            answer_applied = false;
+                            seen_viewer_candidates = 0;
+                            pipeline.ForceKeyframe();
+                            std::cout << "{\"event\":\"ice_reconnect_offer_posted\",\"attempt\":"
+                                      << reconnect_attempts << ",\"ice_servers\":" << fresh_ice.size()
+                                      << "}" << std::endl;
+                        }
+                    }
+                } catch (...) {
+                }
+            }
+
+            // 4. Dynamic bitrate adaptation (ABR) every 2s under send errors / drops
+            if (now - last_abr_check >= std::chrono::seconds(2)) {
+                last_abr_check = now;
+                auto st = pipeline.GetStats();
+                uint64_t d_drop = st.dropped_frames >= prev_dropped ? (st.dropped_frames - prev_dropped) : 0;
+                uint64_t d_enc = st.frames_encoded >= prev_encoded ? (st.frames_encoded - prev_encoded) : 0;
+                prev_dropped = st.dropped_frames;
+                prev_encoded = st.frames_encoded;
+                uint64_t total = d_drop + d_enc;
+                double drop_ratio = total > 0 ? (static_cast<double>(d_drop) / static_cast<double>(total)) : 0.0;
+                if (window_send_errors > 0 || drop_ratio > 0.15) {
+                    clean_abr_windows = 0;
+                    int next_kbps = std::max(500, static_cast<int>(current_bitrate_kbps * 0.75));
+                    if (next_kbps < current_bitrate_kbps && pipeline.UpdateBitrateKbps(next_kbps)) {
+                        current_bitrate_kbps = next_kbps;
+                        std::cout << "{\"event\":\"bitrate_adapted\",\"direction\":\"down\",\"bitrate_kbps\":"
+                                  << current_bitrate_kbps << ",\"send_errors\":" << window_send_errors << "}" << std::endl;
+                    }
+                } else if (d_enc > 10 && current_bitrate_kbps < max_bitrate_kbps) {
+                    ++clean_abr_windows;
+                    if (clean_abr_windows >= 3) {
+                        clean_abr_windows = 0;
+                        int next_kbps = std::min(max_bitrate_kbps, static_cast<int>(current_bitrate_kbps * 1.15) + 100);
+                        if (next_kbps > current_bitrate_kbps && pipeline.UpdateBitrateKbps(next_kbps)) {
+                            current_bitrate_kbps = next_kbps;
+                            std::cout << "{\"event\":\"bitrate_adapted\",\"direction\":\"up\",\"bitrate_kbps\":"
+                                      << current_bitrate_kbps << "}" << std::endl;
+                        }
+                    }
+                }
+                window_send_errors = 0;
+            }
+
             auto poll_interval = answer_applied ? std::chrono::seconds(2)
                                                  : std::chrono::milliseconds(500);
             if (now - last_poll >= poll_interval) {
@@ -505,6 +666,7 @@ public:
                         track->send(std::move(payload));
                     }
                 } catch (...) {
+                    ++window_send_errors;
                 }
             }
             int sleep_ms = 1000 / (cfg_.fps > 0 ? cfg_.fps : 30);

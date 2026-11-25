@@ -18,6 +18,7 @@ Backends (controlled by ``AI_BRIDGE_A11Y_BACKEND`` = ``auto|ffi|cli|native|off``
 """
 from __future__ import annotations
 
+import atexit
 import ctypes
 import json
 import os
@@ -317,14 +318,59 @@ def find_agent_desktop_lib() -> str | None:
     return None
 
 
+class AdAction(ctypes.Structure):
+    """C-ABI action payload matching ``AdAction`` in ``agent_desktop.h``."""
+
+    _fields_ = [
+        ("kind", ctypes.c_uint32),
+        ("flags", ctypes.c_uint32),
+        ("text", ctypes.c_char_p),
+        ("option", ctypes.c_char_p),
+        ("x", ctypes.c_double),
+        ("y", ctypes.c_double),
+    ]
+
+
+# Action kind ordinals matching ``AdActionKind`` in agent_desktop.h
+_AD_ACTION_KIND: dict[str, int] = {
+    "click": 0,
+    "double_click": 1,
+    "right_click": 2,
+    "hover": 3,
+    "type": 4,
+    "fill": 5,
+    "set_value": 6,
+    "clear": 7,
+    "check": 8,
+    "uncheck": 9,
+    "toggle": 10,
+    "select": 11,
+    "expand": 12,
+    "collapse": 13,
+    "scroll_to": 14,
+    "focus": 15,
+    "show_menu": 16,
+}
+
+_AD_FLAG_HEADED = 1 << 0
+
+
 class _FfiBridge:
-    """Thin, safe ctypes wrapper for ``libagent_desktop_ffi`` (``agent_desktop.h``)."""
+    """Thread-safe ctypes wrapper for ``libagent_desktop_ffi`` (``agent_desktop.h``).
+
+    Maintains persistent per-session ``AdAdapter*`` handles so ``ad_snapshot``
+    and ``ad_execute_by_ref`` share the live in-process ``RefStore``.
+    """
 
     ABI_MAJOR = 1
 
     def __init__(self, lib_path: str) -> None:
         self.lib_path = lib_path
         self._lib = ctypes.CDLL(lib_path)
+        self._lock = threading.RLock()
+        self._initialized = False
+        self._adapters: dict[str, ctypes.c_void_p] = {}
+        self.has_execute_by_ref = False
         self._configure()
 
     def _configure(self) -> None:
@@ -346,6 +392,33 @@ class _FfiBridge:
             ctypes.POINTER(ctypes.c_void_p),
         ]
         self._lib.ad_snapshot.restype = ctypes.c_int32
+        if hasattr(self._lib, "ad_execute_by_ref"):
+            self._lib.ad_execute_by_ref.argtypes = [
+                ctypes.c_void_p,
+                ctypes.c_char_p,
+                ctypes.POINTER(AdAction),
+                ctypes.c_uint32,
+                ctypes.POINTER(ctypes.c_void_p),
+            ]
+            self._lib.ad_execute_by_ref.restype = ctypes.c_int32
+            self.has_execute_by_ref = True
+
+    def _get_or_create_adapter(self, session_id: str) -> ctypes.c_void_p:
+        key = (session_id or "default").strip() or "default"
+        with self._lock:
+            if not self._initialized:
+                rc_init = int(self._lib.ad_init(self.ABI_MAJOR))
+                if rc_init != 0:
+                    raise RuntimeError(f"agent-desktop FFI ad_init failed (rc={rc_init})")
+                self._initialized = True
+            existing = self._adapters.get(key)
+            if existing:
+                return existing
+            adapter = self._lib.ad_adapter_create_with_session(key.encode("utf-8"))
+            if not adapter:
+                raise RuntimeError("agent-desktop FFI failed to create session adapter")
+            self._adapters[key] = adapter
+            return adapter
 
     def snapshot(
         self,
@@ -356,34 +429,126 @@ class _FfiBridge:
         skeleton: bool = False,
         compact: bool = True,
     ) -> dict[str, Any]:
-        rc_init = int(self._lib.ad_init(self.ABI_MAJOR))
-        if rc_init != 0:
-            raise RuntimeError(f"agent-desktop FFI ad_init failed (rc={rc_init})")
-        adapter = self._lib.ad_adapter_create_with_session(session_id.encode("utf-8"))
-        if not adapter:
-            raise RuntimeError("agent-desktop FFI failed to create session adapter")
-        out_ptr = ctypes.c_void_p()
-        try:
-            app_arg = app.encode("utf-8") if app else None
-            rc = int(
-                self._lib.ad_snapshot(
-                    adapter,
-                    app_arg,
-                    0,
-                    max(1, int(max_depth)),
-                    bool(skeleton),
-                    bool(compact),
-                    ctypes.byref(out_ptr),
+        with self._lock:
+            adapter = self._get_or_create_adapter(session_id)
+            out_ptr = ctypes.c_void_p()
+            try:
+                app_arg = app.encode("utf-8") if app else None
+                rc = int(
+                    self._lib.ad_snapshot(
+                        adapter,
+                        app_arg,
+                        0,
+                        max(1, int(max_depth)),
+                        bool(skeleton),
+                        bool(compact),
+                        ctypes.byref(out_ptr),
+                    )
                 )
-            )
-            raw_json = ctypes.string_at(out_ptr.value).decode("utf-8", errors="replace") if out_ptr.value else "{}"
-            if rc != 0:
-                raise RuntimeError(f"agent-desktop FFI snapshot failed (rc={rc}): {raw_json[:240]}")
-            return json.loads(raw_json)
-        finally:
-            if out_ptr.value:
-                self._lib.ad_free_string(out_ptr.value)
-            self._lib.ad_adapter_destroy(adapter)
+                raw_json = (
+                    ctypes.string_at(out_ptr.value).decode("utf-8", errors="replace")
+                    if out_ptr.value
+                    else "{}"
+                )
+                if rc != 0:
+                    raise RuntimeError(f"agent-desktop FFI snapshot failed (rc={rc}): {raw_json[:240]}")
+                return json.loads(raw_json)
+            finally:
+                if out_ptr.value:
+                    self._lib.ad_free_string(out_ptr.value)
+
+    def execute_by_ref(
+        self,
+        *,
+        session_id: str,
+        ref: str,
+        action: str,
+        text: str = "",
+        option: str = "",
+        headed: bool = False,
+    ) -> dict[str, Any]:
+        if not self.has_execute_by_ref:
+            raise RuntimeError("Loaded libagent_desktop_ffi does not export ad_execute_by_ref")
+        kind = _AD_ACTION_KIND.get(action)
+        if kind is None:
+            raise ValueError(f"Action {action!r} is not mapped to AdActionKind")
+        with self._lock:
+            adapter = self._get_or_create_adapter(session_id)
+            act = AdAction()
+            act.kind = kind
+            act.flags = _AD_FLAG_HEADED if headed else 0
+            text_bytes = text.encode("utf-8") if text else None
+            opt_bytes = option.encode("utf-8") if option else None
+            act.text = text_bytes
+            act.option = opt_bytes
+            out_ptr = ctypes.c_void_p()
+            try:
+                rc = int(
+                    self._lib.ad_execute_by_ref(
+                        adapter,
+                        ref.encode("utf-8"),
+                        ctypes.byref(act),
+                        act.flags,
+                        ctypes.byref(out_ptr),
+                    )
+                )
+                raw_json = (
+                    ctypes.string_at(out_ptr.value).decode("utf-8", errors="replace")
+                    if out_ptr.value
+                    else "{}"
+                )
+                parsed = json.loads(raw_json) if raw_json else {}
+                if rc != 0 and isinstance(parsed, dict) and parsed.get("ok", True):
+                    return _structured_error("FFI_ACTION_FAILED", f"ad_execute_by_ref returned rc={rc}")
+                return parsed if isinstance(parsed, dict) else {"ok": rc == 0}
+            finally:
+                if out_ptr.value:
+                    self._lib.ad_free_string(out_ptr.value)
+
+    def close_session(self, session_id: str | None = None) -> None:
+        with self._lock:
+            if session_id is None:
+                for adapter in list(self._adapters.values()):
+                    try:
+                        self._lib.ad_adapter_destroy(adapter)
+                    except Exception:
+                        pass
+                self._adapters.clear()
+            else:
+                key = (session_id or "default").strip() or "default"
+                adapter = self._adapters.pop(key, None)
+                if adapter:
+                    try:
+                        self._lib.ad_adapter_destroy(adapter)
+                    except Exception:
+                        pass
+
+
+_FFI_LOCK = threading.RLock()
+_FFI_INSTANCE: _FfiBridge | None = None
+
+
+def _get_ffi_bridge(lib_path: str) -> _FfiBridge:
+    global _FFI_INSTANCE
+    with _FFI_LOCK:
+        if _FFI_INSTANCE is None or _FFI_INSTANCE.lib_path != lib_path:
+            if _FFI_INSTANCE is not None:
+                _FFI_INSTANCE.close_session()
+            _FFI_INSTANCE = _FfiBridge(lib_path)
+        return _FFI_INSTANCE
+
+
+def close_ffi_session(session_id: str | None = None) -> None:
+    """Release persistent FFI adapter handle(s) for a session or all sessions."""
+    global _FFI_INSTANCE
+    with _FFI_LOCK:
+        if _FFI_INSTANCE is not None:
+            _FFI_INSTANCE.close_session(session_id)
+            if session_id is None:
+                _FFI_INSTANCE = None
+
+
+atexit.register(close_ffi_session)
 
 
 def _select_backend() -> str:
@@ -702,12 +867,12 @@ def a11y_snapshot(
     max_elements = max(1, min(300, int(max_elements)))
     snapshot_id = f"s{uuid.uuid4().hex[:8]}"
 
-    # 1. Try in-process agent-desktop C FFI
+    # 1. Try in-process agent-desktop C FFI (persistent session adapter)
     if backend == "agent_desktop_ffi":
         lib_path = find_agent_desktop_lib()
         if lib_path:
             try:
-                raw = _FfiBridge(lib_path).snapshot(
+                raw = _get_ffi_bridge(lib_path).snapshot(
                     session_id=session_id or snapshot_id,
                     app=app,
                     max_depth=max_depth,
@@ -716,6 +881,10 @@ def a11y_snapshot(
                 )
                 sanitized = sanitize_a11y_tree(raw)
                 entries = _extract_entries_from_external(sanitized, snapshot_id, app, window_title)
+                if entries and ":" in entries[0].ref:
+                    snapshot_id = entries[0].ref.split(":", 1)[0].lstrip("@") or snapshot_id
+                    for e in entries:
+                        e.snapshot_id = snapshot_id
                 entries = [e for e in entries if _app_allowed_by_policy(e.app or app, policy)]
                 _STORE.store(snapshot_id, "agent_desktop_ffi", entries, session_id=session_id)
                 return {
@@ -1120,6 +1289,44 @@ def a11y_act(
         return {"ok": True, "backend": active_be, "ref": ref_id, "action": act, "headless": True, "noop": True, "state": "expanded"}
     if act == "collapse" and entry.expanded is False:
         return {"ok": True, "backend": active_be, "ref": ref_id, "action": act, "headless": True, "noop": True, "state": "collapsed"}
+
+    # Layer 0: in-process agent-desktop C FFI (ad_execute_by_ref)
+    if active_be == "agent_desktop_ffi":
+        lib_path = find_agent_desktop_lib()
+        if lib_path:
+            try:
+                ffi = _get_ffi_bridge(lib_path)
+                if ffi.has_execute_by_ref:
+                    ffi_res = ffi.execute_by_ref(
+                        session_id=session_id,
+                        ref=ref_id,
+                        action=act,
+                        text=text,
+                        option=option,
+                        headed=headed,
+                    )
+                    if ffi_res.get("ok"):
+                        out_ffi: dict[str, Any] = {
+                            "ok": True,
+                            "backend": "agent_desktop_ffi",
+                            "fallback_used": False,
+                            "headless": not headed,
+                            "ref": ref_id,
+                            "action": act,
+                            "result": sanitize_a11y_tree(ffi_res.get("data", ffi_res)),
+                        }
+                        if wait_for:
+                            out_ffi["wait_for"] = a11y_wait(condition="exists", query=wait_for, timeout_seconds=wait_timeout_seconds, policy=policy)
+                        elif wait_for_gone:
+                            out_ffi["wait_for_gone"] = a11y_wait(condition="gone", query=wait_for_gone, timeout_seconds=wait_timeout_seconds, policy=policy)
+                        return out_ffi
+                    if not fallback_to_visual:
+                        err_out = _parse_cli_error(ffi_res, default_code="FFI_ACTION_FAILED")
+                        err_out.update({"backend": "agent_desktop_ffi", "ref": ref_id, "action": act})
+                        return err_out
+            except Exception as exc:
+                if not fallback_to_visual:
+                    return _structured_error("FFI_ERROR", str(exc), extra={"backend": "agent_desktop_ffi", "ref": ref_id, "action": act})
 
     # Layer 1: agent-desktop CLI when this snapshot came from CLI (v2.6 contract)
     if active_be == "agent_desktop_cli" and find_agent_desktop_cli():

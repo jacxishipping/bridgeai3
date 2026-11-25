@@ -1,4 +1,6 @@
 import type {
+  A11yActPayload,
+  A11ySnapshotResponse,
   AlertConfigState,
   AlertDelivery,
   ApprovalRecord,
@@ -767,6 +769,45 @@ export class ApiClient {
       method: "POST",
       body: JSON.stringify(payload),
     });
+  }
+
+  async getDesktopA11ySnapshot(
+    deviceId: string,
+    params?: {
+      interactive_only?: boolean;
+      skeleton?: boolean;
+      compact?: boolean;
+      window_title?: string;
+      max_depth?: number;
+      max_elements?: number;
+      session_id?: string;
+    },
+  ): Promise<A11ySnapshotResponse> {
+    const qs = new URLSearchParams();
+    if (params?.interactive_only !== undefined) qs.set("interactive_only", String(params.interactive_only));
+    if (params?.skeleton !== undefined) qs.set("skeleton", String(params.skeleton));
+    if (params?.compact !== undefined) qs.set("compact", String(params.compact));
+    if (params?.window_title) qs.set("window_title", params.window_title);
+    if (params?.max_depth !== undefined) qs.set("max_depth", String(params.max_depth));
+    if (params?.max_elements !== undefined) qs.set("max_elements", String(params.max_elements));
+    if (params?.session_id) qs.set("session_id", params.session_id);
+    const suffix = qs.toString() ? `?${qs.toString()}` : "";
+    return this.request<A11ySnapshotResponse>(
+      `/api/devices/${encodeURIComponent(deviceId)}/desktop/a11y/snapshot${suffix}`,
+    );
+  }
+
+  async actDesktopA11y(
+    deviceId: string,
+    payload: A11yActPayload,
+  ): Promise<Record<string, unknown>> {
+    return this.request<Record<string, unknown>>(
+      `/api/devices/${encodeURIComponent(deviceId)}/desktop/a11y/act`,
+      {
+        method: "POST",
+        body: JSON.stringify(payload),
+      },
+    );
   }
 
   // Release 2: Dead-letter queue, end-to-end traces, update rings & staged rollouts

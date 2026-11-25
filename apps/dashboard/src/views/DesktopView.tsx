@@ -1,7 +1,30 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Eye, Keyboard, Monitor, MousePointerClick, Pause, Play, RefreshCw, ShieldAlert, Wifi } from "lucide-react";
+import {
+  Crosshair,
+  Eye,
+  Keyboard,
+  Layers,
+  Lock,
+  Monitor,
+  MousePointerClick,
+  Pause,
+  Play,
+  RefreshCw,
+  Search,
+  ShieldAlert,
+  Volume2,
+  VolumeX,
+  Wifi,
+} from "lucide-react";
 import type { ApiClient } from "../api";
-import type { DeviceDesktopCapabilities, DeviceRecord, MonitorDescriptor, PolicyState } from "../types";
+import type {
+  A11yElementNode,
+  A11ySnapshotResponse,
+  DeviceDesktopCapabilities,
+  DeviceRecord,
+  MonitorDescriptor,
+  PolicyState,
+} from "../types";
 import { Button, Chip, StateBanner, StatusBadge, SurfaceCard } from "../components/ui";
 
 type TransportMode = "jpeg" | "webrtc";
@@ -29,6 +52,20 @@ export function DesktopView({
   const [typeText, setTypeText] = useState("");
   const [hotkey, setHotkey] = useState("ctrl+c");
   const [webrtcStatus, setWebrtcStatus] = useState<string>("idle");
+  const [audioTrackActive, setAudioTrackActive] = useState(false);
+  const [audioMuted, setAudioMuted] = useState(true);
+  const [audioBackend, setAudioBackend] = useState<string>("");
+  const [inspectorOpen, setInspectorOpen] = useState(true);
+  const [a11yLoading, setA11yLoading] = useState(false);
+  const [a11yBusy, setA11yBusy] = useState(false);
+  const [a11yError, setA11yError] = useState("");
+  const [a11yInteractiveOnly, setA11yInteractiveOnly] = useState(true);
+  const [a11yQuery, setA11yQuery] = useState("");
+  const [a11ySnap, setA11ySnap] = useState<A11ySnapshotResponse | null>(null);
+  const [hoveredNode, setHoveredNode] = useState<A11yElementNode | null>(null);
+  const [selectedNode, setSelectedNode] = useState<A11yElementNode | null>(null);
+  const [a11yFillText, setA11yFillText] = useState("");
+  const [a11yHeaded, setA11yHeaded] = useState(false);
   const lastObjectUrl = useRef<string | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const pcRef = useRef<RTCPeerConnection | null>(null);
@@ -36,6 +73,12 @@ export function DesktopView({
   const sessionIdRef = useRef<string | null>(null);
   const seenAgentIce = useRef(0);
   const pollTimerRef = useRef<number | null>(null);
+  const reconnectGraceRef = useRef<number | null>(null);
+  const selectedMonitorRef = useRef(selectedMonitor);
+
+  useEffect(() => {
+    selectedMonitorRef.current = selectedMonitor;
+  }, [selectedMonitor]);
 
   useEffect(() => {
     api
@@ -151,6 +194,10 @@ export function DesktopView({
       window.clearInterval(pollTimerRef.current);
       pollTimerRef.current = null;
     }
+    if (reconnectGraceRef.current) {
+      window.clearTimeout(reconnectGraceRef.current);
+      reconnectGraceRef.current = null;
+    }
     const sid = sessionIdRef.current;
     sessionIdRef.current = null;
     seenAgentIce.current = 0;
@@ -164,6 +211,9 @@ export function DesktopView({
     if (videoRef.current) {
       videoRef.current.srcObject = null;
     }
+    setAudioTrackActive(false);
+    setAudioMuted(true);
+    setAudioBackend("");
     if (sid) {
       try {
         await api.terminateWebRtcSession(sid);
@@ -199,7 +249,7 @@ export function DesktopView({
         mode,
         fps: 30,
         scale: 1.0,
-        monitor_index: selectedMonitor,
+        monitor_index: selectedMonitorRef.current,
         bitrate_kbps: 4500,
       });
       const sessionId = sess.session_id;
@@ -210,8 +260,16 @@ export function DesktopView({
 
       pc.ontrack = (ev) => {
         const stream = ev.streams[0] || new MediaStream([ev.track]);
+        if (ev.track.kind === "audio" || stream.getAudioTracks().length > 0) {
+          setAudioTrackActive(true);
+        }
         if (videoRef.current) {
-          videoRef.current.srcObject = stream;
+          const existing = videoRef.current.srcObject as MediaStream | null;
+          if (existing && existing !== stream && !existing.getTracks().includes(ev.track)) {
+            existing.addTrack(ev.track);
+          } else {
+            videoRef.current.srcObject = stream;
+          }
           void videoRef.current.play().catch(() => undefined);
         }
         setWebrtcStatus("connected");
@@ -224,11 +282,26 @@ export function DesktopView({
           ev.channel.onmessage = (msgEv) => {
             try {
               const raw = typeof msgEv.data === "string" ? msgEv.data : "";
-              const parsed = JSON.parse(raw) as { type?: string; text?: string; ok?: boolean };
+              const parsed = JSON.parse(raw) as {
+                type?: string;
+                text?: string;
+                ok?: boolean;
+                monitor_index?: number;
+                width?: number;
+                height?: number;
+              };
               if (parsed.type === "clipboard_data" && typeof parsed.text === "string") {
                 void navigator.clipboard?.writeText(parsed.text).then(
                   () => onToast("Agent clipboard copied to local clipboard"),
                   () => onToast(`Agent clipboard: ${parsed.text?.slice(0, 120) || "(empty)"}`),
+                );
+              } else if (parsed.type === "monitor_switched") {
+                const idx = parsed.monitor_index ?? selectedMonitorRef.current;
+                const dims = parsed.width && parsed.height ? ` (${parsed.width}×${parsed.height})` : "";
+                onToast(
+                  parsed.ok !== false
+                    ? `Live stream switched to Display ${idx}${dims}`
+                    : `Monitor switch to Display ${idx} failed`,
                 );
               }
             } catch {
@@ -246,9 +319,33 @@ export function DesktopView({
       pc.onconnectionstatechange = () => {
         const state = pc.connectionState || "connecting";
         setWebrtcStatus(state);
-        if (state === "failed" || state === "disconnected") {
-          setFrameError(`WebRTC ${state} — falling back to JPEG live view`);
-          // Production resilience: keep the session observable via JPEG poll.
+        if (state === "connected") {
+          if (reconnectGraceRef.current) {
+            window.clearTimeout(reconnectGraceRef.current);
+            reconnectGraceRef.current = null;
+          }
+          setFrameError("");
+          return;
+        }
+        if (state === "disconnected") {
+          setFrameError("WebRTC ICE disconnected — waiting for TURN/ICE recovery…");
+          if (!reconnectGraceRef.current) {
+            reconnectGraceRef.current = window.setTimeout(() => {
+              reconnectGraceRef.current = null;
+              if (pcRef.current && pcRef.current.connectionState !== "connected") {
+                void (async () => {
+                  await stopWebrtc();
+                  setTransport("jpeg");
+                  setStreaming(true);
+                  onToast("WebRTC ICE recovery timed out — switched to JPEG fallback");
+                })();
+              }
+            }, 5000);
+          }
+          return;
+        }
+        if (state === "failed") {
+          setFrameError("WebRTC failed — falling back to JPEG live view");
           void (async () => {
             await stopWebrtc();
             setTransport("jpeg");
@@ -311,6 +408,10 @@ export function DesktopView({
               }
             }
             seenAgentIce.current = agents.length;
+            if (snap.audio_enabled) {
+              setAudioTrackActive(true);
+              if (snap.audio_backend) setAudioBackend(snap.audio_backend);
+            }
             if (snap.status === "ended" || snap.status === "error") {
               setFrameError(snap.error || `Session ${snap.status}`);
               setStreaming(false);
@@ -327,7 +428,7 @@ export function DesktopView({
       await stopWebrtc();
       throw err;
     }
-  }, [api, controlArmed, controlBlockedReason, deviceId, selectedMonitor, stopWebrtc, onToast]);
+  }, [api, controlArmed, controlBlockedReason, deviceId, stopWebrtc, onToast]);
 
   useEffect(() => {
     return () => {
@@ -416,6 +517,109 @@ export function DesktopView({
   }
 
   const activeMonitor = monitors[selectedMonitor] ?? null;
+
+  const refreshA11ySnapshot = useCallback(async () => {
+    if (isOffline) return;
+    setA11yLoading(true);
+    setA11yError("");
+    try {
+      const snap = await api.getDesktopA11ySnapshot(deviceId, {
+        interactive_only: a11yInteractiveOnly,
+        compact: true,
+        max_elements: 150,
+        session_id: `ui_${deviceId}`,
+      });
+      setA11ySnap(snap);
+      if (!snap.ok) {
+        setA11yError(snap.error_detail?.message || snap.error || "Accessibility snapshot returned an error");
+      }
+      setSelectedNode((prev) => {
+        if (!prev) return null;
+        return (snap.elements || []).find((el) => el.ref === prev.ref) || null;
+      });
+    } catch (err) {
+      setA11yError(err instanceof Error ? err.message : "Failed to inspect accessibility tree");
+    } finally {
+      setA11yLoading(false);
+    }
+  }, [api, deviceId, a11yInteractiveOnly, isOffline]);
+
+  const executeA11yAction = useCallback(
+    async (node: A11yElementNode, action: string, extra?: { text?: string }) => {
+      if (!controlArmed || controlBlockedReason) {
+        onToast("Arm interactive control first — View-Only mode blocks @ref actions");
+        return;
+      }
+      setA11yBusy(true);
+      try {
+        const res = await api.actDesktopA11y(deviceId, {
+          ref: node.ref,
+          action,
+          text: extra?.text,
+          headed: a11yHeaded,
+          fallback_to_visual: true,
+          fallback_text: node.name || undefined,
+          session_id: a11ySnap?.session_id || `ui_${deviceId}`,
+        });
+        if (res.ok) {
+          onToast(
+            `${a11yHeaded ? "Headed" : "Headless"} ${action} on ${node.ref} (${node.name || node.role})`,
+          );
+          if (action === "fill") setA11yFillText("");
+          if (transport === "jpeg") {
+            window.setTimeout(() => void pullFrame(), 350);
+          }
+          window.setTimeout(() => void refreshA11ySnapshot(), 400);
+        } else {
+          const errObj = res.error_detail as { message?: string; recovery?: string } | undefined;
+          onToast(errObj?.message || String(res.error || "Action failed"));
+        }
+      } catch (err) {
+        onToast(err instanceof Error ? err.message : "Accessibility action denied");
+      } finally {
+        setA11yBusy(false);
+      }
+    },
+    [api, controlArmed, controlBlockedReason, deviceId, a11yHeaded, a11ySnap, transport, pullFrame, refreshA11ySnapshot, onToast],
+  );
+
+  const filteredA11yElements = useMemo(() => {
+    const items = a11ySnap?.elements || [];
+    const q = a11yQuery.trim().toLowerCase();
+    if (!q) return items;
+    return items.filter(
+      (el) =>
+        (el.ref || "").toLowerCase().includes(q) ||
+        (el.role || "").toLowerCase().includes(q) ||
+        (el.name || "").toLowerCase().includes(q),
+    );
+  }, [a11ySnap, a11yQuery]);
+
+  const activeHighlightNode = hoveredNode || selectedNode;
+  const highlightBoxStyle = useMemo<React.CSSProperties | null>(() => {
+    const b = activeHighlightNode?.bounds;
+    if (!b || b.width <= 0 || b.height <= 0) return null;
+    const screenW = a11ySnap?.screen?.width || a11ySnap?.screen_width || activeMonitor?.width || 1920;
+    const screenH = a11ySnap?.screen?.height || a11ySnap?.screen_height || activeMonitor?.height || 1080;
+    if (screenW <= 0 || screenH <= 0) return null;
+    const leftPct = Math.max(0, Math.min(100, (b.x / screenW) * 100));
+    const topPct = Math.max(0, Math.min(100, (b.y / screenH) * 100));
+    const widthPct = Math.max(0.5, Math.min(100 - leftPct, (b.width / screenW) * 100));
+    const heightPct = Math.max(0.5, Math.min(100 - topPct, (b.height / screenH) * 100));
+    return {
+      position: "absolute",
+      left: `${leftPct}%`,
+      top: `${topPct}%`,
+      width: `${widthPct}%`,
+      height: `${heightPct}%`,
+      border: "2px solid #22d3ee",
+      background: "rgba(34, 211, 238, 0.14)",
+      boxShadow: "0 0 0 1px rgba(15, 23, 42, 0.8), 0 0 14px rgba(34, 211, 238, 0.45)",
+      borderRadius: 4,
+      pointerEvents: "none",
+      zIndex: 6,
+    };
+  }, [activeHighlightNode, a11ySnap, activeMonitor]);
 
   return (
     <div className="anim-enter" style={{ display: "flex", flexDirection: "column", gap: 18 }}>
@@ -524,6 +728,54 @@ export function DesktopView({
         </div>
       )}
 
+      {streaming && transport === "webrtc" && audioTrackActive && (
+        <div
+          role="status"
+          style={{
+            padding: "9px 14px",
+            borderRadius: 10,
+            border: audioMuted
+              ? "1px solid rgba(245, 158, 11, 0.4)"
+              : "1px solid rgba(16, 185, 129, 0.45)",
+            background: audioMuted
+              ? "rgba(245, 158, 11, 0.08)"
+              : "rgba(16, 185, 129, 0.1)",
+            fontSize: 12,
+            display: "flex",
+            flexWrap: "wrap",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 8,
+          }}
+        >
+          <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            {audioMuted ? <VolumeX size={15} /> : <Volume2 size={15} />}
+            <span>
+              <strong>Desktop Audio Capture Active{audioBackend ? ` (${audioBackend})` : ""}:</strong>{" "}
+              {audioMuted
+                ? "Audio loopback track is attached and muted by default for privacy. Click Unmute to listen with explicit consent."
+                : "Live remote desktop audio playback is active."}
+            </span>
+          </span>
+          <Button
+            size="sm"
+            variant={audioMuted ? "primary" : "ghost"}
+            onClick={() => {
+              const nextMuted = !audioMuted;
+              setAudioMuted(nextMuted);
+              if (videoRef.current) {
+                videoRef.current.muted = nextMuted;
+                if (!nextMuted) void videoRef.current.play().catch(() => undefined);
+              }
+              onToast(nextMuted ? "Remote desktop audio muted" : "Remote desktop audio unmuted");
+            }}
+          >
+            {audioMuted ? <Volume2 size={13} /> : <VolumeX size={13} />}
+            <span>{audioMuted ? "Unmute Desktop Audio" : "Mute Audio"}</span>
+          </Button>
+        </div>
+      )}
+
       {controlBlockedReason && (
         <StateBanner
           kind={isOffline ? "offline" : "denied"}
@@ -596,7 +848,20 @@ export function DesktopView({
               className="field mono"
               style={{ width: 220 }}
               value={selectedMonitor}
-              onChange={(e) => setSelectedMonitor(Number(e.target.value))}
+              onChange={(e) => {
+                const nextIdx = Number(e.target.value);
+                setSelectedMonitor(nextIdx);
+                const dc = inputDcRef.current;
+                if (streaming && transport === "webrtc" && dc && dc.readyState === "open") {
+                  dc.send(
+                    JSON.stringify({
+                      type: "switch_monitor",
+                      action: "switch_monitor",
+                      monitor_index: nextIdx,
+                    }),
+                  );
+                }
+              }}
             >
               {monitors.map((m) => (
                 <option key={m.index} value={m.index}>
@@ -634,6 +899,20 @@ export function DesktopView({
 
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <Chip
+            active={inspectorOpen}
+            aria-pressed={inspectorOpen}
+            onClick={() => {
+              const next = !inspectorOpen;
+              setInspectorOpen(next);
+              if (next && !a11ySnap && !isOffline) {
+                void refreshA11ySnapshot();
+              }
+            }}
+          >
+            <Layers size={13} />
+            <span>A11y Tree{a11ySnap?.ref_count ? ` (${a11ySnap.ref_count})` : ""}</span>
+          </Chip>
+          <Chip
             active={controlArmed}
             disabled={Boolean(controlBlockedReason)}
             aria-pressed={controlArmed}
@@ -655,77 +934,393 @@ export function DesktopView({
         </div>
       </SurfaceCard>
 
-      <SurfaceCard
+      <div
         style={{
-          overflow: "hidden",
-          minHeight: 380,
-          background: "var(--bg-terminal)",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          position: "relative",
+          display: "grid",
+          gridTemplateColumns: inspectorOpen ? "minmax(0, 1fr) 360px" : "minmax(0, 1fr)",
+          gap: 14,
+          alignItems: "stretch",
         }}
       >
-        {transport === "webrtc" && streaming ? (
-          <video
-            ref={videoRef}
-            autoPlay
-            playsInline
-            muted
-            aria-label={`Live WebRTC desktop for ${selectedDevice?.name || deviceId}`}
-            onClick={(e) => void handleImageClick(e)}
-            onContextMenu={(e) => {
-              if (controlArmed && !controlBlockedReason) {
-                e.preventDefault();
-                void handleImageClick(e);
-              }
-            }}
-            style={{
-              width: "100%",
-              maxHeight: "68vh",
-              objectFit: "contain",
-              cursor: controlArmed ? "crosshair" : "default",
-              display: "block",
-              background: "#000",
-            }}
-          />
-        ) : frameUrl ? (
-          <img
-            src={frameUrl}
-            alt={`Live remote desktop frame for ${selectedDevice?.name || deviceId}`}
-            onClick={(e) => void handleImageClick(e)}
-            onContextMenu={(e) => {
-              if (controlArmed && !controlBlockedReason) {
-                e.preventDefault();
-                void handleImageClick(e);
-              }
-            }}
-            style={{
-              width: "100%",
-              maxHeight: "68vh",
-              objectFit: "contain",
-              cursor: controlArmed ? "crosshair" : "default",
-              display: "block",
-            }}
-          />
-        ) : (
-          <div style={{ textAlign: "center", padding: 36, color: "#94a3b8", maxWidth: 460 }}>
-            <Monitor size={30} style={{ opacity: 0.55, marginBottom: 10 }} />
-            <div style={{ fontSize: 13.5, fontWeight: 500, color: "#f1f5f9", marginBottom: 6 }}>
-              {frameError ? "Desktop Feed Unavailable" : "Ready for Live Desktop Inspection"}
+        <SurfaceCard
+          style={{
+            overflow: "hidden",
+            minHeight: 380,
+            background: "var(--bg-terminal)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            position: "relative",
+          }}
+        >
+          {transport === "webrtc" && streaming ? (
+            <div style={{ position: "relative", display: "inline-block", maxWidth: "100%" }}>
+              <video
+                ref={videoRef}
+                autoPlay
+                playsInline
+                muted={audioMuted}
+                aria-label={`Live WebRTC desktop for ${selectedDevice?.name || deviceId}`}
+                onClick={(e) => void handleImageClick(e)}
+                onContextMenu={(e) => {
+                  if (controlArmed && !controlBlockedReason) {
+                    e.preventDefault();
+                    void handleImageClick(e);
+                  }
+                }}
+                style={{
+                  width: "100%",
+                  maxHeight: "68vh",
+                  objectFit: "contain",
+                  cursor: controlArmed ? "crosshair" : "default",
+                  display: "block",
+                  background: "#000",
+                }}
+              />
+              {highlightBoxStyle && activeHighlightNode && (
+                <div style={highlightBoxStyle}>
+                  <span
+                    className="mono"
+                    style={{
+                      position: "absolute",
+                      top: -20,
+                      left: 0,
+                      background: "#0891b2",
+                      color: "#fff",
+                      fontSize: 10.5,
+                      padding: "1px 6px",
+                      borderRadius: 4,
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {activeHighlightNode.ref} · {activeHighlightNode.role}
+                  </span>
+                </div>
+              )}
             </div>
-            <div style={{ fontSize: 12, lineHeight: 1.55 }}>
-              {frameError ||
-                "Press Start Live View. Choose JPEG for compatibility or WebRTC for low-latency H.264 on Windows agents."}
+          ) : frameUrl ? (
+            <div style={{ position: "relative", display: "inline-block", maxWidth: "100%" }}>
+              <img
+                src={frameUrl}
+                alt={`Live remote desktop frame for ${selectedDevice?.name || deviceId}`}
+                onClick={(e) => void handleImageClick(e)}
+                onContextMenu={(e) => {
+                  if (controlArmed && !controlBlockedReason) {
+                    e.preventDefault();
+                    void handleImageClick(e);
+                  }
+                }}
+                style={{
+                  width: "100%",
+                  maxHeight: "68vh",
+                  objectFit: "contain",
+                  cursor: controlArmed ? "crosshair" : "default",
+                  display: "block",
+                }}
+              />
+              {highlightBoxStyle && activeHighlightNode && (
+                <div style={highlightBoxStyle}>
+                  <span
+                    className="mono"
+                    style={{
+                      position: "absolute",
+                      top: -20,
+                      left: 0,
+                      background: "#0891b2",
+                      color: "#fff",
+                      fontSize: 10.5,
+                      padding: "1px 6px",
+                      borderRadius: 4,
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {activeHighlightNode.ref} · {activeHighlightNode.role}
+                  </span>
+                </div>
+              )}
             </div>
-            {transport === "webrtc" && (
-              <div style={{ marginTop: 10, fontSize: 11.5, display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
-                <Wifi size={12} /> WebRTC status: {webrtcStatus}
+          ) : (
+            <div style={{ textAlign: "center", padding: 36, color: "#94a3b8", maxWidth: 460 }}>
+              <Monitor size={30} style={{ opacity: 0.55, marginBottom: 10 }} />
+              <div style={{ fontSize: 13.5, fontWeight: 500, color: "#f1f5f9", marginBottom: 6 }}>
+                {frameError ? "Desktop Feed Unavailable" : "Ready for Live Desktop Inspection"}
+              </div>
+              <div style={{ fontSize: 12, lineHeight: 1.55 }}>
+                {frameError ||
+                  "Press Start Live View. Choose JPEG for compatibility or WebRTC for low-latency H.264 on Windows agents."}
+              </div>
+              {transport === "webrtc" && (
+                <div style={{ marginTop: 10, fontSize: 11.5, display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
+                  <Wifi size={12} /> WebRTC status: {webrtcStatus}
+                </div>
+              )}
+            </div>
+          )}
+        </SurfaceCard>
+
+        {inspectorOpen && (
+          <SurfaceCard
+            style={{
+              padding: 12,
+              display: "flex",
+              flexDirection: "column",
+              gap: 10,
+              maxHeight: "68vh",
+              minHeight: 380,
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <Layers size={14} style={{ color: "var(--accent, #22d3ee)" }} />
+                <strong style={{ fontSize: 13 }}>Live A11y Tree</strong>
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <label
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 4,
+                    fontSize: 11,
+                    color: "var(--text-secondary)",
+                    cursor: "pointer",
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={a11yInteractiveOnly}
+                    onChange={(e) => setA11yInteractiveOnly(e.target.checked)}
+                  />
+                  Interactive
+                </label>
+                <Button
+                  size="sm"
+                  disabled={isOffline || a11yLoading}
+                  onClick={() => void refreshA11ySnapshot()}
+                >
+                  <RefreshCw size={12} />
+                  <span>{a11yLoading ? "Scanning…" : "Inspect"}</span>
+                </Button>
+              </div>
+            </div>
+
+            <div style={{ position: "relative" }}>
+              <Search
+                size={13}
+                style={{
+                  position: "absolute",
+                  left: 9,
+                  top: "50%",
+                  transform: "translateY(-50%)",
+                  color: "var(--text-muted)",
+                }}
+              />
+              <input
+                type="text"
+                aria-label="Filter accessibility elements"
+                className="field"
+                style={{ width: "100%", paddingLeft: 28, fontSize: 12 }}
+                placeholder="Filter by @ref, role, or name..."
+                value={a11yQuery}
+                onChange={(e) => setA11yQuery(e.target.value)}
+              />
+            </div>
+
+            {a11ySnap && (
+              <div
+                className="mono"
+                style={{
+                  fontSize: 11,
+                  color: "var(--text-muted)",
+                  display: "flex",
+                  justifyContent: "space-between",
+                  gap: 6,
+                }}
+              >
+                <span>
+                  {a11ySnap.backend || "native"} · {a11ySnap.platform_adapter || "os"}
+                </span>
+                <span>
+                  {filteredA11yElements.length}/{a11ySnap.elements?.length ?? 0} refs
+                </span>
               </div>
             )}
-          </div>
+
+            {a11yError && (
+              <div
+                style={{
+                  fontSize: 11.5,
+                  color: "#f87171",
+                  background: "rgba(239, 68, 68, 0.08)",
+                  border: "1px solid rgba(239, 68, 68, 0.3)",
+                  borderRadius: 6,
+                  padding: "6px 8px",
+                }}
+              >
+                {a11yError}
+              </div>
+            )}
+
+            <div
+              style={{
+                flex: 1,
+                overflowY: "auto",
+                display: "flex",
+                flexDirection: "column",
+                gap: 4,
+                minHeight: 120,
+              }}
+            >
+              {filteredA11yElements.length === 0 ? (
+                <div style={{ textAlign: "center", padding: "24px 8px", fontSize: 12, color: "var(--text-muted)" }}>
+                  {a11ySnap
+                    ? "No matching accessibility elements."
+                    : "Click Inspect to capture the live @ref accessibility hierarchy."}
+                </div>
+              ) : (
+                filteredA11yElements.map((node) => {
+                  const isSel = selectedNode?.ref === node.ref;
+                  const isRedacted = Boolean(node.redacted || node.value === "[REDACTED]");
+                  return (
+                    <button
+                      key={node.ref}
+                      type="button"
+                      onMouseEnter={() => setHoveredNode(node)}
+                      onMouseLeave={() => setHoveredNode((cur) => (cur?.ref === node.ref ? null : cur))}
+                      onFocus={() => setHoveredNode(node)}
+                      onClick={() => setSelectedNode(node)}
+                      style={{
+                        textAlign: "left",
+                        padding: "6px 8px",
+                        borderRadius: 6,
+                        border: isSel
+                          ? "1px solid rgba(34, 211, 238, 0.7)"
+                          : "1px solid var(--border-subtle, rgba(148,163,184,0.18))",
+                        background: isSel ? "rgba(34, 211, 238, 0.12)" : "transparent",
+                        color: "inherit",
+                        cursor: "pointer",
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: 2,
+                      }}
+                    >
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6 }}>
+                        <span className="mono" style={{ fontSize: 11, color: "#22d3ee", fontWeight: 600 }}>
+                          {node.ref}
+                        </span>
+                        <span
+                          className="mono"
+                          style={{
+                            fontSize: 10.5,
+                            color: "var(--text-muted)",
+                            display: "inline-flex",
+                            alignItems: "center",
+                            gap: 4,
+                          }}
+                        >
+                          {isRedacted && <Lock size={10} />}
+                          {node.role}
+                        </span>
+                      </div>
+                      <div
+                        style={{
+                          fontSize: 12,
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        {node.name || "(unnamed)"}
+                      </div>
+                      {node.bounds && node.bounds.width > 0 && (
+                        <div className="mono" style={{ fontSize: 10, color: "var(--text-muted)" }}>
+                          {node.bounds.x},{node.bounds.y} · {node.bounds.width}×{node.bounds.height}
+                        </div>
+                      )}
+                    </button>
+                  );
+                })
+              )}
+            </div>
+
+            {selectedNode && (
+              <div
+                style={{
+                  borderTop: "1px solid var(--border-subtle, rgba(148,163,184,0.2))",
+                  paddingTop: 8,
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 6,
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6 }}>
+                  <span className="mono" style={{ fontSize: 11, color: "#22d3ee" }}>
+                    <Crosshair size={11} style={{ verticalAlign: "-1px", marginRight: 4 }} />
+                    {selectedNode.ref} ({selectedNode.role})
+                  </span>
+                  <label
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: 4,
+                      fontSize: 11,
+                      color: "var(--text-secondary)",
+                      cursor: "pointer",
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={a11yHeaded}
+                      onChange={(e) => setA11yHeaded(e.target.checked)}
+                    />
+                    Headed
+                  </label>
+                </div>
+
+                {!controlArmed || controlBlockedReason ? (
+                  <div style={{ fontSize: 11, color: "var(--text-muted)", display: "flex", alignItems: "center", gap: 5 }}>
+                    <Lock size={11} />
+                    <span>Arm Control above to run headless @ref actions.</span>
+                  </div>
+                ) : (
+                  <>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
+                      {(["click", "focus", "double_click", "check", "expand"] as const).map((act) => (
+                        <Button
+                          key={act}
+                          size="sm"
+                          variant={act === "click" ? "primary" : "ghost"}
+                          disabled={a11yBusy}
+                          onClick={() => void executeA11yAction(selectedNode, act)}
+                        >
+                          {act.replace("_", " ")}
+                        </Button>
+                      ))}
+                    </div>
+                    <div style={{ display: "flex", gap: 5 }}>
+                      <input
+                        type="text"
+                        aria-label="Fill value for selected element"
+                        className="field"
+                        style={{ flex: 1, fontSize: 11.5 }}
+                        placeholder="Fill text into @ref…"
+                        value={a11yFillText}
+                        onChange={(e) => setA11yFillText(e.target.value)}
+                      />
+                      <Button
+                        size="sm"
+                        disabled={a11yBusy || !a11yFillText}
+                        onClick={() => void executeA11yAction(selectedNode, "fill", { text: a11yFillText })}
+                      >
+                        Fill
+                      </Button>
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+          </SurfaceCard>
         )}
-      </SurfaceCard>
+      </div>
 
       {controlArmed && !controlBlockedReason ? (
         <SurfaceCard style={{ padding: 14 }}>

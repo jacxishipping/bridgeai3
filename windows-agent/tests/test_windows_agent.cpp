@@ -335,6 +335,19 @@ int main() {
         if (started) {
             CHECK(stats.status == "streaming");
             CHECK(stats.error.empty());
+            CHECK(stats.monitor_index == 0);
+            CHECK(stats.adapted_bitrate_kbps == 1000);
+            // Live monitor switch + dynamic ABR bitrate update + keyframe force
+            CHECK(pipeline.SwitchMonitor(0));
+            CHECK(pipeline.UpdateBitrateKbps(1500));
+            pipeline.ForceKeyframe();
+            auto updated = pipeline.GetStats();
+            CHECK(updated.monitor_switches >= 1);
+            CHECK(updated.bitrate_adaptations >= 1);
+            CHECK(updated.adapted_bitrate_kbps == 1500);
+            // Reject out-of-range monitor/bitrate gracefully
+            CHECK(!pipeline.SwitchMonitor(-1));
+            CHECK(!pipeline.UpdateBitrateKbps(50));
         } else {
             CHECK(stats.status == "error");
             CHECK(!stats.error.empty());

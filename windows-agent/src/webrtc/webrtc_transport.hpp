@@ -27,8 +27,12 @@ struct StreamSessionStats {
     bool hardware_encoding = false;
     int width = 1920;
     int height = 1080;
+    int monitor_index = 0;
     int target_fps = 30;
     int target_bitrate_kbps = 4500;
+    int adapted_bitrate_kbps = 4500;
+    uint64_t monitor_switches = 0;
+    uint64_t bitrate_adaptations = 0;
     double capture_time_ms = 0.0;
     double encoder_queue_time_ms = 0.0;
     double encode_time_ms = 0.0;
@@ -61,12 +65,22 @@ public:
     // Captures one frame via DXGI and encodes it via Media Foundation H.264, updating stage-by-stage latency stats
     bool StepCaptureAndEncode(capture::CapturedFrame& out_raw, encoder::EncodedAccessUnit& out_encoded);
 
+    // Hot-switch DXGI capture monitor without tearing down the WebRTC PeerConnection.
+    bool SwitchMonitor(int monitor_index);
+
+    // Dynamically adjust Media Foundation H.264 target bitrate under packet loss / congestion.
+    bool UpdateBitrateKbps(int bitrate_kbps);
+
+    // Request an immediate IDR keyframe on the next encoded frame.
+    void ForceKeyframe();
+
     StreamSessionStats GetStats() const;
     input::WindowsInputController& InputController() { return input_controller_; }
 
 private:
     mutable std::mutex mutex_;
     std::atomic<bool> active_{false};
+    std::atomic<bool> force_next_idr_{false};
     StreamSessionStats stats_{};
 
     capture::DxgiDesktopCapturer capturer_;

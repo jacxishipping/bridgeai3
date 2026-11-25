@@ -38,6 +38,8 @@ def create_webrtc_router(ctx: ControlContext) -> APIRouter:
     audit = ctx.audit
     conn = ctx.conn
     device_row = ctx.device_row
+    get_current_policy = ctx.get_current_policy
+    get_effective_device_policy = ctx.get_effective_device_policy
     require_role = ctx.require_role
     resolve_request_tenant = ctx.resolve_request_tenant
 
@@ -188,6 +190,118 @@ def create_webrtc_router(ctx: ControlContext) -> APIRouter:
 
         audit(actor, device_id, f"dual_control_{action}", {"x": abs_x, "y": abs_y, "key": body.key, "text": bool(body.text)}, "executed")
         return {"ok": True, "action": action, "x": abs_x, "y": abs_y, "result": res}
+
+    @router.get("/api/devices/{device_id}/desktop/a11y/snapshot")
+    def get_desktop_a11y_snapshot(
+        device_id: str,
+        interactive_only: bool = True,
+        skeleton: bool = False,
+        compact: bool = True,
+        window_title: str | None = None,
+        max_depth: int = 8,
+        max_elements: int = 120,
+        session_id: str | None = None,
+        x_admin_token: str | None = Header(default=None),
+        x_session_token: str | None = Header(default=None),
+        authorization: str | None = Header(default=None),
+    ):
+        """Capture a structured Accessibility Tree snapshot with ``@ref`` IDs for the Live Desktop Inspector."""
+        actor = require_role("viewer", x_admin_token, x_session_token, authorization)
+        _require_device_tenant(device_id, x_admin_token, x_session_token, authorization)
+        tenant = resolve_request_tenant(None, x_admin_token, x_session_token, authorization)
+        args = {
+            "interactive_only": bool(interactive_only),
+            "skeleton": bool(skeleton),
+            "compact": bool(compact),
+            "window_title": window_title or "",
+            "max_depth": max(1, min(20, int(max_depth))),
+            "max_elements": max(1, min(300, int(max_elements))),
+            "session_id": (session_id or f"ui_{device_id}").strip(),
+        }
+        try:
+            res = _execute_workflow_step_sync(
+                "desktop_a11y_snapshot",
+                args,
+                device_id,
+                tenant,
+                f"a11y_inspector:{actor}",
+            )
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except TimeoutError as exc:
+            raise HTTPException(status_code=504, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        return res if isinstance(res, dict) else {"ok": False, "error": "Invalid accessibility snapshot response"}
+
+    @router.post("/api/devices/{device_id}/desktop/a11y/act")
+    def act_desktop_a11y(
+        device_id: str,
+        body: dict = Body(default={}),
+        x_admin_token: str | None = Header(default=None),
+        x_session_token: str | None = Header(default=None),
+        authorization: str | None = Header(default=None),
+    ):
+        """Execute a policy-gated headless ``@ref`` accessibility action from the Live Desktop Inspector."""
+        plane_state.refresh_emergency_stop(conn, app.state)
+        if plane_state.is_emergency_stop(conn, app.state):
+            raise HTTPException(status_code=503, detail="Emergency stop active.")
+        actor = require_role("operator", x_admin_token, x_session_token, authorization)
+        _require_device_tenant(device_id, x_admin_token, x_session_token, authorization)
+        tenant = resolve_request_tenant(None, x_admin_token, x_session_token, authorization)
+
+        ref = str(body.get("ref") or "").strip()
+        if not ref:
+            raise HTTPException(status_code=400, detail="A non-empty '@ref' target is required.")
+        action = str(body.get("action") or "click").strip().lower()
+
+        # Enforce effective policy desktop_enabled gate (View-Only lock)
+        eff_policy = get_current_policy() if device_id == "local" else get_effective_device_policy(device_id)
+        if not bool((eff_policy or {}).get("desktop_enabled", False)):
+            audit(actor, device_id, f"a11y_act_{action}", {"ref": ref, "action": action}, "denied")
+            raise HTTPException(
+                status_code=403,
+                detail="Interactive desktop automation is disabled by active policy (View-Only enforced).",
+            )
+
+        payload: dict = {
+            "ref": ref,
+            "action": action,
+            "headed": bool(body.get("headed", False)),
+            "fallback_to_visual": bool(body.get("fallback_to_visual", True)),
+            "session_id": str(body.get("session_id") or f"ui_{device_id}").strip(),
+        }
+        if body.get("text") is not None:
+            payload["text"] = str(body.get("text"))
+        if body.get("option") is not None:
+            payload["option"] = str(body.get("option"))
+        if body.get("fallback_text") is not None:
+            payload["fallback_text"] = str(body.get("fallback_text"))
+        if body.get("wait_after_ms") is not None:
+            try:
+                payload["wait_after_ms"] = max(0, min(10000, int(body.get("wait_after_ms"))))
+            except (TypeError, ValueError):
+                pass
+
+        try:
+            res = _execute_workflow_step_sync(
+                "desktop_a11y_act",
+                payload,
+                device_id,
+                tenant,
+                f"a11y_inspector:{actor}",
+            )
+        except PermissionError as exc:
+            audit(actor, device_id, f"a11y_act_{action}", {"ref": ref, "action": action}, "denied")
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except TimeoutError as exc:
+            raise HTTPException(status_code=504, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+        ok = isinstance(res, dict) and bool(res.get("ok"))
+        audit(actor, device_id, f"a11y_act_{action}", {"ref": ref, "action": action, "headed": payload["headed"]}, "executed" if ok else "failed")
+        return res if isinstance(res, dict) else {"ok": False, "error": "Invalid accessibility action response"}
 
     @router.get("/api/devices/{device_id}/desktop/monitors")
     def get_device_monitors(

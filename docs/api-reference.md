@@ -116,6 +116,8 @@ beyond the approver.
 | POST | `/api/devices/enroll` | Admin, Session | Enroll a new device |
 | DELETE | `/api/devices/{device_id}` | Admin, Session | delete_device |
 | PUT | `/api/devices/{device_id}` | Admin, Session | update_device |
+| POST | `/api/devices/{device_id}/desktop/a11y/act` | Bearer, Admin, Session | act_desktop_a11y |
+| GET | `/api/devices/{device_id}/desktop/a11y/snapshot` | Bearer, Admin, Session | get_desktop_a11y_snapshot |
 | GET | `/api/devices/{device_id}/desktop/capabilities` | Admin, Session | Capability-aware cross-platform desktop contract for one device |
 | GET | `/api/devices/{device_id}/desktop/frame` | Bearer, Admin, Session | get_desktop_frame |
 | POST | `/api/devices/{device_id}/desktop/input` | Bearer, Admin, Session | send_desktop_input |
@@ -411,7 +413,7 @@ beyond the approver.
 | POST | `/api/supervisor/recover` | Admin, Session | supervisor_recover_api |
 | GET | `/api/traces/{trace_id}` | Admin, Session | get_trace_timeline |
 
-*251 (method, path) pairs listed — generated from the live app; see the note at the top of this file.*
+*253 (method, path) pairs listed — generated from the live app; see the note at the top of this file.*
 <!-- END GENERATED ROUTES -->
 
 ## Mounted surfaces (combined app)

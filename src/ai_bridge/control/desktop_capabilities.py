@@ -139,7 +139,8 @@ def build_capability_matrix(*, include_host: bool = True) -> dict[str, Any]:
     if not capture_ok:
         residuals.append("wasapi_live_desktop_audio_capture")
     if audio_opt_in and capture_ok:
-        audio_reason = "AI_BRIDGE_DESKTOP_AUDIO opted in; WASAPI loopback capture available"
+        _backend = probe.get("backend") or "wasapi"
+        audio_reason = f"AI_BRIDGE_DESKTOP_AUDIO opted in; WASAPI loopback capture available ({_backend})"
     elif audio_opt_in:
         audio_reason = (
             "AI_BRIDGE_DESKTOP_AUDIO opted in; live loopback unavailable "

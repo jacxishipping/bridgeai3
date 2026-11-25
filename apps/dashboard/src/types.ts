@@ -560,7 +560,70 @@ export interface WebRtcSessionV1 {
   permissions?: Record<string, unknown>;
   human_takeover_active?: boolean;
   error?: string | null;
+  audio_enabled?: boolean;
+  audio_backend?: string;
+  audio_live?: boolean;
+  audio_consent_required?: boolean;
   video?: { codec?: string; width?: number; height?: number; fps?: number; bitrate_kbps?: number };
+}
+
+export interface A11yElementBounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface A11yElementNode {
+  ref: string;
+  role: string;
+  name?: string;
+  value?: string | null;
+  bounds?: A11yElementBounds | null;
+  states?: string[];
+  focused?: boolean;
+  enabled?: boolean;
+  redacted?: boolean;
+  depth?: number;
+  children?: A11yElementNode[];
+}
+
+export interface A11ySnapshotResponse {
+  ok: boolean;
+  backend?: string;
+  grounding_source?: string;
+  platform_adapter?: string;
+  snapshot_id?: string;
+  session_id?: string | null;
+  window_title?: string | null;
+  ref_count?: number;
+  interactive_only?: boolean;
+  skeleton?: boolean;
+  screen?: { width: number; height: number };
+  screen_width?: number;
+  screen_height?: number;
+  elements?: A11yElementNode[];
+  tree?: A11yElementNode[];
+  refs?: Record<string, A11yElementNode>;
+  error?: string | null;
+  error_detail?: {
+    code?: string;
+    message?: string;
+    recovery?: string;
+    disposition?: string;
+  } | null;
+}
+
+export interface A11yActPayload {
+  ref: string;
+  action?: string;
+  text?: string;
+  option?: string;
+  headed?: boolean;
+  fallback_to_visual?: boolean;
+  fallback_text?: string;
+  session_id?: string;
+  wait_after_ms?: number;
 }
 
 export interface MemorySnippetRecord {

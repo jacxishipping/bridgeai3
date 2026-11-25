@@ -10,6 +10,11 @@ on:
         description: "Release version label (e.g. 0.3.0)"
         required: false
         default: ""
+      bundle_agent_desktop:
+        description: "Build & bundle optional cross-platform agent-desktop CLI + FFI binaries"
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: read
@@ -115,10 +120,59 @@ jobs:
             .run/windows-release/AIBridgeSetup.exe.sha256
           retention-days: 90
 
+  bundle-agent-desktop:
+    name: Bundle optional agent-desktop (${{ matrix.os }})
+    if: inputs.bundle_agent_desktop == true || vars.AI_BRIDGE_BUNDLE_AGENT_DESKTOP == '1'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: linux-x64
+            bin_name: agent-desktop
+            lib_name: libagent_desktop_ffi.so
+          - os: macos-latest
+            target: macos-arm64
+            bin_name: agent-desktop
+            lib_name: libagent_desktop_ffi.dylib
+          - os: windows-latest
+            target: windows-x64
+            bin_name: agent-desktop.exe
+            lib_name: agent_desktop_ffi.dll
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Checkout vercel-labs/agent-desktop
+        uses: actions/checkout@v4
+        with:
+          repository: vercel-labs/agent-desktop
+          path: agent-desktop-src
+      - name: Install Linux AT-SPI build dependencies
+        if: matrix.os == 'ubuntu-latest'
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq pkg-config libdbus-1-dev libatspi2.0-dev
+      - name: Build agent-desktop CLI & C FFI library
+        working-directory: agent-desktop-src
+        run: cargo build --release --workspace
+      - name: Package & checksum agent-desktop artifacts
+        shell: bash
+        run: |
+          mkdir -p out
+          cp "agent-desktop-src/target/release/${{ matrix.bin_name }}" "out/agent-desktop-${{ matrix.target }}$([[ '${{ matrix.os }}' == 'windows-latest' ]] && echo '.exe' || echo '')"
+          if [ -f "agent-desktop-src/target/release/${{ matrix.lib_name }}" ]; then
+            cp "agent-desktop-src/target/release/${{ matrix.lib_name }}" "out/${{ matrix.target }}-${{ matrix.lib_name }}"
+          fi
+          (cd out && sha256sum * > "agent-desktop-${{ matrix.target }}.sha256")
+      - uses: actions/upload-artifact@v4
+        with:
+          name: agent-desktop-${{ matrix.target }}-${{ github.ref_name }}
+          path: out/
+          retention-days: 90
+
   publish-github-release:
     name: Publish GitHub Release
-    needs: [build-sign-and-bundle, build-windows-installer]
-    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build-sign-and-bundle, build-windows-installer, bundle-agent-desktop]
+    if: always() && startsWith(github.ref, 'refs/tags/v') && needs.build-sign-and-bundle.result == 'success' && needs.build-windows-installer.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -135,6 +189,7 @@ jobs:
             -name "*.whl" -o -name "*.tar.gz" -o -name "release-manifest.json*" \
             -o -name "sbom.cdx.json" -o -name "SHA256SUMS.txt" -o -name "release-evidence.json" \
             -o -name "AIBridgeSetup.exe" -o -name "AIBridgeSetup.exe.sha256" \
+            -o -name "agent-desktop-*" -o -name "*agent_desktop_ffi*" \
           \) -exec cp {} upload/ \;
           gh release create "${GITHUB_REF_NAME}" upload/* \
             --title "AI Bridge ${GITHUB_REF_NAME}" \

@@ -252,7 +252,8 @@ def desktop_audio_opt_in() -> bool:
     """Return True when desktop audio loopback is explicitly enabled.
 
     Default is off. Opt in with ``AI_BRIDGE_DESKTOP_AUDIO=1`` (also ``true`` / ``yes``).
-    When opted in, prefers WASAPI loopback via ``soundcard``; otherwise silent PCM.
+    When opted in, prefers Windows WASAPI loopback via ``pyaudiowpatch`` (primary)
+    or ``soundcard`` (fallback); otherwise emits honest silent PCM.
     """
     return os.environ.get("AI_BRIDGE_DESKTOP_AUDIO", "").strip().lower() in ("1", "true", "yes")
 
@@ -544,6 +545,12 @@ class ScreenTrack:
                     self._bitrate_kbps = max(500, min(20000, int(bitrate_kbps)))
                 return {"fps": self._fps, "bitrate_kbps": self._bitrate_kbps}
 
+            def switch_monitor(self, monitor_index: int) -> int:
+                """Switch active capture monitor in-place without tearing down PeerConnection."""
+                idx = max(0, int(monitor_index))
+                self._monitor_index = idx
+                return idx
+
             async def next_timestamp(self) -> tuple[int, fractions.Fraction]:
                 if self.readyState != "live":
                     from aiortc.mediastreams import MediaStreamError
@@ -613,11 +620,14 @@ class ScreenTrack:
                     # synthetic estimate presented as a measurement; no
                     # dashboard/SLO may be built on fabricated telemetry.
                     _enc_ms = cap_meta.get("encode_time_ms")
+                    _prev_tel = _STREAM_TELEMETRY.get(self._session_id) or {}
                     _STREAM_TELEMETRY[self._session_id] = {
+                        **_prev_tel,
                         "session_id": self._session_id,
                         "codec": "H264",
                         "width": img.width,
                         "height": img.height,
+                        "monitor_index": self._monitor_index if self._monitor_index is not None else 0,
                         "fps_target": self._fps,
                         "fps_actual": fps_actual,
                         "bitrate_kbps_target": self._bitrate_kbps,
@@ -1084,6 +1094,32 @@ class AgentStreamer:
                 released = release_all_held_keys()
                 return {"ok": True, "action": "release_all_keys", "released": released}
 
+            if action in ("switch_monitor", "set_monitor"):
+                try:
+                    req_idx = int(data.get("monitor_index", data.get("index", 0)))
+                except (TypeError, ValueError):
+                    return {"ok": False, "error": "invalid_monitor_index"}
+                if req_idx < 0:
+                    return {"ok": False, "error": "invalid_monitor_index"}
+                self.monitor_index = req_idx
+                track = getattr(self, "video_track", None)
+                if track is not None and hasattr(track, "switch_monitor"):
+                    track.switch_monitor(req_idx)
+                if isinstance(getattr(self.signaling, "session", None), dict):
+                    self.signaling.session["monitor_index"] = req_idx
+                if self.session_id in _STREAM_TELEMETRY:
+                    _STREAM_TELEMETRY[self.session_id]["monitor_index"] = req_idx
+                if self.input_channel and getattr(self.input_channel, "readyState", "") == "open":
+                    try:
+                        self.input_channel.send(json.dumps({
+                            "type": "monitor_switched",
+                            "ok": True,
+                            "monitor_index": req_idx,
+                        }))
+                    except Exception:
+                        pass
+                return {"ok": True, "action": "switch_monitor", "monitor_index": req_idx}
+
             if action in ("get_ui_elements", "som_query"):
                 from ai_bridge import tools
                 res = tools.desktop_get_ui_elements(include_controls=bool(data.get("include_controls", True)))
@@ -1511,9 +1547,17 @@ class AgentStreamer:
         if not desktop_audio_opt_in():
             if isinstance(getattr(self.signaling, "session", None), dict):
                 self.signaling.session["audio_enabled"] = False
+                self.signaling.session["audio_backend"] = "disabled"
+                self.signaling.session["audio_live"] = False
+            if self.session_id:
+                tel = _STREAM_TELEMETRY.setdefault(self.session_id, {"session_id": self.session_id})
+                tel["audio_enabled"] = False
+                tel["audio_backend"] = "disabled"
+                tel["audio_live"] = False
             return False
         try:
             audio_track = DesktopAudioTrack()
+            self.audio_track = audio_track
             pc.addTrack(audio_track)
             if RTCRtpSender is not None:
                 try:
@@ -1526,8 +1570,19 @@ class AgentStreamer:
                                     transceiver.setCodecPreferences(opus_codecs)
                 except Exception:
                     pass
+            backend_name = getattr(audio_track, "audio_backend", "silent_pcm")
+            is_live = bool(getattr(audio_track, "_capture_live", False))
             if isinstance(getattr(self.signaling, "session", None), dict):
                 self.signaling.session["audio_enabled"] = True
+                self.signaling.session["audio_backend"] = backend_name
+                self.signaling.session["audio_live"] = is_live
+                self.signaling.session["audio_consent_required"] = True
+            if self.session_id:
+                tel = _STREAM_TELEMETRY.setdefault(self.session_id, {"session_id": self.session_id})
+                tel["audio_enabled"] = True
+                tel["audio_backend"] = backend_name
+                tel["audio_live"] = is_live
+                tel["audio_consent_required"] = True
             return True
         except Exception as exc:
             if isinstance(getattr(self.signaling, "session", None), dict):

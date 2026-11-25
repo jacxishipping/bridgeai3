@@ -331,3 +331,245 @@ def test_v26_contract_sessions_short_refs_errors_and_batch_prevalidation(monkeyp
             policy=pol,
         )
     assert executed == []
+
+
+def test_ffi_bridge_execute_by_ref_and_persistent_session(monkeypatch):
+    """Layer 0 C FFI bridge reuses per-session AdAdapter* handles and dispatches ad_execute_by_ref."""
+    import ctypes
+    import json as _json
+
+    calls = {"init": 0, "create": 0, "destroy": 0, "free": 0, "exec": []}
+
+    class _FakeFn:
+        def __init__(self, impl):
+            self._impl = impl
+            self.argtypes = None
+            self.restype = None
+
+        def __call__(self, *args):
+            return self._impl(*args)
+
+    _buffers: list[ctypes.Array] = []
+
+    def _mk_cstr(obj: dict) -> int:
+        buf = ctypes.create_string_buffer(_json.dumps(obj).encode("utf-8"))
+        _buffers.append(buf)
+        return ctypes.addressof(buf)
+
+    class _FakeCDLL:
+        def __init__(self, _path: str):
+            self.ad_init = _FakeFn(self._init)
+            self.ad_adapter_create_with_session = _FakeFn(self._create)
+            self.ad_adapter_destroy = _FakeFn(self._destroy)
+            self.ad_free_string = _FakeFn(self._free)
+            self.ad_snapshot = _FakeFn(self._snapshot)
+            self.ad_execute_by_ref = _FakeFn(self._exec_by_ref)
+
+        def _init(self, abi_major):
+            calls["init"] += 1
+            return 0 if abi_major == hybrid_desktop._FfiBridge.ABI_MAJOR else -1
+
+        def _create(self, _sess_bytes):
+            calls["create"] += 1
+            return 0x1000 + calls["create"]
+
+        def _destroy(self, _ptr):
+            calls["destroy"] += 1
+
+        def _free(self, _ptr):
+            calls["free"] += 1
+
+        def _snapshot(self, _adapter, _app, _flags, _depth, _skeleton, _compact, out_ptr_ref):
+            out_ptr_ref._obj.value = _mk_cstr(
+                {"ok": True, "data": {"elements": [{"ref": "@e1", "role": "button", "name": "Deploy"}]}}
+            )
+            return 0
+
+        def _exec_by_ref(self, adapter, ref_bytes, action_ptr, flags, out_ptr_ref):
+            act = action_ptr._obj
+            calls["exec"].append(
+                {
+                    "adapter": adapter,
+                    "ref": ref_bytes.decode("utf-8"),
+                    "kind": act.kind,
+                    "text": act.text.decode("utf-8") if act.text else None,
+                    "flags": flags,
+                }
+            )
+            out_ptr_ref._obj.value = _mk_cstr({"ok": True, "ref": ref_bytes.decode("utf-8"), "executed": True})
+            return 0
+
+    monkeypatch.setattr(ctypes, "CDLL", _FakeCDLL)
+    bridge = hybrid_desktop._FfiBridge("fake_libagent_desktop_ffi.dll")
+    try:
+        snap = bridge.snapshot(app="Notepad", session_id="s-ffi")
+        assert snap["ok"] is True
+        res = bridge.execute_by_ref(
+            session_id="s-ffi",
+            ref="@e1",
+            action="fill",
+            text="hello",
+            headed=True,
+        )
+        assert res["ok"] is True
+        # Same persistent adapter reused for snapshot + execute_by_ref
+        assert calls["init"] == 1
+        assert calls["create"] == 1
+        assert len(calls["exec"]) == 1
+        assert calls["exec"][0]["ref"] == "@e1"
+        assert calls["exec"][0]["kind"] == hybrid_desktop._AD_ACTION_KIND["fill"]
+        assert calls["exec"][0]["text"] == "hello"
+        assert calls["exec"][0]["flags"] == hybrid_desktop._AD_FLAG_HEADED
+        assert calls["free"] == 2
+    finally:
+        bridge.close_session("s-ffi")
+    assert calls["destroy"] == 1
+
+
+def test_desktop_audio_resampler_and_pyaudiowpatch_probe(monkeypatch):
+    """WASAPI audio resampler converts mono/44.1kHz to 48kHz stereo s16le and probes pyaudiowpatch."""
+    import platform as _platform
+    import struct
+    import types
+
+    from ai_bridge import desktop_audio
+
+    # 1. Resample mono 44.1kHz (441 samples = 10ms) -> stereo 48kHz (480 frames)
+    mono_pcm = struct.pack("<" + "h" * 441, *([1000] * 441))
+    out = desktop_audio._resample_s16_stereo(mono_pcm, src_rate=44100, src_channels=1, dst_rate=48000, dst_frames=480)
+    assert len(out) == 480 * 2 * 2
+    first_l, first_r = struct.unpack_from("<hh", out, 0)
+    assert first_l == 1000 and first_r == 1000
+
+    # 2. Mock pyaudiowpatch probe on Windows
+    class _FakePA:
+        def get_default_wasapi_loopback(self):
+            return {"name": "Speakers (Realtek) [Loopback]", "defaultSampleRate": 48000, "maxInputChannels": 2}
+
+        def terminate(self):
+            pass
+
+    fake_mod = types.SimpleNamespace(PyAudio=_FakePA)
+    monkeypatch.setattr(desktop_audio, "_PROBE_CACHE", None)
+    monkeypatch.setattr(_platform, "system", lambda: "Windows")
+    monkeypatch.setitem(__import__("sys").modules, "pyaudiowpatch", fake_mod)
+    probe = desktop_audio.probe_wasapi_loopback()
+    assert probe["available"] is True
+    assert probe["backend"] == "pyaudiowpatch_wasapi_loopback"
+    assert "Speakers" in probe["device"]
+
+    monkeypatch.setenv("AI_BRIDGE_DESKTOP_AUDIO", "1")
+    st = desktop_audio.get_desktop_audio_status()
+    assert st["enabled"] is True
+    assert st["live_loopback_available"] is True
+    assert st["consent_required"] is True
+
+
+def test_webrtc_streamer_live_monitor_switch_over_datachannel():
+    """Python AgentStreamer handles switch_monitor DataChannel message without tearing down PeerConnection."""
+    from ai_bridge import webrtc_stream
+
+    class _FakeTrack:
+        def __init__(self):
+            self.switched_to = None
+
+        def switch_monitor(self, idx: int) -> int:
+            self.switched_to = idx
+            return idx
+
+    class _FakeDC:
+        readyState = "open"
+
+        def __init__(self):
+            self.sent = []
+
+        def send(self, msg: str):
+            self.sent.append(msg)
+
+    sess = {"id": "mon-sw-1", "mode": "view_only", "monitor_index": 0}
+    streamer = webrtc_stream.AgentStreamer("mon-sw-1", webrtc_stream.DictSignaling(sess))
+    streamer.video_track = _FakeTrack()
+    streamer.input_channel = _FakeDC()
+
+    res = streamer._handle_input_payload('{"type":"switch_monitor","monitor_index":2}')
+    assert res["ok"] is True
+    assert res["monitor_index"] == 2
+    assert streamer.monitor_index == 2
+    assert streamer.video_track.switched_to == 2
+    assert sess["monitor_index"] == 2
+    assert any('"monitor_switched"' in m and '"monitor_index": 2' in m for m in streamer.input_channel.sent)
+
+
+def test_control_plane_a11y_inspector_endpoints_auth_and_policy_gate(tmp_path, monkeypatch):
+    """GET /desktop/a11y/snapshot and POST /desktop/a11y/act enforce RBAC and View-Only policy lock."""
+    from fastapi.testclient import TestClient
+
+    from ai_bridge.control.app import create_app
+
+    monkeypatch.setenv("AI_BRIDGE_CSRF_DISABLED", "1")
+    app = create_app(admin_token="a11y-admin-tok", db_path=tmp_path / "a11y.db")
+    client = TestClient(app)
+    admin_hdr = {"X-Admin-Token": "a11y-admin-tok"}
+
+    monkeypatch.setenv("AI_BRIDGE_A11Y_BACKEND", "native_bridge")
+    monkeypatch.setattr(
+        "ai_bridge.tools.desktop_api.desktop_get_ui_elements",
+        lambda **kw: {
+            "ok": True,
+            "grounding_source": "uia",
+            "screen_width": 1920,
+            "screen_height": 1080,
+            "elements": [
+                {"label": "Save", "type": "button", "x": 100, "y": 50, "width": 80, "height": 30},
+            ],
+        },
+    )
+
+    # Unauthenticated rejected
+    assert client.get("/api/devices/local/desktop/a11y/snapshot").status_code == 401
+
+    # Authenticated snapshot succeeds and returns @ref with bounds
+    snap_resp = client.get("/api/devices/local/desktop/a11y/snapshot", headers=admin_hdr)
+    assert snap_resp.status_code == 200
+    snap_body = snap_resp.json()
+    assert snap_body["ok"] is True
+    assert len(snap_body["elements"]) == 1
+    ref_id = snap_body["elements"][0]["ref"]
+    assert snap_body["elements"][0]["bounds"] == {"x": 100, "y": 50, "width": 80, "height": 30}
+
+    # Missing ref returns 400
+    assert client.post("/api/devices/local/desktop/a11y/act", headers=admin_hdr, json={"action": "click"}).status_code == 400
+
+    # Policy desktop_enabled=False blocks POST /a11y/act (403 View-Only enforced)
+    pol_res = client.post(
+        "/api/policies",
+        headers=admin_hdr,
+        json={"allow_writes": True, "allow_tier3": False, "desktop_enabled": False, "max_tier_unattended": 2},
+    )
+    assert pol_res.status_code == 200
+    blocked = client.post(
+        "/api/devices/local/desktop/a11y/act",
+        headers=admin_hdr,
+        json={"ref": ref_id, "action": "click"},
+    )
+    assert blocked.status_code == 403
+    assert "disabled by active policy" in blocked.json()["detail"].lower()
+
+    # Enabling desktop_enabled + allow_tier3 allows the @ref action through
+    pol_res2 = client.post(
+        "/api/policies",
+        headers=admin_hdr,
+        json={"allow_writes": True, "allow_tier3": True, "desktop_enabled": True, "max_tier_unattended": 3},
+    )
+    assert pol_res2.status_code == 200
+    monkeypatch.setattr(
+        "ai_bridge.tools.desktop.perform_approved_ui_action",
+        lambda action, **kw: {"ok": True, "action": action, "x": kw.get("x"), "y": kw.get("y")},
+    )
+    allowed = client.post(
+        "/api/devices/local/desktop/a11y/act",
+        headers=admin_hdr,
+        json={"ref": ref_id, "action": "click", "session_id": "ui_local"},
+    )
+    assert allowed.status_code == 200
+    assert allowed.json()["ok"] is True

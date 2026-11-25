@@ -160,7 +160,7 @@ Total documented variables: **146**
 
 | Variable | Observed default(s) | Referenced in |
 |---|---|---|
-| `AI_BRIDGE_DESKTOP_AUDIO` | `''` | `src/ai_bridge/webrtc_stream.py` |
+| `AI_BRIDGE_DESKTOP_AUDIO` | `''` | `src/ai_bridge/desktop_audio.py`, `src/ai_bridge/webrtc_stream.py` |
 | `AI_BRIDGE_DESKTOP_ENABLED` | `'0'` | `src/ai_bridge/control/app.py`, `src/ai_bridge/control/task_service.py` |
 | `AI_BRIDGE_TURN_CREDENTIAL` | `''` | `src/ai_bridge/webrtc_stream.py` |
 | `AI_BRIDGE_TURN_HOST` | `''` | `src/ai_bridge/webrtc_stream.py` |
