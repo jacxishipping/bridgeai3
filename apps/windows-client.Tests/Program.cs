@@ -1141,5 +1141,73 @@ await RunTest("NativeToolExecutor: ReadTextBounded & ReadWorkspaceFile cap large
     }
 });
 
+// 43. Hybrid Desktop Accessibility Engine (@ref, STALE_REF, password redaction, idempotency, policy & pinning)
+await RunTest("HybridA11yService: status, redaction, STALE_REF, idempotent actions, policy & pinned window", async () =>
+{
+    var exec = new NativeToolExecutor(new SystemMonitorService(), Path.GetTempPath());
+    var lockedCfg = new AgentGuiConfig
+    {
+        Workspace = Path.GetTempPath(),
+        Policy = new AgentPolicyConfig { AllowTier3 = false, AllowDesktopControl = false, MaxTierUnattended = 2 },
+    };
+
+    var (okStat, statJson) = await exec.ExecuteAsync("desktop_a11y_status", "{}", lockedCfg, CancellationToken.None);
+    Assert(okStat && statJson.Contains("windows_uia") && statJson.Contains("visual_ocr_fallback_available"), "Expected valid hybrid a11y status");
+
+    var (okPerm, permJson) = await exec.ExecuteAsync("desktop_a11y_permissions", "{}", lockedCfg, CancellationToken.None);
+    Assert(okPerm && permJson.Contains("accessibility_granted"), "Expected permissions check payload");
+
+    Assert(HybridA11yService.ValidateRefSyntax("@s1234abcd:e1"), "Valid @ref syntax should pass");
+    Assert(!HybridA11yService.ValidateRefSyntax("bad-ref"), "Invalid @ref syntax should fail");
+    Assert(HybridA11yService.IsSensitiveNode("User Password", "", "Edit", false), "Password label must be treated as sensitive");
+    Assert(HybridA11yService.IsSensitiveNode("API Key", "", "Edit", false), "API Key label must be treated as sensitive");
+
+    // Seed snapshot 1 with password field + checked checkbox
+    var snap1 = HybridA11yService.SeedSnapshotForTesting(new[]
+    {
+        new HybridA11yRefEntry("@s1111aaaa:e1", "s1111aaaa", "Edit", "Account Password", "pwdBox", "Login Dialog", 10, 10, 120, 24, 70, 22, true, true, "Value", "super-secret", null, null, null),
+        new HybridA11yRefEntry("@s1111aaaa:e2", "s1111aaaa", "CheckBox", "Remember Me", "chkRemember", "Login Dialog", 10, 40, 20, 20, 20, 50, true, false, "Toggle", "", true, null, null),
+    }, "s1111aaaa");
+
+    var (okVal, valJson) = await exec.ExecuteAsync("desktop_a11y_get_value", "{\"ref\":\"@s1111aaaa:e1\"}", lockedCfg, CancellationToken.None);
+    Assert(okVal && valJson.Contains("[REDACTED]") && !valJson.Contains("super-secret"), $"Password value must be redacted: {valJson}");
+
+    // Tier-3 policy denial when desktop control disabled
+    var (okDenied, _) = await exec.ExecuteAsync("desktop_a11y_act", "{\"ref\":\"@s1111aaaa:e2\",\"action\":\"check\"}", lockedCfg, CancellationToken.None);
+    Assert(!okDenied, "desktop_a11y_act must fail when Tier 3 / desktop control is disabled");
+
+    var openCfg = new AgentGuiConfig
+    {
+        Workspace = Path.GetTempPath(),
+        Policy = new AgentPolicyConfig { AllowTier3 = true, AllowDesktopControl = true, MaxTierUnattended = 3 },
+    };
+
+    // Idempotent check on already-checked checkbox succeeds headless with noop=true
+    var (okNoop, noopJson) = await exec.ExecuteAsync("desktop_a11y_act", "{\"ref\":\"@s1111aaaa:e2\",\"action\":\"check\"}", openCfg, CancellationToken.None);
+    Assert(okNoop && noopJson.Contains("\"noop\": true"), $"Expected idempotent noop check: {noopJson}");
+
+    // Atomic batch of idempotent actions succeeds
+    var (okBatch, batchJson) = await exec.ExecuteAsync("desktop_a11y_batch", "{\"steps\":[{\"ref\":\"@s1111aaaa:e2\",\"action\":\"check\"}]}", openCfg, CancellationToken.None);
+    Assert(okBatch && batchJson.Contains("\"steps_executed\": 1"), $"Expected batch success: {batchJson}");
+
+    // PinnedWindowTitle rejects acting on an element from a different window
+    openCfg.DeviceAgent.PinnedWindowTitle = "Other App";
+    var (okPinnedBlock, _) = await exec.ExecuteAsync("desktop_a11y_act", "{\"ref\":\"@s1111aaaa:e2\",\"action\":\"check\"}", openCfg, CancellationToken.None);
+    Assert(!okPinnedBlock, "Scoped focus must block ref belonging to non-pinned window");
+    openCfg.DeviceAgent.PinnedWindowTitle = "";
+
+    // Seeding a new snapshot invalidates previous refs -> STALE_REF
+    HybridA11yService.SeedSnapshotForTesting(Array.Empty<HybridA11yRefEntry>(), "s2222bbbb");
+    var (okStale, staleJson) = await exec.ExecuteAsync("desktop_a11y_act", "{\"ref\":\"@s1111aaaa:e2\",\"action\":\"check\"}", openCfg, CancellationToken.None);
+    Assert(okStale && staleJson.Contains("STALE_REF"), $"Expected STALE_REF after snapshot superseded: {staleJson}");
+
+    // Runtime function gating recognises desktop_a11y_snapshot and desktop_a11y_act
+    openCfg.DeviceAgent.Functions = AgentFunctionPermissions.SyncFromEffectivePolicy(openCfg.Policy);
+    Assert(DeviceAgentRuntimeService.IsToolAllowed("desktop_a11y_snapshot", openCfg, out _), "desktop_a11y_snapshot should be allowed when UI tools enabled");
+    Assert(DeviceAgentRuntimeService.IsToolAllowed("desktop_a11y_act", openCfg, out _), "desktop_a11y_act should be allowed when UI tools enabled");
+    Assert(DeviceAgentRuntimeService.IsVisualMutatingTool("desktop_a11y_act"), "desktop_a11y_act should be classified as visual mutating");
+    HybridA11yService.ClearSnapshotStore();
+});
+
 Console.WriteLine($"\nSummary: {passed} passed, {failed} failed ({passed + failed} total)");
 return failed > 0 ? 1 : 0;

@@ -858,6 +858,16 @@ DESKTOP_ROUTING_TOOLS = {
     "desktop_get_windows",
     "desktop_wait",
     "desktop_verify_action",
+    "desktop_a11y_status",
+    "desktop_a11y_permissions",
+    "desktop_a11y_snapshot",
+    "desktop_a11y_find",
+    "desktop_a11y_get_value",
+    "desktop_a11y_list_surfaces",
+    "desktop_a11y_list_apps",
+    "desktop_a11y_act",
+    "desktop_a11y_batch",
+    "desktop_a11y_wait",
 }
 
 
@@ -2100,6 +2110,195 @@ def desktop_get_windows(device: str | None = None) -> dict:
     device (optional): Target Windows device name/ID, or 'local'."""
     approved = _consume_local_approval("desktop_get_windows")
     return tools.desktop_get_windows(approval_granted=approved)
+
+
+@mcp.tool()
+@device_aware("desktop_a11y_status")
+@_gated
+def desktop_a11y_status(device: str | None = None) -> dict:
+    """Report Hybrid Desktop Accessibility Engine status (FFI/CLI/native backend, permissions, ref store).
+    device (optional): Target device name/ID, or 'local'."""
+    from . import hybrid_desktop
+
+    return hybrid_desktop.describe_hybrid_a11y_status()
+
+
+@mcp.tool()
+@device_aware("desktop_a11y_permissions")
+@_gated
+def desktop_a11y_permissions(device: str | None = None) -> dict:
+    """Check OS accessibility and screen-recording permissions with remediation guidance.
+    device (optional): Target device name/ID, or 'local'."""
+    from . import hybrid_desktop
+
+    return hybrid_desktop.check_a11y_permissions()
+
+
+@mcp.tool()
+@device_aware("desktop_a11y_snapshot")
+@_gated
+def desktop_a11y_snapshot(
+    app: str = "",
+    window_title: str = "",
+    window_id: str = "",
+    root_ref: str = "",
+    skeleton: bool = False,
+    compact: bool = True,
+    max_depth: int = 10,
+    max_elements: int = 80,
+    monitor_index: int | None = None,
+    device: str | None = None,
+) -> dict:
+    """Capture a structured accessibility tree snapshot with ephemeral @ref IDs (password fields redacted).
+    device (optional): Target device name/ID, or 'local'."""
+    from . import hybrid_desktop
+
+    return hybrid_desktop.a11y_snapshot(
+        app=app,
+        window_title=window_title,
+        window_id=window_id,
+        root_ref=root_ref,
+        skeleton=skeleton,
+        compact=compact,
+        max_depth=max_depth,
+        max_elements=max_elements,
+        monitor_index=monitor_index,
+    )
+
+
+@mcp.tool()
+@device_aware("desktop_a11y_find")
+@_gated
+def desktop_a11y_find(
+    query: str = "",
+    role: str = "",
+    app: str = "",
+    window_title: str = "",
+    max_results: int = 25,
+    device: str | None = None,
+) -> dict:
+    """Find accessibility elements by query/role/app returning @ref IDs without dumping the entire tree.
+    device (optional): Target device name/ID, or 'local'."""
+    from . import hybrid_desktop
+
+    return hybrid_desktop.a11y_find(
+        query=query,
+        role=role,
+        app=app,
+        window_title=window_title,
+        max_results=max_results,
+    )
+
+
+@mcp.tool()
+@device_aware("desktop_a11y_get_value")
+@_gated
+def desktop_a11y_get_value(ref: str, device: str | None = None) -> dict:
+    """Read text/value/state of a snapshot @ref (password fields redacted; rejects stale refs with STALE_REF).
+    device (optional): Target device name/ID, or 'local'."""
+    from . import hybrid_desktop
+
+    return hybrid_desktop.a11y_get_value(ref)
+
+
+@mcp.tool()
+@device_aware("desktop_a11y_list_surfaces")
+@_gated
+def desktop_a11y_list_surfaces(app: str = "", device: str | None = None) -> dict:
+    """List active GUI surfaces (windows, dialogs, menus, context menus, popovers, sheets).
+    device (optional): Target device name/ID, or 'local'."""
+    from . import hybrid_desktop
+
+    return hybrid_desktop.a11y_list_surfaces(app=app)
+
+
+@mcp.tool()
+@device_aware("desktop_a11y_list_apps")
+@_gated
+def desktop_a11y_list_apps(device: str | None = None) -> dict:
+    """List running GUI applications exposing accessibility surfaces.
+    device (optional): Target device name/ID, or 'local'."""
+    from . import hybrid_desktop
+
+    return hybrid_desktop.a11y_list_apps()
+
+
+@mcp.tool()
+@device_aware("desktop_a11y_act")
+@_gated
+def desktop_a11y_act(
+    ref: str,
+    action: str = "click",
+    text: str = "",
+    option: str = "",
+    headed: bool = False,
+    fallback_to_visual: bool = True,
+    fallback_text: str = "",
+    device: str | None = None,
+) -> dict:
+    """Execute a governed accessibility action on a snapshot @ref with optional visual/OCR fallback.
+    Actions: click, double_click, right_click, hover, type, set_value, clear, check, uncheck,
+    toggle, select, expand, collapse, scroll_to, focus, show_menu.
+    device (optional): Target device name/ID, or 'local'."""
+    from . import hybrid_desktop
+
+    approved = _consume_local_approval("desktop_a11y_act")
+    return hybrid_desktop.a11y_act(
+        ref,
+        action=action,
+        text=text,
+        option=option,
+        headed=headed,
+        fallback_to_visual=fallback_to_visual,
+        fallback_text=fallback_text,
+        approval_granted=approved,
+    )
+
+
+@mcp.tool()
+@device_aware("desktop_a11y_batch")
+@_gated
+def desktop_a11y_batch(
+    steps: list[dict],
+    stop_on_error: bool = True,
+    device: str | None = None,
+) -> dict:
+    """Execute up to 25 accessibility actions in one atomic policy-checked round-trip.
+    device (optional): Target device name/ID, or 'local'."""
+    from . import hybrid_desktop
+
+    approved = _consume_local_approval("desktop_a11y_batch")
+    return hybrid_desktop.a11y_batch(
+        steps,
+        stop_on_error=stop_on_error,
+        approval_granted=approved,
+    )
+
+
+@mcp.tool()
+@device_aware("desktop_a11y_wait")
+@_gated
+def desktop_a11y_wait(
+    condition: str = "exists",
+    query: str = "",
+    role: str = "",
+    app: str = "",
+    window_title: str = "",
+    timeout_seconds: float = 10.0,
+    device: str | None = None,
+) -> dict:
+    """Wait until an accessibility element or window condition (exists, gone, enabled, window_open, window_closed) is met.
+    device (optional): Target device name/ID, or 'local'."""
+    from . import hybrid_desktop
+
+    return hybrid_desktop.a11y_wait(
+        condition=condition,
+        query=query,
+        role=role,
+        app=app,
+        window_title=window_title,
+        timeout_seconds=timeout_seconds,
+    )
 
 
 @mcp.tool()

@@ -52,6 +52,14 @@ public sealed class DeviceAgentRuntimeService : IDisposable
         new("move_resize_window", "window", true, "Move and/or resize a window by title substring.", new { type = "object", properties = new { title = new { type = "string" }, x = new { type = "integer" }, y = new { type = "integer" }, width = new { type = "integer" }, height = new { type = "integer" } }, required = new[] { "title" } }),
 
         new("list_ui_elements", "ui", false, "Inspect interactive UI Automation elements (buttons, inputs, menus) optionally scoped to a window.", new { type = "object", properties = new { query = new { type = "string" }, window = new { type = "string" }, control_type = new { type = "string" }, limit = new { type = "integer" } } }),
+        new("desktop_a11y_snapshot", "ui", false, "Capture a token-efficient accessibility tree snapshot with deterministic @ref IDs (password fields redacted; supports skeleton/compact/root_ref).", new { type = "object", properties = new { window_title = new { type = "string" }, root_ref = new { type = "string" }, skeleton = new { type = "boolean" }, compact = new { type = "boolean" }, max_depth = new { type = "integer" }, max_elements = new { type = "integer" } } }),
+        new("desktop_a11y_find", "ui", false, "Search the accessibility tree by query and/or role returning @ref IDs without dumping the full tree.", new { type = "object", properties = new { query = new { type = "string" }, role = new { type = "string" }, window_title = new { type = "string" }, max_results = new { type = "integer" } } }),
+        new("desktop_a11y_get_value", "ui", false, "Read live text/value/checked/expanded state of a snapshot @ref (rejects stale refs with STALE_REF).", new { type = "object", properties = new { @ref = new { type = "string" } }, required = new[] { "ref" } }),
+        new("desktop_a11y_list_surfaces", "ui", false, "List active GUI surfaces including windows, menus, context menus, popovers, and dialogs.", new { type = "object", properties = new { app = new { type = "string" } } }),
+        new("desktop_a11y_list_apps", "ui", false, "List running GUI applications exposing accessibility surfaces.", new { type = "object", properties = new { } }),
+        new("desktop_a11y_act", "ui", true, "Execute a headless-first accessibility action on a snapshot @ref (click, double_click, right_click, hover, type, set_value, clear, check, uncheck, toggle, select, expand, collapse, scroll_to, focus, show_menu) with automatic visual/OCR fallback.", new { type = "object", properties = new { @ref = new { type = "string" }, action = new { type = "string" }, text = new { type = "string" }, option = new { type = "string" }, submit = new { type = "boolean" }, headed = new { type = "boolean" }, fallback_to_visual = new { type = "boolean" }, fallback_text = new { type = "string" } }, required = new[] { "ref" } }),
+        new("desktop_a11y_batch", "ui", true, "Execute up to 25 accessibility actions in one atomic round-trip.", new { type = "object", properties = new { steps = new { type = "array", items = new { type = "object" } }, stop_on_error = new { type = "boolean" } }, required = new[] { "steps" } }),
+        new("desktop_a11y_wait", "ui", false, "Wait for an accessibility element or window condition (exists, gone, enabled, window_open, window_closed).", new { type = "object", properties = new { condition = new { type = "string" }, query = new { type = "string" }, role = new { type = "string" }, window_title = new { type = "string" }, timeout_seconds = new { type = "number" } } }),
         new("click_element", "ui", true, "Click a UI element by name, AutomationId, or Set-of-Marks mark_id.", new { type = "object", properties = new { name = new { type = "string" }, mark_id = new { type = "string" }, window = new { type = "string" }, button = new { type = "string" }, double_click = new { type = "boolean" } } }),
         new("invoke_element", "ui", true, "Invoke, toggle, select, or expand a native UI control by name.", new { type = "object", properties = new { name = new { type = "string" }, window = new { type = "string" } }, required = new[] { "name" } }),
         new("set_element_value", "ui", true, "Set text inside an input field by name or AutomationId, with optional Enter submit.", new { type = "object", properties = new { name = new { type = "string" }, value = new { type = "string" }, submit = new { type = "boolean" }, window = new { type = "string" } }, required = new[] { "name", "value" } }),
@@ -149,6 +157,9 @@ public sealed class DeviceAgentRuntimeService : IDisposable
                 or "move_resize_window" => "window",
 
             "get_ui_tree" or "find_elements" or "list_ui_elements" or "desktop_get_ui_elements"
+                or "desktop_a11y_status" or "desktop_a11y_permissions" or "desktop_a11y_snapshot"
+                or "desktop_a11y_find" or "desktop_a11y_get_value" or "desktop_a11y_list_surfaces"
+                or "desktop_a11y_list_apps" or "desktop_a11y_act" or "desktop_a11y_batch" or "desktop_a11y_wait"
                 or "click_element" or "click_text" or "click_text_ocr" or "invoke_element" or "set_element_value"
                 or "type_into_element" or "focus_element" or "perform_approved_ui_action"
                 or "mouse_move" or "desktop_mouse_move" or "mouse_click" or "desktop_click"
@@ -788,6 +799,7 @@ public sealed class DeviceAgentRuntimeService : IDisposable
         var t = toolName.Trim().ToLowerInvariant();
         return t is "mouse_draw_path" or "draw_path" or "mouse_drag" or "mouse_click" or "desktop_click"
             or "click_element" or "click_text" or "click_text_ocr" or "invoke_element" or "set_element_value"
+            or "desktop_a11y_act" or "desktop_a11y_batch"
             or "desktop_open_application" or "launch_approved_application" or "open_application"
             or "maximize_window" or "focus_window" or "keyboard_type" or "press_hotkey";
     }

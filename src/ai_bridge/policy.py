@@ -192,6 +192,16 @@ TOOL_TIERS: dict[str, RiskTier] = {
     "git_log": RiskTier.READ_ONLY,
     "git_commit": RiskTier.SENSITIVE,
     "desktop_get_ui_elements": RiskTier.READ_ONLY,
+    "desktop_a11y_status": RiskTier.READ_ONLY,
+    "desktop_a11y_permissions": RiskTier.READ_ONLY,
+    "desktop_a11y_snapshot": RiskTier.READ_ONLY,
+    "desktop_a11y_find": RiskTier.READ_ONLY,
+    "desktop_a11y_get_value": RiskTier.READ_ONLY,
+    "desktop_a11y_list_surfaces": RiskTier.READ_ONLY,
+    "desktop_a11y_list_apps": RiskTier.READ_ONLY,
+    "desktop_a11y_wait": RiskTier.READ_ONLY,
+    "desktop_a11y_act": RiskTier.SENSITIVE,
+    "desktop_a11y_batch": RiskTier.SENSITIVE,
     "desktop_veto_action": RiskTier.READ_ONLY,
     "desktop_anticipate_action": RiskTier.READ_ONLY,
     "browser_snapshot": RiskTier.READ_ONLY,
@@ -352,6 +362,8 @@ def decide(policy: Policy, tool: str, *, approval_granted: bool = False, device_
             "desktop_open_application",
             "desktop_wait",
             "desktop_verify_action",
+            "desktop_a11y_act",
+            "desktop_a11y_batch",
         }
         if canonical in desktop_tools and not policy.desktop_enabled:
             return Decision(False, reason="Desktop automation is not enabled.")
