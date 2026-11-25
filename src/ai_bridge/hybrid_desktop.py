@@ -48,7 +48,7 @@ AGENT_DESKTOP_BIN_ENV = "AI_BRIDGE_AGENT_DESKTOP_BIN"
 AGENT_DESKTOP_LIB_ENV = "AI_BRIDGE_AGENT_DESKTOP_LIB"
 
 _VALID_MODES = frozenset({"auto", "ffi", "cli", "native", "off"})
-_REF_RE = re.compile(r"^@[A-Za-z0-9_-]{2,40}:[A-Za-z0-9_.-]{1,40}$")
+_REF_RE = re.compile(r"^@(?:[A-Za-z0-9_-]{2,40}:)?[A-Za-z0-9_.-]{1,40}$")
 _SECRET_HINT_RE = re.compile(
     r"(password|passwd|passcode|pin\b|secret|api[_ -]?key|token|ssn|cvv|credit.?card)",
     re.IGNORECASE,
@@ -61,6 +61,7 @@ SUPPORTED_ACTIONS = frozenset(
         "right_click",
         "hover",
         "type",
+        "fill",
         "set_value",
         "clear",
         "check",
@@ -81,6 +82,7 @@ _CLI_ACTION_MAP: dict[str, str] = {
     "right_click": "right-click",
     "hover": "hover",
     "type": "type",
+    "fill": "fill",
     "set_value": "set-value",
     "clear": "clear",
     "check": "check",
@@ -93,6 +95,27 @@ _CLI_ACTION_MAP: dict[str, str] = {
     "focus": "focus",
     "show_menu": "click",
 }
+
+_INTERACTIVE_ROLES = frozenset(
+    {
+        "button",
+        "checkbox",
+        "combobox",
+        "edit",
+        "hyperlink",
+        "link",
+        "listitem",
+        "menu",
+        "menuitem",
+        "radiobutton",
+        "slider",
+        "spinbutton",
+        "tabitem",
+        "textfield",
+        "togglebutton",
+        "treeitem",
+    }
+)
 
 _SNAPSHOT_TTL_SECONDS = 300.0
 _MAX_BATCH_STEPS = 25
@@ -115,56 +138,125 @@ class _RefEntry:
     raw: dict[str, Any] = field(default_factory=dict)
 
 
+def _structured_error(
+    code: str,
+    message: str,
+    *,
+    suggestion: str = "",
+    strategy: str = "",
+    retryable: bool = False,
+    delivery: str = "not_delivered",
+    retry: str = "unsafe",
+    extra: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Emit an ``agent-desktop`` v2.6-compatible structured error payload."""
+    out: dict[str, Any] = {
+        "ok": False,
+        "error_code": code,
+        "error": message,
+        "error_detail": {
+            "code": code,
+            "message": message,
+            "suggestion": suggestion,
+            "recovery": {"strategy": strategy or ("refresh_snapshot_then_retry_original" if retryable else "none"), "retryable": bool(retryable)},
+            "disposition": {"delivery": delivery, "retry": retry},
+        },
+    }
+    if suggestion:
+        out["retry_hint"] = suggestion
+    if extra:
+        out.update(extra)
+    return out
+
+
+def _parse_cli_error(raw: dict[str, Any], default_code: str = "CLI_ERROR") -> dict[str, Any]:
+    """Normalize an ``agent-desktop`` v2.6 error envelope (dict or string ``error``)."""
+    err = raw.get("error")
+    if isinstance(err, dict):
+        code = str(err.get("code") or default_code)
+        msg = str(err.get("message") or "agent-desktop command failed")
+        rec = err.get("recovery") if isinstance(err.get("recovery"), dict) else {}
+        disp = err.get("disposition") if isinstance(err.get("disposition"), dict) else {}
+        return _structured_error(
+            code,
+            msg,
+            suggestion=str(err.get("suggestion") or ""),
+            strategy=str(rec.get("strategy") or ""),
+            retryable=bool(rec.get("retryable", False)),
+            delivery=str(disp.get("delivery") or "not_delivered"),
+            retry=str(disp.get("retry") or ("safe" if rec.get("retryable") else "unsafe")),
+        )
+    return _structured_error(
+        str(raw.get("error_code") or default_code),
+        str(err or "agent-desktop command failed"),
+    )
+
+
 class _SnapshotStore:
-    """Thread-safe ephemeral ``@ref`` store with generation-based ``STALE_REF`` checks."""
+    """Thread-safe ephemeral ``@ref`` store with per-session namespaces & ``STALE_REF`` checks."""
 
     def __init__(self) -> None:
         self._lock = threading.RLock()
-        self._active_snapshot_id: str = ""
-        self._created_at: float = 0.0
-        self._backend: str = ""
-        self._refs: dict[str, _RefEntry] = {}
-        self._seen_snapshots: set[str] = set()
+        self._sessions: dict[str, dict[str, Any]] = {}
 
-    def store(self, snapshot_id: str, backend: str, entries: list[_RefEntry]) -> None:
-        with self._lock:
-            self._active_snapshot_id = snapshot_id
-            self._created_at = time.monotonic()
-            self._backend = backend
-            self._refs = {e.ref: e for e in entries}
-            self._seen_snapshots.add(snapshot_id)
-            if len(self._seen_snapshots) > 200:
-                self._seen_snapshots = {snapshot_id}
+    def _slot(self, session_id: str | None) -> str:
+        return (session_id or "default").strip() or "default"
 
-    def resolve(self, ref: str) -> tuple[_RefEntry | None, str | None]:
+    def store(self, snapshot_id: str, backend: str, entries: list[_RefEntry], *, session_id: str = "default") -> None:
+        key = self._slot(session_id)
         with self._lock:
-            if not self._active_snapshot_id:
+            self._sessions[key] = {
+                "active_snapshot_id": snapshot_id,
+                "created_at": time.monotonic(),
+                "backend": backend,
+                "refs": {e.ref: e for e in entries},
+            }
+
+    def resolve(self, ref: str, *, session_id: str = "default") -> tuple[_RefEntry | None, str | None]:
+        key = self._slot(session_id)
+        with self._lock:
+            slot = self._sessions.get(key)
+            if not slot or not slot["active_snapshot_id"]:
                 return None, "STALE_REF"
-            if (time.monotonic() - self._created_at) > _SNAPSHOT_TTL_SECONDS:
+            if (time.monotonic() - float(slot["created_at"])) > _SNAPSHOT_TTL_SECONDS:
                 return None, "STALE_REF"
-            entry = self._refs.get(ref)
-            if entry is not None and entry.snapshot_id == self._active_snapshot_id:
+            entry = slot["refs"].get(ref)
+            if entry is not None and entry.snapshot_id == slot["active_snapshot_id"]:
                 return entry, None
             return None, "STALE_REF"
 
-    def stats(self) -> dict[str, Any]:
+    def stats(self, *, session_id: str = "default") -> dict[str, Any]:
+        key = self._slot(session_id)
         with self._lock:
-            age_s = round(time.monotonic() - self._created_at, 2) if self._created_at else None
-            expired = bool(age_s is not None and age_s > _SNAPSHOT_TTL_SECONDS)
+            slot = self._sessions.get(key)
+            if not slot:
+                return {
+                    "session_id": key,
+                    "active_snapshot_id": None,
+                    "active_backend": None,
+                    "cached_ref_count": 0,
+                    "snapshot_age_seconds": None,
+                    "snapshot_expired": False,
+                    "active_sessions": len(self._sessions),
+                }
+            age_s = round(time.monotonic() - float(slot["created_at"]), 2)
+            expired = age_s > _SNAPSHOT_TTL_SECONDS
             return {
-                "active_snapshot_id": self._active_snapshot_id or None,
-                "active_backend": self._backend or None,
-                "cached_ref_count": 0 if expired else len(self._refs),
+                "session_id": key,
+                "active_snapshot_id": slot["active_snapshot_id"] or None,
+                "active_backend": slot["backend"] or None,
+                "cached_ref_count": 0 if expired else len(slot["refs"]),
                 "snapshot_age_seconds": age_s,
                 "snapshot_expired": expired,
+                "active_sessions": len(self._sessions),
             }
 
-    def clear(self) -> None:
+    def clear(self, *, session_id: str | None = None) -> None:
         with self._lock:
-            self._active_snapshot_id = ""
-            self._created_at = 0.0
-            self._backend = ""
-            self._refs.clear()
+            if session_id is None:
+                self._sessions.clear()
+            else:
+                self._sessions.pop(self._slot(session_id), None)
 
 
 _STORE = _SnapshotStore()
@@ -415,7 +507,8 @@ def _run_cli(args: list[str], *, stdin_text: str | None = None, timeout: float =
             pass
     if proc.returncode != 0:
         err = (proc.stderr or raw or f"agent-desktop exited with code {proc.returncode}").strip()
-        return {"ok": False, "error_code": "CLI_ERROR", "error": err[:500]}
+        code = "INVALID_ARGS" if proc.returncode == 2 else "CLI_ERROR"
+        return _structured_error(code, err[:500])
     return {"ok": True, "raw": raw}
 
 
@@ -499,7 +592,7 @@ def check_a11y_permissions() -> dict[str, Any]:
     cli = find_agent_desktop_cli()
     if a11y_backend_mode() in ("auto", "cli") and cli:
         try:
-            res = _run_cli(["permissions", "--json"], timeout=10.0)
+            res = _run_cli(["permissions"], timeout=10.0)
             if res.get("ok"):
                 return {
                     "ok": True,
@@ -584,18 +677,21 @@ def a11y_snapshot(
     window_id: str = "",
     root_ref: str = "",
     skeleton: bool = False,
+    interactive_only: bool = False,
     compact: bool = True,
     max_depth: int = 10,
     max_elements: int = 80,
     monitor_index: int | None = None,
+    session_id: str = "default",
+    agent_id: str = "",
     policy: Policy | None = None,
 ) -> dict[str, Any]:
     """Capture a structured accessibility snapshot with ephemeral ``@ref`` IDs."""
     backend = _select_backend()
     if backend == "off":
-        return {"ok": False, "error_code": "BACKEND_DISABLED", "error": "Hybrid accessibility backend is disabled (AI_BRIDGE_A11Y_BACKEND=off)."}
+        return _structured_error("BACKEND_DISABLED", "Hybrid accessibility backend is disabled (AI_BRIDGE_A11Y_BACKEND=off).")
     if backend == "unavailable":
-        return {"ok": False, "error_code": "BACKEND_UNAVAILABLE", "error": f"Requested backend {a11y_backend_mode()!r} is not installed."}
+        return _structured_error("BACKEND_UNAVAILABLE", f"Requested backend {a11y_backend_mode()!r} is not installed.")
 
     if root_ref:
         _validate_ref(root_ref)
@@ -612,7 +708,7 @@ def a11y_snapshot(
         if lib_path:
             try:
                 raw = _FfiBridge(lib_path).snapshot(
-                    session_id=snapshot_id,
+                    session_id=session_id or snapshot_id,
                     app=app,
                     max_depth=max_depth,
                     skeleton=skeleton,
@@ -621,13 +717,15 @@ def a11y_snapshot(
                 sanitized = sanitize_a11y_tree(raw)
                 entries = _extract_entries_from_external(sanitized, snapshot_id, app, window_title)
                 entries = [e for e in entries if _app_allowed_by_policy(e.app or app, policy)]
-                _STORE.store(snapshot_id, "agent_desktop_ffi", entries)
+                _STORE.store(snapshot_id, "agent_desktop_ffi", entries, session_id=session_id)
                 return {
                     "ok": True,
                     "backend": "agent_desktop_ffi",
+                    "session_id": session_id,
                     "snapshot_id": snapshot_id,
                     "platform_adapter": _platform_adapter_name(),
                     "skeleton": bool(skeleton),
+                    "interactive_only": bool(interactive_only),
                     "compact": bool(compact),
                     "ref_count": len(entries),
                     "elements": [
@@ -649,11 +747,17 @@ def a11y_snapshot(
                 if a11y_backend_mode() == "ffi":
                     raise
 
-    # 2. Try agent-desktop CLI subprocess
+    # 2. Try agent-desktop CLI subprocess (v2.6: stdout is always a single JSON envelope)
     if backend in ("agent_desktop_ffi", "agent_desktop_cli") and find_agent_desktop_cli():
-        cmd = ["snapshot", "--json"]
+        cmd = ["snapshot"]
+        if session_id and session_id != "default":
+            cmd.extend(["--session", session_id])
+        if agent_id:
+            cmd.extend(["--agent-id", agent_id])
         if skeleton:
             cmd.append("--skeleton")
+        if interactive_only:
+            cmd.append("--interactive")
         if compact:
             cmd.append("--compact")
         if app:
@@ -667,23 +771,21 @@ def a11y_snapshot(
         if raw.get("ok", True) and not raw.get("error"):
             sanitized = sanitize_a11y_tree(raw)
             entries = _extract_entries_from_external(sanitized, snapshot_id, app, window_title)
-            if not entries and isinstance(sanitized.get("data"), dict):
-                # Keep snapshot id if CLI returned a ref-free summary
-                pass
-            else:
-                # Re-key snapshot_id to match actual CLI ref prefix if provided
-                first_prefix = entries[0].ref.split(":", 1)[0].lstrip("@") if entries else snapshot_id
+            if entries:
+                first_prefix = entries[0].ref.split(":", 1)[0].lstrip("@") if ":" in entries[0].ref else snapshot_id
                 snapshot_id = first_prefix or snapshot_id
                 for e in entries:
                     e.snapshot_id = snapshot_id
             entries = [e for e in entries if _app_allowed_by_policy(e.app or app, policy)]
-            _STORE.store(snapshot_id, "agent_desktop_cli", entries)
+            _STORE.store(snapshot_id, "agent_desktop_cli", entries, session_id=session_id)
             return {
                 "ok": True,
                 "backend": "agent_desktop_cli",
+                "session_id": session_id,
                 "snapshot_id": snapshot_id,
                 "platform_adapter": _platform_adapter_name(),
                 "skeleton": bool(skeleton),
+                "interactive_only": bool(interactive_only),
                 "compact": bool(compact),
                 "ref_count": len(entries),
                 "elements": [
@@ -702,7 +804,7 @@ def a11y_snapshot(
                 "tree": sanitized,
             }
         if a11y_backend_mode() == "cli":
-            return raw
+            return _parse_cli_error(raw)
 
     # 3. Built-in native_bridge fallback (zero external dependencies)
     from .tools.desktop_api import desktop_get_ui_elements
@@ -728,6 +830,8 @@ def a11y_snapshot(
         el_app = str(el.get("app") or el.get("process") or app or "").strip()
         el_win = str(el.get("window_title") or (el_name if el_role == "window" else window_title) or "").strip()
 
+        if interactive_only and el_role.lower().replace("_", "") not in _INTERACTIVE_ROLES:
+            continue
         if app_filter and app_filter not in el_app.lower() and app_filter not in el_win.lower():
             continue
         if win_filter and win_filter not in el_win.lower() and win_filter not in el_name.lower():
@@ -777,14 +881,16 @@ def a11y_snapshot(
             item["redacted"] = True
         public_elements.append(item)
 
-    _STORE.store(snapshot_id, "native_bridge", entries)
+    _STORE.store(snapshot_id, "native_bridge", entries, session_id=session_id)
     return {
         "ok": True,
         "backend": "native_bridge",
         "grounding_source": ui_res.get("grounding_source", "none"),
+        "session_id": session_id,
         "snapshot_id": snapshot_id,
         "platform_adapter": _platform_adapter_name(),
         "skeleton": bool(skeleton),
+        "interactive_only": bool(interactive_only),
         "compact": bool(compact),
         "ref_count": len(entries),
         "elements": public_elements,
@@ -838,23 +944,29 @@ def a11y_find(
     }
 
 
-def a11y_get_value(ref: str, *, policy: Policy | None = None) -> dict[str, Any]:
+def a11y_get_value(ref: str, *, session_id: str = "default", policy: Policy | None = None) -> dict[str, Any]:
     """Read live text/value/state of a specific snapshot ``@ref`` (password redacted)."""
     ref_id = _validate_ref(ref)
-    entry, err = _STORE.resolve(ref_id)
+    entry, err = _STORE.resolve(ref_id, session_id=session_id)
     if err or entry is None:
-        return {
-            "ok": False,
-            "error_code": "STALE_REF",
-            "ref": ref_id,
-            "error": f"Element ref {ref_id} is stale or unknown.",
-            "retry_hint": "Call desktop_a11y_snapshot or desktop_a11y_find to obtain fresh refs.",
-        }
+        return _structured_error(
+            "STALE_REF",
+            f"Element ref {ref_id} is stale or unknown.",
+            suggestion="Call desktop_a11y_snapshot or desktop_a11y_find to obtain fresh refs.",
+            strategy="refresh_snapshot_then_retry_original",
+            retryable=True,
+            delivery="not_delivered",
+            retry="safe",
+            extra={"ref": ref_id},
+        )
     if not _app_allowed_by_policy(entry.app or entry.window_title, policy):
         raise PermissionError(f"Application {(entry.app or entry.window_title)!r} is not in policy allowed_apps.")
 
-    if _STORE.stats().get("active_backend") == "agent_desktop_cli" and find_agent_desktop_cli():
-        cli_res = _run_cli(["get-value", ref_id, "--json"])
+    if _STORE.stats(session_id=session_id).get("active_backend") == "agent_desktop_cli" and find_agent_desktop_cli():
+        cmd = ["get-value", ref_id]
+        if session_id and session_id != "default":
+            cmd.extend(["--session", session_id])
+        cli_res = _run_cli(cmd)
         if cli_res.get("ok"):
             data = sanitize_a11y_tree(cli_res.get("data", cli_res))
             if entry.is_password and isinstance(data, dict):
@@ -864,7 +976,7 @@ def a11y_get_value(ref: str, *, policy: Policy | None = None) -> dict[str, Any]:
 
     return {
         "ok": True,
-        "backend": _STORE.stats().get("active_backend") or "native_bridge",
+        "backend": _STORE.stats(session_id=session_id).get("active_backend") or "native_bridge",
         "ref": ref_id,
         "snapshot_id": entry.snapshot_id,
         "role": entry.role,
@@ -883,7 +995,7 @@ def a11y_list_surfaces(*, app: str = "", policy: Policy | None = None) -> dict[s
     if app and not _app_allowed_by_policy(app, policy):
         raise PermissionError(f"Application {app!r} is not in policy allowed_apps.")
     if _select_backend() == "agent_desktop_cli" and find_agent_desktop_cli():
-        cmd = ["list-surfaces", "--json"]
+        cmd = ["list-surfaces"]
         if app:
             cmd.extend(["--app", app])
         res = _run_cli(cmd)
@@ -930,7 +1042,7 @@ def a11y_list_surfaces(*, app: str = "", policy: Policy | None = None) -> dict[s
 def a11y_list_apps(*, policy: Policy | None = None) -> dict[str, Any]:
     """List running GUI applications exposing accessibility surfaces."""
     if _select_backend() == "agent_desktop_cli" and find_agent_desktop_cli():
-        res = _run_cli(["list-apps", "--json"])
+        res = _run_cli(["list-apps"])
         if res.get("ok"):
             apps = res.get("data") if isinstance(res.get("data"), list) else []
             filtered = [
@@ -962,6 +1074,11 @@ def a11y_act(
     text: str = "",
     option: str = "",
     headed: bool = False,
+    wait_for: str = "",
+    wait_for_gone: str = "",
+    wait_timeout_seconds: float = 10.0,
+    session_id: str = "default",
+    agent_id: str = "",
     fallback_to_visual: bool = True,
     fallback_text: str = "",
     approval_granted: bool = False,
@@ -976,39 +1093,50 @@ def a11y_act(
 
     ref_id = _validate_ref(ref)
     act = _validate_action(action)
-    entry, err = _STORE.resolve(ref_id)
+    entry, err = _STORE.resolve(ref_id, session_id=session_id)
     if err or entry is None:
-        return {
-            "ok": False,
-            "error_code": "STALE_REF",
-            "ref": ref_id,
-            "action": act,
-            "error": f"Element ref {ref_id} is stale or not in the active snapshot.",
-            "retry_hint": "Call desktop_a11y_snapshot to refresh element refs before acting.",
-        }
+        return _structured_error(
+            "STALE_REF",
+            f"Element ref {ref_id} is stale or not in the active snapshot.",
+            suggestion="Call desktop_a11y_snapshot to refresh element refs before acting.",
+            strategy="refresh_snapshot_then_retry_original",
+            retryable=True,
+            delivery="not_delivered",
+            retry="safe",
+            extra={"ref": ref_id, "action": act},
+        )
 
     target_app = entry.app or entry.window_title
     if not _app_allowed_by_policy(target_app, policy):
         raise PermissionError(f"Application {target_app!r} is not in policy allowed_apps.")
 
     # Idempotent short-circuit for check/uncheck/expand/collapse when state already matches
+    active_be = _STORE.stats(session_id=session_id).get("active_backend") or "native_bridge"
     if act == "check" and entry.checked is True:
-        return {"ok": True, "backend": _STORE.stats().get("active_backend") or "native_bridge", "ref": ref_id, "action": act, "headless": True, "noop": True, "state": "checked"}
+        return {"ok": True, "backend": active_be, "ref": ref_id, "action": act, "headless": True, "noop": True, "state": "checked"}
     if act == "uncheck" and entry.checked is False:
-        return {"ok": True, "backend": _STORE.stats().get("active_backend") or "native_bridge", "ref": ref_id, "action": act, "headless": True, "noop": True, "state": "unchecked"}
+        return {"ok": True, "backend": active_be, "ref": ref_id, "action": act, "headless": True, "noop": True, "state": "unchecked"}
     if act == "expand" and entry.expanded is True:
-        return {"ok": True, "backend": _STORE.stats().get("active_backend") or "native_bridge", "ref": ref_id, "action": act, "headless": True, "noop": True, "state": "expanded"}
+        return {"ok": True, "backend": active_be, "ref": ref_id, "action": act, "headless": True, "noop": True, "state": "expanded"}
     if act == "collapse" and entry.expanded is False:
-        return {"ok": True, "backend": _STORE.stats().get("active_backend") or "native_bridge", "ref": ref_id, "action": act, "headless": True, "noop": True, "state": "collapsed"}
+        return {"ok": True, "backend": active_be, "ref": ref_id, "action": act, "headless": True, "noop": True, "state": "collapsed"}
 
-    # Layer 1: agent-desktop CLI when this snapshot came from CLI
-    if _STORE.stats().get("active_backend") == "agent_desktop_cli" and find_agent_desktop_cli():
+    # Layer 1: agent-desktop CLI when this snapshot came from CLI (v2.6 contract)
+    if active_be == "agent_desktop_cli" and find_agent_desktop_cli():
         cli_verb = _CLI_ACTION_MAP[act]
-        cmd = [cli_verb, ref_id, "--json"]
+        cmd = [cli_verb, ref_id]
+        if session_id and session_id != "default":
+            cmd.extend(["--session", session_id])
+        if agent_id:
+            cmd.extend(["--agent-id", agent_id])
         if headed:
             cmd.append("--headed")
+        if wait_for:
+            cmd.extend(["--wait-for", wait_for, "--wait-timeout", str(int(max(100, wait_timeout_seconds * 1000)))])
+        if wait_for_gone:
+            cmd.extend(["--wait-for-gone", wait_for_gone, "--wait-timeout", str(int(max(100, wait_timeout_seconds * 1000)))])
         stdin_payload: str | None = None
-        if act in ("type", "set_value"):
+        if act in ("type", "fill", "set_value"):
             cmd.append("--stdin")
             stdin_payload = text
         elif act == "select" and option:
@@ -1025,14 +1153,9 @@ def a11y_act(
                 "result": sanitize_a11y_tree(cli_res.get("data", cli_res)),
             }
         if not fallback_to_visual:
-            return {
-                "ok": False,
-                "backend": "agent_desktop_cli",
-                "error_code": str(cli_res.get("error_code") or "ACTION_FAILED"),
-                "ref": ref_id,
-                "action": act,
-                "error": str(cli_res.get("error") or "agent-desktop action failed"),
-            }
+            err_out = _parse_cli_error(cli_res, default_code="ACTION_FAILED")
+            err_out.update({"backend": "agent_desktop_cli", "ref": ref_id, "action": act})
+            return err_out
 
     # Layer 2: Built-in bridgeai3 visual / UI fallback (coordinates or OCR)
     from .tools.desktop import click_text, perform_approved_ui_action
@@ -1056,13 +1179,11 @@ def a11y_act(
         }
 
     if cx is None or cy is None:
-        return {
-            "ok": False,
-            "error_code": "NO_BOUNDS",
-            "ref": ref_id,
-            "action": act,
-            "error": "Element has no bounding coordinates and no fallback_text was provided.",
-        }
+        return _structured_error(
+            "NO_BOUNDS",
+            "Element has no bounding coordinates and no fallback_text was provided.",
+            extra={"ref": ref_id, "action": act},
+        )
 
     if act in ("click", "check", "uncheck", "toggle", "expand", "collapse", "select", "focus", "scroll_to"):
         res = perform_approved_ui_action("click", x=cx, y=cy, button="left", clicks=1, approval_granted=approval_granted, policy=policy)
@@ -1076,7 +1197,7 @@ def a11y_act(
         perform_approved_ui_action("click", x=cx, y=cy, button="left", clicks=1, approval_granted=approval_granted, policy=policy)
         perform_approved_ui_action("hotkey", combo="ctrl+a", approval_granted=approval_granted, policy=policy)
         res = perform_approved_ui_action("press_key", key="backspace", approval_granted=approval_granted, policy=policy)
-    elif act == "set_value":
+    elif act in ("fill", "set_value"):
         perform_approved_ui_action("click", x=cx, y=cy, button="left", clicks=1, approval_granted=approval_granted, policy=policy)
         perform_approved_ui_action("hotkey", combo="ctrl+a", approval_granted=approval_granted, policy=policy)
         res = perform_approved_ui_action("type_text", text=text, approval_granted=approval_granted, policy=policy)
@@ -1086,7 +1207,7 @@ def a11y_act(
     else:
         raise ValueError(f"Unhandled action: {act}")
 
-    return {
+    out: dict[str, Any] = {
         "ok": True,
         "backend": "native_bridge",
         "fallback_used": True,
@@ -1097,16 +1218,22 @@ def a11y_act(
         "coords": {"x": cx, "y": cy},
         "result": res,
     }
+    if wait_for:
+        out["wait_for"] = a11y_wait(condition="exists", query=wait_for, timeout_seconds=wait_timeout_seconds, policy=policy)
+    elif wait_for_gone:
+        out["wait_for_gone"] = a11y_wait(condition="gone", query=wait_for_gone, timeout_seconds=wait_timeout_seconds, policy=policy)
+    return out
 
 
 def a11y_batch(
     steps: list[dict[str, Any]],
     *,
     stop_on_error: bool = True,
+    session_id: str = "default",
     approval_granted: bool = False,
     policy: Policy | None = None,
 ) -> dict[str, Any]:
-    """Execute up to 25 accessibility actions in one atomic, policy-checked round-trip."""
+    """Pre-validate and execute up to 25 accessibility actions in one atomic round-trip."""
     eff_policy = _enforce_policy("desktop_a11y_batch", approval_granted=approval_granted, policy=policy)
     policy = eff_policy
     if not isinstance(steps, list) or not steps:
@@ -1114,41 +1241,55 @@ def a11y_batch(
     if len(steps) > _MAX_BATCH_STEPS:
         raise ValueError(f"Batch exceeds maximum of {_MAX_BATCH_STEPS} steps (got {len(steps)}).")
 
-    results: list[dict[str, Any]] = []
-    all_ok = True
+    # v2.6 contract: validate ALL steps before executing step 0.
     for idx, step in enumerate(steps):
         if not isinstance(step, dict):
             raise ValueError(f"Batch step {idx} must be a JSON object.")
+        kind = str(step.get("command") or step.get("action") or "click").strip().lower().replace("-", "_")
+        if kind not in ("snapshot", "wait"):
+            _validate_action(kind)
+            target = str(step.get("ref") or step.get("target") or "")
+            _validate_ref(target)
+
+    results: list[dict[str, Any]] = []
+    all_ok = True
+    for idx, step in enumerate(steps):
         estop = _check_emergency_stop()
         if estop is not None:
             results.append({"step": idx, **estop})
             all_ok = False
             break
-        kind = str(step.get("command") or step.get("action") or "click").strip().lower()
+        kind = str(step.get("command") or step.get("action") or "click").strip().lower().replace("-", "_")
         if kind == "snapshot":
             out = a11y_snapshot(
                 app=str(step.get("app") or ""),
                 window_title=str(step.get("window_title") or ""),
                 skeleton=bool(step.get("skeleton", False)),
+                interactive_only=bool(step.get("interactive_only", False)),
                 compact=bool(step.get("compact", True)),
+                session_id=session_id,
                 policy=policy,
             )
         elif kind == "wait":
             out = a11y_wait(
-                condition=str(step.get("condition") or "exists"),
-                query=str(step.get("query") or ""),
+                condition=str(step.get("condition") or ("window_open" if step.get("window") else "exists")),
+                query=str(step.get("query") or step.get("text") or ""),
                 role=str(step.get("role") or ""),
-                window_title=str(step.get("window_title") or ""),
+                window_title=str(step.get("window_title") or step.get("window") or ""),
                 timeout_seconds=float(step.get("timeout_seconds", 5.0)),
                 policy=policy,
             )
         else:
+            target = str(step.get("ref") or step.get("target") or "")
             out = a11y_act(
-                str(step.get("ref") or ""),
+                target,
                 action=kind,
                 text=str(step.get("text") or ""),
                 option=str(step.get("option") or ""),
                 headed=bool(step.get("headed", False)),
+                wait_for=str(step.get("wait_for") or ""),
+                wait_for_gone=str(step.get("wait_for_gone") or ""),
+                session_id=session_id,
                 fallback_to_visual=bool(step.get("fallback_to_visual", True)),
                 fallback_text=str(step.get("fallback_text") or ""),
                 approval_granted=approval_granted,
@@ -1179,11 +1320,11 @@ def a11y_wait(
     poll_interval_seconds: float = 0.25,
     policy: Policy | None = None,
 ) -> dict[str, Any]:
-    """Wait until an accessibility element or window condition is satisfied."""
-    cond = (condition or "exists").strip().lower()
-    if cond not in {"exists", "gone", "enabled", "window_open", "window_closed"}:
+    """Wait until an accessibility element, text, menu, or window condition is satisfied."""
+    cond = (condition or "exists").strip().lower().replace("-", "_")
+    if cond not in {"exists", "gone", "enabled", "text", "window_open", "window_closed", "menu", "menu_closed"}:
         raise ValueError(
-            f"Invalid wait condition {condition!r}; choose exists, gone, enabled, window_open, or window_closed."
+            f"Invalid wait condition {condition!r}; choose exists, gone, enabled, text, window_open, window_closed, menu, or menu_closed."
         )
     timeout = max(0.1, min(30.0, float(timeout_seconds)))
     poll = max(0.05, min(2.0, float(poll_interval_seconds)))
@@ -1191,20 +1332,27 @@ def a11y_wait(
     started = time.monotonic()
 
     while True:
-        if cond in ("window_open", "window_closed"):
+        if cond in ("window_open", "window_closed", "menu", "menu_closed"):
             surf = a11y_list_surfaces(app=app, policy=policy)
             q_win = (window_title or query).strip().lower()
-            found_win = [
-                s for s in (surf.get("surfaces") or [])
-                if not q_win or q_win in str(s.get("title") or "").lower()
-            ]
-            matched = bool(found_win) if cond == "window_open" else not bool(found_win)
+            if cond in ("menu", "menu_closed"):
+                found_surf = [
+                    s for s in (surf.get("surfaces") or [])
+                    if "menu" in str(s.get("surface_type") or s.get("role") or "").lower()
+                ]
+                matched = bool(found_surf) if cond == "menu" else not bool(found_surf)
+            else:
+                found_surf = [
+                    s for s in (surf.get("surfaces") or [])
+                    if not q_win or q_win in str(s.get("title") or "").lower()
+                ]
+                matched = bool(found_surf) if cond == "window_open" else not bool(found_surf)
             if matched:
                 return {
                     "ok": True,
                     "condition": cond,
                     "elapsed_seconds": round(time.monotonic() - started, 3),
-                    "matches": found_win[:5],
+                    "matches": found_surf[:5],
                 }
         else:
             found = a11y_find(
@@ -1216,7 +1364,7 @@ def a11y_wait(
                 policy=policy,
             )
             matches = found.get("matches") or []
-            if cond == "exists" and matches:
+            if cond in ("exists", "text") and matches:
                 return {
                     "ok": True,
                     "condition": cond,
@@ -1242,11 +1390,12 @@ def a11y_wait(
                     }
 
         if time.monotonic() >= deadline:
-            return {
-                "ok": False,
-                "error_code": "WAIT_TIMEOUT",
-                "condition": cond,
-                "elapsed_seconds": round(time.monotonic() - started, 3),
-                "error": f"Condition {cond!r} not met within {timeout}s.",
-            }
+            return _structured_error(
+                "WAIT_TIMEOUT",
+                f"Condition {cond!r} not met within {timeout}s.",
+                retryable=True,
+                delivery="not_delivered",
+                retry="safe",
+                extra={"condition": cond, "elapsed_seconds": round(time.monotonic() - started, 3)},
+            )
         time.sleep(min(poll, max(0.01, deadline - time.monotonic())))

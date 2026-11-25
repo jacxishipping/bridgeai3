@@ -44,7 +44,7 @@ public static class HybridA11yService
 {
     private const int MaxBatchSteps = 25;
     private static readonly TimeSpan SnapshotTtl = TimeSpan.FromMinutes(5);
-    private static readonly Regex RefPattern = new(@"^@[A-Za-z0-9_-]{2,40}:[A-Za-z0-9_.-]{1,40}$", RegexOptions.Compiled);
+    private static readonly Regex RefPattern = new(@"^@(?:[A-Za-z0-9_-]{2,40}:)?[A-Za-z0-9_.-]{1,40}$", RegexOptions.Compiled);
     private static readonly Regex SecretHintPattern = new(
         @"(password|passwd|passcode|\bpin\b|secret|api[_ -]?key|token|ssn|cvv|credit.?card)",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
@@ -52,7 +52,7 @@ public static class HybridA11yService
     public static readonly HashSet<string> SupportedActions = new(StringComparer.OrdinalIgnoreCase)
     {
         "click", "double_click", "right_click", "hover",
-        "type", "set_value", "clear",
+        "type", "fill", "set_value", "clear",
         "check", "uncheck", "toggle",
         "select", "expand", "collapse",
         "scroll_to", "focus", "show_menu",
@@ -596,6 +596,7 @@ public static class HybridA11yService
                 DesktopInputService.PressHotkey("ctrl+a");
                 DesktopInputService.PressKey(0x08);
                 break;
+            case "fill":
             case "set_value":
                 DesktopInputService.ClickMouse(entry.CenterX, entry.CenterY, "left", false);
                 DesktopInputService.PressHotkey("ctrl+a");
@@ -636,6 +637,21 @@ public static class HybridA11yService
         if (steps.Count > MaxBatchSteps)
             throw new ArgumentException($"Batch exceeds maximum of {MaxBatchSteps} steps.");
 
+        // v2.6 contract: pre-validate every step before executing step 0.
+        for (int i = 0; i < steps.Count; i++)
+        {
+            var s = steps[i];
+            var action = (s.TryGetProperty("action", out var aEl) ? aEl.GetString()
+                : s.TryGetProperty("command", out var cEl) ? cEl.GetString() : "click") ?? "click";
+            var norm = action.Trim().ToLowerInvariant().Replace("-", "_");
+            if (!SupportedActions.Contains(norm))
+                throw new ArgumentException($"Batch step {i} has unsupported action '{action}'.");
+            var refId = (s.TryGetProperty("ref", out var rEl) ? rEl.GetString()
+                : s.TryGetProperty("target", out var tEl) ? tEl.GetString() : "") ?? "";
+            if (!ValidateRefSyntax(refId))
+                throw new ArgumentException($"Batch step {i} has invalid ref '{refId}'.");
+        }
+
         var results = new List<object>(steps.Count);
         bool allOk = true;
         for (int i = 0; i < steps.Count; i++)
@@ -644,7 +660,8 @@ public static class HybridA11yService
             var s = steps[i];
             var action = s.TryGetProperty("action", out var aEl) ? aEl.GetString() ?? "click"
                 : s.TryGetProperty("command", out var cEl) ? cEl.GetString() ?? "click" : "click";
-            var refId = s.TryGetProperty("ref", out var rEl) ? rEl.GetString() ?? "" : "";
+            var refId = s.TryGetProperty("ref", out var rEl) ? rEl.GetString() ?? ""
+                : s.TryGetProperty("target", out var tgtEl) ? tgtEl.GetString() ?? "" : "";
             var text = s.TryGetProperty("text", out var tEl) ? tEl.GetString() : null;
             var option = s.TryGetProperty("option", out var oEl) ? oEl.GetString() : null;
             bool submit = s.TryGetProperty("submit", out var subEl) && subEl.ValueKind == System.Text.Json.JsonValueKind.True;
@@ -819,11 +836,12 @@ public static class HybridA11yService
                     return null;
 
                 case "clear":
+                case "fill":
                 case "set_value":
                     if (el.TryGetCurrentPattern(ValuePattern.Pattern, out var vpObj) && vpObj is ValuePattern vp && !vp.Current.IsReadOnly)
                     {
                         vp.SetValue(action == "clear" ? "" : text);
-                        if (submit && action == "set_value")
+                        if (submit && action is "fill" or "set_value")
                         {
                             try { el.SetFocus(); } catch { }
                             DesktopInputService.PressKey(0x0D);
@@ -878,6 +896,14 @@ public static class HybridA11yService
         action,
         error = $"Element ref '{refId}' is stale or not in the active snapshot.",
         retry_hint = "Call desktop_a11y_snapshot or desktop_a11y_find to obtain fresh refs.",
+        error_detail = new
+        {
+            code = "STALE_REF",
+            message = $"Element ref '{refId}' is stale or not in the active snapshot.",
+            suggestion = "Call desktop_a11y_snapshot or desktop_a11y_find to obtain fresh refs.",
+            recovery = new { strategy = "refresh_snapshot_then_retry_original", retryable = true },
+            disposition = new { delivery = "not_delivered", retry = "safe" },
+        },
     };
 
     private static object FormatPublicEntry(HybridA11yRefEntry e, bool compact)

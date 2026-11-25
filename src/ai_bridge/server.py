@@ -2143,10 +2143,13 @@ def desktop_a11y_snapshot(
     window_id: str = "",
     root_ref: str = "",
     skeleton: bool = False,
+    interactive_only: bool = False,
     compact: bool = True,
     max_depth: int = 10,
     max_elements: int = 80,
     monitor_index: int | None = None,
+    session_id: str = "default",
+    agent_id: str = "",
     device: str | None = None,
 ) -> dict:
     """Capture a structured accessibility tree snapshot with ephemeral @ref IDs (password fields redacted).
@@ -2159,10 +2162,13 @@ def desktop_a11y_snapshot(
         window_id=window_id,
         root_ref=root_ref,
         skeleton=skeleton,
+        interactive_only=interactive_only,
         compact=compact,
         max_depth=max_depth,
         max_elements=max_elements,
         monitor_index=monitor_index,
+        session_id=session_id,
+        agent_id=agent_id,
     )
 
 
@@ -2232,12 +2238,17 @@ def desktop_a11y_act(
     text: str = "",
     option: str = "",
     headed: bool = False,
+    wait_for: str = "",
+    wait_for_gone: str = "",
+    wait_timeout_seconds: float = 10.0,
+    session_id: str = "default",
+    agent_id: str = "",
     fallback_to_visual: bool = True,
     fallback_text: str = "",
     device: str | None = None,
 ) -> dict:
     """Execute a governed accessibility action on a snapshot @ref with optional visual/OCR fallback.
-    Actions: click, double_click, right_click, hover, type, set_value, clear, check, uncheck,
+    Actions: click, double_click, right_click, hover, type, fill, set_value, clear, check, uncheck,
     toggle, select, expand, collapse, scroll_to, focus, show_menu.
     device (optional): Target device name/ID, or 'local'."""
     from . import hybrid_desktop
@@ -2249,6 +2260,11 @@ def desktop_a11y_act(
         text=text,
         option=option,
         headed=headed,
+        wait_for=wait_for,
+        wait_for_gone=wait_for_gone,
+        wait_timeout_seconds=wait_timeout_seconds,
+        session_id=session_id,
+        agent_id=agent_id,
         fallback_to_visual=fallback_to_visual,
         fallback_text=fallback_text,
         approval_granted=approved,

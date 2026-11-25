@@ -617,10 +617,13 @@ def dispatch(tool: str, args: dict, *, policy: Policy | None = None, approval_gr
             window_id=str(a.get("window_id") or ""),
             root_ref=str(a.get("root_ref") or ""),
             skeleton=bool(a.get("skeleton", False)),
+            interactive_only=bool(a.get("interactive_only", False)),
             compact=bool(a.get("compact", True)),
             max_depth=int(a.get("max_depth", 10)),
             max_elements=int(a.get("max_elements", 80)),
             monitor_index=a.get("monitor_index"),
+            session_id=str(a.get("session_id") or "default"),
+            agent_id=str(a.get("agent_id") or ""),
             policy=policy,
         ),
         "desktop_a11y_find": lambda a: __import__("ai_bridge.hybrid_desktop", fromlist=["a11y_find"]).a11y_find(
@@ -633,6 +636,7 @@ def dispatch(tool: str, args: dict, *, policy: Policy | None = None, approval_gr
         ),
         "desktop_a11y_get_value": lambda a: __import__("ai_bridge.hybrid_desktop", fromlist=["a11y_get_value"]).a11y_get_value(
             str(a.get("ref") or ""),
+            session_id=str(a.get("session_id") or "default"),
             policy=policy,
         ),
         "desktop_a11y_list_surfaces": lambda a: __import__("ai_bridge.hybrid_desktop", fromlist=["a11y_list_surfaces"]).a11y_list_surfaces(
@@ -643,11 +647,16 @@ def dispatch(tool: str, args: dict, *, policy: Policy | None = None, approval_gr
             policy=policy,
         ),
         "desktop_a11y_act": lambda a: __import__("ai_bridge.hybrid_desktop", fromlist=["a11y_act"]).a11y_act(
-            str(a.get("ref") or ""),
+            str(a.get("ref") or a.get("target") or ""),
             action=str(a.get("action") or "click"),
             text=str(a.get("text") or ""),
             option=str(a.get("option") or ""),
             headed=bool(a.get("headed", False)),
+            wait_for=str(a.get("wait_for") or ""),
+            wait_for_gone=str(a.get("wait_for_gone") or ""),
+            wait_timeout_seconds=float(a.get("wait_timeout_seconds", 10.0)),
+            session_id=str(a.get("session_id") or "default"),
+            agent_id=str(a.get("agent_id") or ""),
             fallback_to_visual=bool(a.get("fallback_to_visual", True)),
             fallback_text=str(a.get("fallback_text") or ""),
             approval_granted=approval_granted,
@@ -656,6 +665,7 @@ def dispatch(tool: str, args: dict, *, policy: Policy | None = None, approval_gr
         "desktop_a11y_batch": lambda a: __import__("ai_bridge.hybrid_desktop", fromlist=["a11y_batch"]).a11y_batch(
             list(a.get("steps") or []),
             stop_on_error=bool(a.get("stop_on_error", True)),
+            session_id=str(a.get("session_id") or "default"),
             approval_granted=approval_granted,
             policy=policy,
         ),

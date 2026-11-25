@@ -281,11 +281,53 @@ def test_cli_backend_pipes_text_via_stdin_never_argv(monkeypatch, tmp_path):
     assert snap["backend"] == "agent_desktop_cli"
     ref = snap["elements"][0]["ref"]
 
-    res = hybrid_desktop.a11y_act(ref, action="type", text="hello-secret-payload", policy=pol)
+    res = hybrid_desktop.a11y_act(ref, action="fill", text="hello-secret-payload", policy=pol)
     assert res["ok"] is True
     assert res["backend"] == "agent_desktop_cli"
     assert res["headless"] is True
     act_argv, act_stdin = calls[-1]
+    assert "--json" not in act_argv
     assert "--stdin" in act_argv
     assert "hello-secret-payload" not in " ".join(act_argv)
     assert act_stdin == "hello-secret-payload"
+
+
+def test_v26_contract_sessions_short_refs_errors_and_batch_prevalidation(monkeypatch):
+    monkeypatch.setenv("AI_BRIDGE_A11Y_BACKEND", "native")
+    monkeypatch.setattr("ai_bridge.tools.desktop_api.desktop_get_ui_elements", _sample_ui_elements)
+    set_emergency_stop(False)
+    pol = _open_desktop_policy()
+
+    # Short @e1 and session-qualified @s1234:e1 refs are both valid
+    assert hybrid_desktop._validate_ref("@e1") == "@e1"
+    assert hybrid_desktop._validate_ref("@s1234abcd:e1") == "@s1234abcd:e1"
+
+    # Separate session namespaces do not invalidate each other
+    s_a = hybrid_desktop.a11y_snapshot(session_id="agent-a", interactive_only=True, policy=pol)
+    s_b = hybrid_desktop.a11y_snapshot(session_id="agent-b", policy=pol)
+    ref_a = s_a["elements"][0]["ref"]
+    assert hybrid_desktop.a11y_get_value(ref_a, session_id="agent-a", policy=pol)["ok"] is True
+    # Wrong session returns v2.6 structured STALE_REF with recovery/disposition
+    wrong_sess = hybrid_desktop.a11y_get_value(ref_a, session_id="agent-b", policy=pol)
+    assert wrong_sess["ok"] is False
+    assert wrong_sess["error_code"] == "STALE_REF"
+    assert wrong_sess["error_detail"]["recovery"]["retryable"] is True
+    assert wrong_sess["error_detail"]["disposition"] == {"delivery": "not_delivered", "retry": "safe"}
+    assert s_b["session_id"] == "agent-b"
+
+    # Batch pre-validates ALL steps before running step 0
+    executed = []
+    monkeypatch.setattr(
+        "ai_bridge.tools.desktop.perform_approved_ui_action",
+        lambda action, **kw: executed.append(action) or {"ok": True},
+    )
+    with pytest.raises(ValueError, match="Unsupported accessibility action"):
+        hybrid_desktop.a11y_batch(
+            [
+                {"action": "click", "ref": ref_a},
+                {"action": "not_a_real_action", "ref": ref_a},
+            ],
+            session_id="agent-a",
+            policy=pol,
+        )
+    assert executed == []
