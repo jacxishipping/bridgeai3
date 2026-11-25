@@ -149,11 +149,12 @@ jobs:
           AIBRIDGE_DESKTOP_EXE: ${{ github.workspace }}\windows-agent\build\Release\ai_bridge_desktop.exe
         run: python scripts/libwebrtc_e2e_harness.py --out .run/libwebrtc_e2e_evidence.json --native-agent
       - name: Production WebRTC E2E (signaling + JPEG fallback + native agent)
+        shell: pwsh
         env:
           AIBRIDGE_DESKTOP_EXE: ${{ github.workspace }}\windows-agent\build\Release\ai_bridge_desktop.exe
           AIBRIDGE_RUN_NATIVE_WEBRTC: "1"
         run: |
-          mkdir -p .run
+          New-Item -ItemType Directory -Force -Path .run | Out-Null
           python scripts/webrtc_production_e2e.py --require-native-agent --out .run/webrtc_production_e2e_evidence.json
       - uses: actions/upload-artifact@v4
         if: always()
