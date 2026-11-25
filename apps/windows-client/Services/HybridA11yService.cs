@@ -161,10 +161,18 @@ public static class HybridA11yService
         return sid;
     }
 
+    private static readonly HashSet<string> InteractiveRoles = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Button", "Edit", "CheckBox", "RadioButton", "ComboBox", "ListItem",
+        "MenuItem", "TabItem", "Hyperlink", "TreeItem", "Slider", "SplitButton",
+        "Spinner", "Document", "DataItem",
+    };
+
     public static object CaptureSnapshot(
         string? windowTitle = null,
         string? rootRef = null,
         bool skeleton = false,
+        bool interactiveOnly = false,
         bool compact = true,
         int maxDepth = 10,
         int maxElements = 80)
@@ -245,7 +253,8 @@ public static class HybridA11yService
                     var autoId = cur.AutomationId ?? "";
                     var role = cur.ControlType.ProgrammaticName.Replace("ControlType.", "");
                     bool includeNode = (!string.IsNullOrWhiteSpace(name) || !string.IsNullOrWhiteSpace(autoId)) &&
-                        (!skeleton || role is "Window" or "Pane" or "Menu" or "MenuBar" or "Tab" or "ToolBar" or "Group" or "Dialog");
+                        (!skeleton || role is "Window" or "Pane" or "Menu" or "MenuBar" or "Tab" or "ToolBar" or "Group" or "Dialog") &&
+                        (!interactiveOnly || InteractiveRoles.Contains(role));
 
                     if (includeNode)
                     {
@@ -883,6 +892,16 @@ public static class HybridA11yService
             {
                 entry = found;
                 return true;
+            }
+            // v2.6 short-ref alias: @e1 -> @{activeSnapshotId}:e1
+            if (refId.StartsWith("@", StringComparison.Ordinal) && !refId.Contains(':'))
+            {
+                var expanded = $"@{_activeSnapshotId}:{refId[1..]}";
+                if (_refs.TryGetValue(expanded, out var shortFound) && shortFound.SnapshotId == _activeSnapshotId)
+                {
+                    entry = shortFound;
+                    return true;
+                }
             }
             return false;
         }

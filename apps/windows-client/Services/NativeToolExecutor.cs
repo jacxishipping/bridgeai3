@@ -90,6 +90,7 @@ public sealed class NativeToolExecutor
                     clipboard_enabled = config.Policy.AllowClipboard,
                     max_tier_unattended = config.Policy.MaxTierUnattended,
                     allowed_apps = config.Policy.AllowedApps,
+                    screen_relay = ScreenRelayService.DescribeStatus(),
                     active_window = WindowManagementService.GetActiveWindowInfo(),
                     note = !Environment.UserInteractive
                         ? "Non-interactive session (Session 0 / SYSTEM): DXGI desktop capture and SendInput will fail. Run the WPF client or desktop helper in the logged-on user session."
@@ -131,6 +132,7 @@ public sealed class NativeToolExecutor
                     windowTitle: args.TryGetProperty("window_title", out var wtEl) ? wtEl.GetString() : (args.TryGetProperty("window", out var wEl) ? wEl.GetString() : null),
                     rootRef: args.TryGetProperty("root_ref", out var rrEl) ? rrEl.GetString() : null,
                     skeleton: args.TryGetProperty("skeleton", out var skEl) && skEl.ValueKind == JsonValueKind.True,
+                    interactiveOnly: args.TryGetProperty("interactive_only", out var ioEl) && ioEl.ValueKind == JsonValueKind.True,
                     compact: !args.TryGetProperty("compact", out var cpEl) || cpEl.ValueKind != JsonValueKind.False,
                     maxDepth: args.TryGetProperty("max_depth", out var mdEl) && mdEl.TryGetInt32(out var md) ? md : 10,
                     maxElements: args.TryGetProperty("max_elements", out var meEl) && meEl.TryGetInt32(out var me) ? me : 80),
@@ -176,6 +178,9 @@ public sealed class NativeToolExecutor
                 "desktop_verify_action" or "verify_screen_contains" => VerifyUiCondition(args),
                 "start_webrtc_stream" => await SendPipeStreamCommandAsync(config, "START_WEBRTC_SESSION", args, ct),
                 "stop_webrtc_stream" => await SendPipeStreamCommandAsync(config, "STOP_WEBRTC_SESSION", args, ct),
+                "start_screen_relay_stream" => StartScreenRelayStream(config, args),
+                "stop_screen_relay_stream" => ScreenRelayService.StopSession(
+                    args.TryGetProperty("session_id", out var srStopSid) ? srStopSid.GetString() : null),
                 "capture_desktop_frame" => CaptureDesktopFrame(config, args),
                 "capture_desktop_screenshot" or "take_screenshot" or "desktop_get_screenshot" => CaptureScreenshot(config, args),
                 "set_of_marks_screenshot" => CaptureSetOfMarksScreenshot(config, args),
@@ -1549,6 +1554,17 @@ public sealed class NativeToolExecutor
             throw new InvalidOperationException(reply);
         }
         return new { status = "ok", pipe_response = reply };
+    }
+
+    private static object StartScreenRelayStream(AgentGuiConfig config, JsonElement args)
+    {
+        string sid = args.TryGetProperty("session_id", out var sEl) ? (sEl.GetString() ?? "") : "";
+        int monIdx = args.TryGetProperty("monitor_index", out var mEl) && mEl.TryGetInt32(out var m) ? m : 0;
+        int fps = args.TryGetProperty("fps", out var fEl) && fEl.TryGetInt32(out var f) ? f : 30;
+        int kbps = args.TryGetProperty("bitrate_kbps", out var bEl) && bEl.TryGetInt32(out var b) ? b : 3500;
+        var cfgService = new ConfigService();
+        var token = cfgService.LoadToken();
+        return ScreenRelayService.StartSession(config.ControlUrl, token, sid, config, monIdx, fps, kbps);
     }
 
     private static async Task<object> RunShellAsync(

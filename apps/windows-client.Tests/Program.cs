@@ -1182,9 +1182,11 @@ await RunTest("HybridA11yService: status, redaction, STALE_REF, idempotent actio
         Policy = new AgentPolicyConfig { AllowTier3 = true, AllowDesktopControl = true, MaxTierUnattended = 3 },
     };
 
-    // Idempotent check on already-checked checkbox succeeds headless with noop=true
+    // Idempotent check on already-checked checkbox succeeds headless with noop=true (both full & short @e2 ref)
     var (okNoop, noopJson) = await exec.ExecuteAsync("desktop_a11y_act", "{\"ref\":\"@s1111aaaa:e2\",\"action\":\"check\"}", openCfg, CancellationToken.None);
     Assert(okNoop && noopJson.Contains("\"noop\": true"), $"Expected idempotent noop check: {noopJson}");
+    var (okShort, shortJson) = await exec.ExecuteAsync("desktop_a11y_act", "{\"ref\":\"@e2\",\"action\":\"check\"}", openCfg, CancellationToken.None);
+    Assert(okShort && shortJson.Contains("\"noop\": true"), $"Expected v2.6 short @e2 ref to resolve: {shortJson}");
 
     // Atomic batch of idempotent actions succeeds
     var (okBatch, batchJson) = await exec.ExecuteAsync("desktop_a11y_batch", "{\"steps\":[{\"ref\":\"@s1111aaaa:e2\",\"action\":\"check\"}]}", openCfg, CancellationToken.None);
@@ -1207,6 +1209,38 @@ await RunTest("HybridA11yService: status, redaction, STALE_REF, idempotent actio
     Assert(DeviceAgentRuntimeService.IsToolAllowed("desktop_a11y_act", openCfg, out _), "desktop_a11y_act should be allowed when UI tools enabled");
     Assert(DeviceAgentRuntimeService.IsVisualMutatingTool("desktop_a11y_act"), "desktop_a11y_act should be classified as visual mutating");
     HybridA11yService.ClearSnapshotStore();
+});
+
+// 44. ScreenRelayService: nsl1 binary codec, 16-byte input records, 8 MiB cap & policy lock
+await RunTest("ScreenRelayService: nsl1 video/input codec, 8 MiB cap, status & View-Only policy lock", () =>
+{
+    var annexb = new byte[] { 0x00, 0x00, 0x00, 0x01, 0x67, 0x42, 0x00, 0x1F, 0x00, 0x00, 0x00, 0x01, 0x65, 0x88 };
+    var pkt = ScreenRelayService.EncodeVideoFrame(annexb, 1920, 1080, 987654321UL, isKeyframe: true, generation: 3, sequence: 7);
+    Assert(pkt.Length == ScreenRelayService.Nsl1HeaderSize + ScreenRelayService.Nsl1VideoMetaSize + annexb.Length, "Unexpected NSL1 packet length");
+
+    var decoded = ScreenRelayService.DecodeFrame(pkt);
+    Assert(decoded.Version == 1 && decoded.MsgType == ScreenRelayService.Nsl1MsgVideo && decoded.IsKeyframe, "Expected valid NSL1 video keyframe");
+    Assert(decoded.Generation == 3 && decoded.Sequence == 7, "Expected generation=3 seq=7");
+
+    var (w, h, ts, nal) = ScreenRelayService.DecodeVideoPayload(decoded.Payload);
+    Assert(w == 1920 && h == 1080 && ts == 987654321UL && nal.Length == annexb.Length, "Video metadata mismatch");
+
+    // 16-byte big-endian input record decode + View-Only policy enforcement
+    var recBytes = new byte[16];
+    recBytes[0] = ScreenRelayService.InputPointerMove;
+    System.Buffers.Binary.BinaryPrimitives.WriteUInt16BigEndian(recBytes.AsSpan(8, 2), 32768);
+    System.Buffers.Binary.BinaryPrimitives.WriteUInt16BigEndian(recBytes.AsSpan(10, 2), 16384);
+    var recs = ScreenRelayService.DecodeInputRecords(recBytes);
+    Assert(recs.Count == 1 && recs[0].Type == ScreenRelayService.InputPointerMove, "Expected 1 pointer_move record");
+    Assert(Math.Abs(recs[0].XNorm - 0.5) < 0.001 && Math.Abs(recs[0].YNorm - 0.25) < 0.001, "Normalized coordinates mismatch");
+
+    var viewOnlyCfg = new AgentGuiConfig { Policy = new AgentPolicyConfig { AllowDesktopControl = false } };
+    int blocked = ScreenRelayService.ExecutePolicyGatedInputRecords(recs, viewOnlyCfg, 1920, 1080);
+    Assert(blocked == 0, "View-Only policy must execute 0 binary input records");
+
+    var statusJson = JsonSerializer.Serialize(ScreenRelayService.DescribeStatus());
+    Assert(statusJson.Contains("\"protocol\":\"nsl1\"") && statusJson.Contains("\"loopback_only\":true"), $"Unexpected status: {statusJson}");
+    return Task.CompletedTask;
 });
 
 Console.WriteLine($"\nSummary: {passed} passed, {failed} failed ({passed + failed} total)");

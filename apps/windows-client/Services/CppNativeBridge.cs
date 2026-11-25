@@ -304,6 +304,45 @@ public static class CppNativeBridge
         }
     }
 
+    public static bool TryEncodeH264Frame(
+        byte[] bgraBuffer,
+        int width,
+        int height,
+        int fps,
+        int bitrateKbps,
+        bool forceKeyframe,
+        out byte[]? annexbBytes,
+        out AIBridgeCaptureMetrics metrics)
+    {
+        annexbBytes = null;
+        metrics = default;
+        if (!IsAvailable() || bgraBuffer is null || width <= 0 || height <= 0) return false;
+        try
+        {
+            var nalBuf = new byte[Math.Max(512 * 1024, width * height)];
+            int bytesWritten = aibridge_encode_h264_frame(
+                bgraBuffer,
+                width,
+                height,
+                Math.Clamp(fps, 1, 60),
+                Math.Clamp(bitrateKbps, 250, 50_000),
+                forceKeyframe ? 1 : 0,
+                nalBuf,
+                nalBuf.Length,
+                ref metrics);
+            if (bytesWritten <= 0) return false;
+            var exact = new byte[bytesWritten];
+            Buffer.BlockCopy(nalBuf, 0, exact, 0, bytesWritten);
+            LastMetrics = metrics;
+            annexbBytes = exact;
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     public static bool TryCaptureMonitor(
         string outputDir,
         int monitorIndex,
