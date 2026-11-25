@@ -3,7 +3,7 @@
 > Generated from `src/ai_bridge/` and `agents/` by `scripts/generate_env_reference.py`.
 > Run `python scripts/generate_env_reference.py` after adding or removing configuration variables.
 
-Total documented variables: **145**
+Total documented variables: **146**
 
 ## Control plane & runtime
 
@@ -43,11 +43,12 @@ Total documented variables: **145**
 | `AI_BRIDGE_ICE_SERVERS` | `''` | `src/ai_bridge/control/production_readiness.py`, `src/ai_bridge/webrtc_stream.py` |
 | `AI_BRIDGE_INSTALL_DIR` | `''` | `agents/macos/agent_main.py`, `agents/windows/agent_main.py` |
 | `AI_BRIDGE_JSON_LOGS` | `'1'` | `src/ai_bridge/logging_config.py` |
-| `AI_BRIDGE_LIBWEBRTC_E2E_VERIFIED` | `''` | `src/ai_bridge/native_encode.py` |
+| `AI_BRIDGE_LIBWEBRTC_E2E_VERIFIED` | `''` | `src/ai_bridge/control/desktop_capabilities.py`, `src/ai_bridge/native_encode.py` |
 | `AI_BRIDGE_MAX_TERMINAL_SESSIONS` | `'32'` | `src/ai_bridge/terminal_manager.py` |
 | `AI_BRIDGE_MAX_TRANSFER_BYTES` | — | `src/ai_bridge/tools/transfers.py` |
 | `AI_BRIDGE_NATIVE_DLL_SHA256` | `''` | `src/ai_bridge/screen_capture.py` |
 | `AI_BRIDGE_NATIVE_ENCODE` | `'auto'` | `src/ai_bridge/native_encode.py` |
+| `AI_BRIDGE_NATIVE_WEBRTC` | `'auto'` | `src/ai_bridge/native_webrtc.py` |
 | `AI_BRIDGE_POLICY_SIGNING_KEY` | — | `src/ai_bridge/control/policy_bundle.py` |
 | `AI_BRIDGE_PROFILE` | `''` | `src/ai_bridge/control/production_readiness.py`, `src/ai_bridge/server.py` |
 | `AI_BRIDGE_SLOW_QUERY_MS` | `'250'` | `src/ai_bridge/control/db.py` |
@@ -84,7 +85,7 @@ Total documented variables: **145**
 | `AI_BRIDGE_ALLOW_CLIPBOARD` | `''` | `src/ai_bridge/control/v1_routes.py` |
 | `AI_BRIDGE_ALLOW_LOCAL_EXECUTION` | `'0'` | `src/ai_bridge/control/ai_api.py` |
 | `AI_BRIDGE_ALLOW_PLAINTEXT_TOKEN_FILE` | `'1'` | `agents/common/poller.py` |
-| `AI_BRIDGE_ALLOW_TIER3` | `'0'` | `src/ai_bridge/control/app.py` |
+| `AI_BRIDGE_ALLOW_TIER3` | `'0'` | `src/ai_bridge/control/app.py`, `src/ai_bridge/control/task_service.py` |
 | `AI_BRIDGE_CSRF_DISABLED` | `''` | `src/ai_bridge/control/app.py` |
 | `AI_BRIDGE_CSRF_SECRET` | — | `src/ai_bridge/control/csrf.py` |
 | `AI_BRIDGE_OIDC_CLIENT_ID` | `''` | `src/ai_bridge/control/oidc.py` |
@@ -160,7 +161,7 @@ Total documented variables: **145**
 | Variable | Observed default(s) | Referenced in |
 |---|---|---|
 | `AI_BRIDGE_DESKTOP_AUDIO` | `''` | `src/ai_bridge/webrtc_stream.py` |
-| `AI_BRIDGE_DESKTOP_ENABLED` | `'0'` | `src/ai_bridge/control/app.py` |
+| `AI_BRIDGE_DESKTOP_ENABLED` | `'0'` | `src/ai_bridge/control/app.py`, `src/ai_bridge/control/task_service.py` |
 | `AI_BRIDGE_TURN_CREDENTIAL` | `''` | `src/ai_bridge/webrtc_stream.py` |
 | `AI_BRIDGE_TURN_HOST` | `''` | `src/ai_bridge/webrtc_stream.py` |
 | `AI_BRIDGE_TURN_SECRET` | `''` | `src/ai_bridge/control/production_readiness.py`, `src/ai_bridge/webrtc_stream.py` |

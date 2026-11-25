@@ -10,6 +10,7 @@ from typing import Any
 
 from ..policy import TOOL_TIERS
 from . import db as dbmod
+from . import task_service as task_service_mod
 from .role_catalog import ROLES
 
 # Control-plane connection for dispatch-side supervisor tools (handoff / recover).
@@ -216,16 +217,17 @@ def enqueue_role_task(
     profile: str | None = None,
     mode: str | None = None,
     commit: bool = True,
+    actor: str = "supervisor",
 ) -> dict:
-    """Queue a plane task with optional role / handoff metadata embedded in args_json.
+    """Queue a plane task through :func:`task_service.create_task` with role/handoff metadata.
 
-    The handoff id / parent task id are ALSO written to the indexed
-    ``tasks.handoff_id`` / ``tasks.parent_task_id`` columns (migration
-    015, PERF-07) so handoff lookups no longer full-table-scan tasks.
-    ``commit=False`` leaves the INSERT uncommitted for the caller (used
-    by the transactional handoff advance / sweeper); the default True
-    preserves the old behaviour of committing immediately.
+    Routes through the unified policy, emergency-stop, takeover, tenant, and
+    approval-gating pipeline while writing indexed ``tasks.handoff_id`` /
+    ``tasks.parent_task_id`` columns (migration 015, PERF-07). ``commit=False``
+    keeps the insert inside the caller's active transaction (used by the
+    transactional stuck-handoff sweeper).
     """
+    _ = status  # Final status ('queued' or 'needs_approval') is determined by task_service policy.
     if tool not in TOOL_TIERS:
         raise ValueError(f"Tool not in policy catalog: {tool}")
     tagged = tag_task_args(
@@ -240,20 +242,23 @@ def enqueue_role_task(
     )
     if role and not tagged.get("_role"):
         tagged = tag_task_args(tagged, role=role)
-    tier = int(TOOL_TIERS[tool].value)
-    task_id = uuid.uuid4().hex[:12]
-    now = dbmod.now()
-    conn.execute(
-        "INSERT INTO tasks (id, device_id, tenant, tool, args_json, tier, status, created_at, updated_at, handoff_id, parent_task_id) "
-        "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-        (task_id, device_id, tenant, tool, json.dumps(tagged), tier, status, now, now,
-         handoff_id, parent_task_id),
+    created = task_service_mod.create_task(
+        conn,
+        actor=actor,
+        role="operator",
+        tenant=tenant,
+        device_id=device_id,
+        tool=tool,
+        args=tagged,
+        handoff_id=handoff_id,
+        parent_task_id=parent_task_id,
+        commit=commit,
     )
-    if commit:
-        conn.commit()
     return {
         "ok": True,
-        "task_id": task_id,
+        "task_id": created["task_id"],
+        "status": created["status"],
+        "approval_id": created.get("approval_id"),
         "tool": tool,
         "role": tagged.get("_role") or role,
         "args": tagged,

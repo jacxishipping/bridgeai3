@@ -94,8 +94,8 @@ def test_browser_netns_wrapper_argv(monkeypatch):
 def test_native_encode_libwebrtc_honesty():
     desc = native_encode.describe_native_encode()
     assert desc["libwebrtc_e2e"] is False
-    assert desc["shipping_path"] == "python_aiortc"
-    assert "libwebrtc" in desc["honesty"].lower()
+    assert desc["shipping_path"] == "native_libdatachannel_when_available"
+    assert "libdatachannel" in desc["honesty"].lower() or "libwebrtc" in desc["honesty"].lower()
 
 
 def test_production_checklist_includes_residual_surfaces(monkeypatch, tmp_path):

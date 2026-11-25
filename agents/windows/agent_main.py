@@ -138,16 +138,24 @@ def main() -> None:
             parser.error("--check-update/--apply-update require --manifest-url, --signature-url and --public-key.")
         import urllib.request as _urllib
 
-        from ai_bridge.updates import download_and_stage_update, verify_manifest
+        from ai_bridge.updates import (
+            download_and_stage_update,
+            enforce_version_floor,
+            validate_update_url,
+            verify_manifest,
+        )
 
-        with _urllib.urlopen(args.manifest_url, timeout=15) as r:
+        manifest_url = validate_update_url(args.manifest_url)
+        signature_url = validate_update_url(args.signature_url)
+        with _urllib.urlopen(manifest_url, timeout=15) as r:
             manifest = json.loads(r.read())
-        with _urllib.urlopen(args.signature_url, timeout=15) as r:
+        with _urllib.urlopen(signature_url, timeout=15) as r:
             signature = r.read().decode().strip()
         ok = verify_manifest(manifest, signature, Path(args.public_key))
         print(f"update manifest {manifest.get('name')} {manifest.get('version')}: {'VERIFIED' if ok else 'SIGNATURE INVALID - refusing'}")
         if not ok:
             raise SystemExit(1)
+        enforce_version_floor(manifest)
         if args.apply_update:
             install_dir = Path(args.install_dir) if args.install_dir else Path(__file__).resolve().parents[2]
             result = download_and_stage_update(

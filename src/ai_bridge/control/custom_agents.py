@@ -740,8 +740,8 @@ def execute_agent(
                             (task_id, req_dev, tenant, req_tool, json.dumps(req_args), app_id, now_ts, now_ts),
                         )
                         conn.execute(
-                            "INSERT INTO approvals (id, task_id, tool, reason, status, created_at, expires_at, policy_version) VALUES (?,?,?,?,'pending',?,?,0)",
-                            (app_id, task_id, req_tool, f"[{actor}] {req_reason}", now_ts, now_ts + 900),
+                            "INSERT INTO approvals (id, task_id, tool, reason, tenant, status, created_at, expires_at, policy_version) VALUES (?,?,?,?,?,'pending',?,?,0)",
+                            (app_id, task_id, req_tool, f"[{actor}] {req_reason}", tenant, now_ts, now_ts + 900),
                         )
                         conn.commit()
                         result = {"ok": True, "task_id": task_id, "approval_id": app_id, "status": "needs_approval"}

@@ -117,8 +117,8 @@ beyond the approver.
 | DELETE | `/api/devices/{device_id}` | Admin, Session | delete_device |
 | PUT | `/api/devices/{device_id}` | Admin, Session | update_device |
 | GET | `/api/devices/{device_id}/desktop/capabilities` | Admin, Session | Capability-aware cross-platform desktop contract for one device |
-| GET | `/api/devices/{device_id}/desktop/frame` | Admin, Session | get_desktop_frame |
-| POST | `/api/devices/{device_id}/desktop/input` | Admin, Session | send_desktop_input |
+| GET | `/api/devices/{device_id}/desktop/frame` | Bearer, Admin, Session | get_desktop_frame |
+| POST | `/api/devices/{device_id}/desktop/input` | Bearer, Admin, Session | send_desktop_input |
 | GET | `/api/devices/{device_id}/desktop/live.jpg` | Bearer, Admin, Session | get_device_desktop_live_jpeg |
 | GET | `/api/devices/{device_id}/desktop/monitors` | Admin, Session | get_device_monitors |
 | POST | `/api/devices/{device_id}/desktop/webrtc/session` | Admin, Session | create_webrtc_session |
@@ -175,6 +175,7 @@ beyond the approver.
 | GET | `/api/agent/tasks/{task_id}/execution-state` | mTLS, Device | agent_task_execution_state |
 | POST | `/api/agent/tasks/{task_id}/progress` | mTLS, Device | task_progress |
 | POST | `/api/agent/tasks/{task_id}/result` | mTLS, Device | task_result |
+| GET | `/api/agent/webrtc/ice-servers` | mTLS, Device | agent_get_webrtc_ice_servers |
 | GET | `/api/agent/webrtc/{session_id}` | mTLS, Device | agent_get_webrtc_session |
 | POST | `/api/agent/webrtc/{session_id}/candidates` | mTLS, Device | agent_post_webrtc_candidate |
 | POST | `/api/agent/webrtc/{session_id}/error` | mTLS, Device | agent_post_webrtc_error |
@@ -205,11 +206,11 @@ beyond the approver.
 
 | Method | Path | Auth | Summary |
 | --- | --- | --- | --- |
-| GET | `/api/approvals` | Admin, Session | list_approvals |
+| GET | `/api/approvals` | Bearer, Admin, Session | list_approvals |
 | GET | `/api/approvals/quick/{approval_id}` | — | quick_approval |
 | DELETE | `/api/approvals/{approval_id}` | Admin, Session | delete_approval |
 | PUT | `/api/approvals/{approval_id}` | Admin, Session | update_approval |
-| POST | `/api/approvals/{approval_id}/decide` | Admin, Session | decide_approval |
+| POST | `/api/approvals/{approval_id}/decide` | Bearer, Admin, Session | decide_approval |
 | POST | `/api/approvals/{approval_id}/replan` | Admin, Session | replan_approval |
 
 ### Audit
@@ -380,7 +381,7 @@ beyond the approver.
 | POST | `/api/fleet/broadcast` | Admin, Session | broadcast_fleet_command |
 | GET | `/api/fleet/broadcast/{batch_id}` | Admin, Session | get_broadcast_status |
 | GET | `/api/fleet/desktop-capabilities` | Admin, Session | fleet_desktop_capabilities |
-| GET | `/api/fleet/desktop/frames` | Admin, Session | get_fleet_desktop_frames |
+| GET | `/api/fleet/desktop/frames` | Bearer, Admin, Session | get_fleet_desktop_frames |
 | GET | `/api/fleet/health` | Admin, Session | fleet_health_summary |
 | GET | `/api/fleet/inventory` | Admin, Session | inventory |
 | GET | `/api/fleet/notifications` | Admin, Session | notifications |
@@ -410,7 +411,7 @@ beyond the approver.
 | POST | `/api/supervisor/recover` | Admin, Session | supervisor_recover_api |
 | GET | `/api/traces/{trace_id}` | Admin, Session | get_trace_timeline |
 
-*250 (method, path) pairs listed — generated from the live app; see the note at the top of this file.*
+*251 (method, path) pairs listed — generated from the live app; see the note at the top of this file.*
 <!-- END GENERATED ROUTES -->
 
 ## Mounted surfaces (combined app)

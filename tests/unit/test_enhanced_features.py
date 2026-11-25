@@ -41,6 +41,10 @@ def test_screen_capture_desktop_dimensions():
 # --- Test 2: WebRTC DataChannel Input Injection ---
 
 def test_webrtc_datachannel_input_handling(monkeypatch):
+    from ai_bridge.plane_control_flags import set_emergency_stop
+
+    set_emergency_stop(False)
+    monkeypatch.setattr("ai_bridge.screen_capture.get_native_dll", lambda: None)
     executed_actions = []
 
     def mock_perform(action, **kwargs):

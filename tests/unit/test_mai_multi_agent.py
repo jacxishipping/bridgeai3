@@ -170,6 +170,30 @@ def test_queue_delegate_creates_child_task(tmp_path):
     conn = app.state.conn
     role_catalog.seed_role_catalog(conn)
     _seed_device(conn, "dev-mai4")
+
+    # Under default policy (allow_tier3=False), Tier-3 agent_run_role goes through
+    # task_service's approval gate rather than silently bypassing policy.
+    gated = supervisor.enqueue_agent_run_role(
+        conn,
+        device_id="dev-mai4",
+        tenant="default",
+        role="developer",
+        prompt="implement feature X",
+        parent_task_id="parent1",
+    )
+    assert gated["ok"] is True
+    assert gated["status"] == "needs_approval"
+    assert gated["approval_id"]
+    row_gated = conn.execute("SELECT tool, args_json, status FROM tasks WHERE id=?", (gated["task_id"],)).fetchone()
+    assert row_gated["tool"] == "agent_run_role"
+    assert row_gated["status"] == "needs_approval"
+
+    # With Tier-3 explicitly opted in on the device, it queues immediately.
+    conn.execute(
+        "UPDATE devices SET policy_json=? WHERE id=?",
+        (json.dumps({"inherit_global": False, "allow_tier3": True, "max_tier_unattended": 3}), "dev-mai4"),
+    )
+    conn.commit()
     queued = supervisor.enqueue_agent_run_role(
         conn,
         device_id="dev-mai4",
@@ -179,6 +203,7 @@ def test_queue_delegate_creates_child_task(tmp_path):
         parent_task_id="parent1",
     )
     assert queued["ok"] is True
+    assert queued["status"] == "queued"
     row = conn.execute("SELECT tool, args_json, status FROM tasks WHERE id=?", (queued["task_id"],)).fetchone()
     assert row["tool"] == "agent_run_role"
     assert row["status"] == "queued"
@@ -186,6 +211,41 @@ def test_queue_delegate_creates_child_task(tmp_path):
     assert args["_role"] == "developer"
     assert args["_parent_task_id"] == "parent1"
     assert "implement feature X" in args["prompt"]
+
+
+def test_supervisor_and_webrtc_queue_respect_emergency_stop(tmp_path):
+    """Unified task_service.create_task enforces emergency stop on supervisor & WebRTC queueing."""
+    import pytest
+    from fastapi import HTTPException
+
+    from ai_bridge.control import plane_state
+
+    admin = "adm-unified"
+    app = create_app(admin_token=admin, db_path=tmp_path / "unified.db")
+    conn = app.state.conn
+    client = TestClient(app)
+    headers = {"X-Admin-Token": admin}
+
+    reg = client.post(
+        "/api/devices/enroll",
+        json={"name": "win-u", "os": "Windows"},
+        headers=headers,
+    ).json()
+    dev_id = reg["device_id"]
+
+    plane_state.set_emergency_stop(conn, True)
+    with pytest.raises(HTTPException) as exc_sup:
+        supervisor.enqueue_role_task(
+            conn, device_id=dev_id, tenant="default", tool="git_status", args={}
+        )
+    assert exc_sup.value.status_code == 403
+
+    r_sess = client.post(
+        "/api/v1/sessions",
+        json={"device_id": dev_id, "mode": "view_only", "fps": 15},
+        headers=headers,
+    )
+    assert r_sess.status_code == 403
 
 
 def test_tag_task_args_lineage():

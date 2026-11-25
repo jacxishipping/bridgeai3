@@ -29,6 +29,7 @@ Rules enforced here (all server-side):
 """
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
@@ -174,6 +175,42 @@ def verify_workflow_approval(conn: Any, approval_id: str | None) -> bool:
     return True
 
 
+def _load_stored_effective_policy(conn: Any, device_row: Any) -> dict[str, Any]:
+    """Best-effort effective policy lookup from ``policies`` + ``device_row.policy_json``."""
+    base: dict[str, Any] = {
+        "allow_writes": True,
+        "allow_tier3": os.environ.get("AI_BRIDGE_ALLOW_TIER3", "0") == "1",
+        "desktop_enabled": os.environ.get("AI_BRIDGE_DESKTOP_ENABLED", "0") == "1",
+        "max_tier_unattended": 2,
+    }
+    try:
+        p_row = conn.execute(
+            "SELECT rules_json FROM policies ORDER BY version DESC LIMIT 1"
+        ).fetchone()
+        if p_row is not None:
+            raw_rules = _row_get(p_row, "rules_json")
+            parsed = json.loads(raw_rules) if isinstance(raw_rules, str) else raw_rules
+            if isinstance(parsed, dict):
+                base.update(parsed)
+    except Exception:
+        pass
+    if device_row is not None:
+        raw_dev = _row_get(device_row, "policy_json")
+        if raw_dev:
+            try:
+                custom = json.loads(raw_dev) if isinstance(raw_dev, str) else raw_dev
+                if isinstance(custom, dict):
+                    cleaned = {k: v for k, v in custom.items() if v is not None}
+                    if cleaned.get("inherit_global") is False or cleaned:
+                        base.update(cleaned)
+            except Exception:
+                pass
+    return base
+
+
+_PREAUTHORIZED_STREAM_TOOLS = frozenset({"start_webrtc_stream", "stop_webrtc_stream"})
+
+
 def create_task(
     conn: Any,
     *,
@@ -187,6 +224,10 @@ def create_task(
     task_id: str | None = None,
     approval_id: str | None = None,
     human_initiated: bool = False,
+    preauthorized_stream: bool = False,
+    handoff_id: str | None = None,
+    parent_task_id: str | None = None,
+    commit: bool = True,
     max_attempts: int | None = None,
     trace_id: str | None = None,
     device_row: Any = None,
@@ -224,9 +265,11 @@ def create_task(
             detail="Human takeover is active on this device; autonomous AI tasks are paused until control is handed back.",
         )
     if plane_state.load_emergency_stop(conn):
-        raise HTTPException(
-            status_code=403, detail="Emergency stop is active; no new tasks accepted."
-        )
+        # Stopping an active stream is always safe during emergency stop; all other tasks are blocked.
+        if not (preauthorized_stream and human_initiated and tool_name == "stop_webrtc_stream"):
+            raise HTTPException(
+                status_code=403, detail="Emergency stop is active; no new tasks accepted."
+            )
 
     if human_initiated:
         args["human_initiated"] = True
@@ -249,18 +292,23 @@ def create_task(
     elif get_current_policy is not None:
         eff_policy = get_current_policy()
     else:
-        eff_policy = {}
+        eff_policy = _load_stored_effective_policy(conn, row)
     policy = policy_from_plane_dict(eff_policy)
 
-    decision = decide(policy, tool_name, approval_granted=False, is_admin=False)
-    if not decision.allowed and not decision.needs_approval:
-        raise HTTPException(status_code=403, detail=decision.reason or "Tool denied by policy.")
-    needs_approval = bool(decision.needs_approval)
-    # decide() enforces the ceiling for Tier 3/4; Tier 1/2 need the same
-    # ceiling check (pre-existing /api/tasks behaviour): anything above
-    # max_tier_unattended requires a recorded approval to run.
-    if not needs_approval and tier.value < 3 and tier.value > policy.max_tier_unattended:
-        needs_approval = True
+    if preauthorized_stream and human_initiated and tool_name in _PREAUTHORIZED_STREAM_TOOLS:
+        # WebRTC session creation/termination already enforced role, tenant,
+        # platform gate, and view-only/control session permissions.
+        needs_approval = False
+    else:
+        decision = decide(policy, tool_name, approval_granted=False, is_admin=False)
+        if not decision.allowed and not decision.needs_approval:
+            raise HTTPException(status_code=403, detail=decision.reason or "Tool denied by policy.")
+        needs_approval = bool(decision.needs_approval)
+        # decide() enforces the ceiling for Tier 3/4; Tier 1/2 need the same
+        # ceiling check (pre-existing /api/tasks behaviour): anything above
+        # max_tier_unattended requires a recorded approval to run.
+        if not needs_approval and tier.value < 3 and tier.value > policy.max_tier_unattended:
+            needs_approval = True
 
     task_id = task_id or uuid.uuid4().hex[:12]
     now_ts = dbmod.now()
@@ -321,7 +369,8 @@ def create_task(
             trace_id = ""
     resolved_trace_id = str(trace_id or "")[:128]
 
-    with conn.transaction():
+    txn_ctx = conn.transaction() if (commit and hasattr(conn, "transaction")) else contextlib.nullcontext()
+    with txn_ctx:
         if request_key:
             claim = conn.execute(
                 "INSERT INTO task_submissions (actor, request_key, request_hash, task_id) VALUES (?,?,?,?) "
@@ -377,8 +426,8 @@ def create_task(
             status = "needs_approval"
         try:
             conn.execute(
-                "INSERT INTO tasks (id, device_id, tenant, tool, args_json, tier, status, approval_id, created_at, updated_at, max_attempts, trace_id)"
-                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO tasks (id, device_id, tenant, tool, args_json, tier, status, approval_id, created_at, updated_at, handoff_id, parent_task_id, max_attempts, trace_id)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     task_id,
                     device_id,
@@ -390,27 +439,49 @@ def create_task(
                     approval_id,
                     now_ts,
                     now_ts,
+                    handoff_id,
+                    parent_task_id,
                     resolved_max_attempts,
                     resolved_trace_id,
                 ),
             )
         except Exception:
-            conn.execute(
-                "INSERT INTO tasks (id, device_id, tenant, tool, args_json, tier, status, approval_id, created_at, updated_at)"
-                " VALUES (?,?,?,?,?,?,?,?,?,?)",
-                (
-                    task_id,
-                    device_id,
-                    tenant,
-                    tool_name,
-                    json.dumps(args),
-                    tier.value,
-                    status,
-                    approval_id,
-                    now_ts,
-                    now_ts,
-                ),
-            )
+            try:
+                conn.execute(
+                    "INSERT INTO tasks (id, device_id, tenant, tool, args_json, tier, status, approval_id, created_at, updated_at, handoff_id, parent_task_id)"
+                    " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (
+                        task_id,
+                        device_id,
+                        tenant,
+                        tool_name,
+                        json.dumps(args),
+                        tier.value,
+                        status,
+                        approval_id,
+                        now_ts,
+                        now_ts,
+                        handoff_id,
+                        parent_task_id,
+                    ),
+                )
+            except Exception:
+                conn.execute(
+                    "INSERT INTO tasks (id, device_id, tenant, tool, args_json, tier, status, approval_id, created_at, updated_at)"
+                    " VALUES (?,?,?,?,?,?,?,?,?,?)",
+                    (
+                        task_id,
+                        device_id,
+                        tenant,
+                        tool_name,
+                        json.dumps(args),
+                        tier.value,
+                        status,
+                        approval_id,
+                        now_ts,
+                        now_ts,
+                    ),
+                )
         try:
             from .task_events import append_task_event
 
@@ -424,30 +495,33 @@ def create_task(
             )
         except Exception:
             pass
+        if commit and not hasattr(conn, "transaction"):
+            conn.commit()
 
-    if audit_fn is not None:
-        try:
-            audit_fn(actor, device_id, tool_name, args, status, tenant=tenant)
-        except Exception:
-            pass
-    else:
-        # Gate 9 (Wave 6): no direct db.audit — route through the single
-        # audit writer on the caller's live connection, so the row commits
-        # with the task insert and keeps the task's tenant.
-        try:
-            from ..audit_writer import write_audit_event
+    if commit:
+        if audit_fn is not None:
+            try:
+                audit_fn(actor, device_id, tool_name, args, status, tenant=tenant)
+            except Exception:
+                pass
+        else:
+            # Gate 9 (Wave 6): no direct db.audit — route through the single
+            # audit writer on the caller's live connection, so the row commits
+            # with the task insert and keeps the task's tenant.
+            try:
+                from ..audit_writer import write_audit_event
 
-            write_audit_event(
-                actor=actor,
-                action=tool_name,
-                device_id=device_id,
-                details=args,
-                conn=conn,
-                tenant=tenant,
-                decision=status,
-            )
-        except Exception:
-            pass
+                write_audit_event(
+                    actor=actor,
+                    action=tool_name,
+                    device_id=device_id,
+                    details=args,
+                    conn=conn,
+                    tenant=tenant,
+                    decision=status,
+                )
+            except Exception:
+                pass
     if status == "queued" and notify is not None:
         try:
             notify(device_id, task_id)

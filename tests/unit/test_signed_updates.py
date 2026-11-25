@@ -242,3 +242,64 @@ def test_child_env_contains_only_allowlist(monkeypatch):
     for leaked in ("DATABASE_URL", "AI_BRIDGE_VAULT_TOKEN", "AI_BRIDGE_TURN_SECRET",
                    "AI_BRIDGE_DEVICE_TOKEN", "SOME_WEBHOOK_URL", "OPENAI_API_KEY"):
         assert leaked not in seen
+
+
+def test_update_url_enforces_https_only(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
+    assert updates.validate_update_url("https://releases.example.com/v0.4.0/app.zip") == (
+        "https://releases.example.com/v0.4.0/app.zip"
+    )
+    for bad in (
+        "http://releases.example.com/app.zip",
+        "file:///etc/passwd",
+        "ftp://releases.example.com/app.zip",
+        "https:///missing-host.zip",
+        "",
+    ):
+        with pytest.raises(ValueError, match="https://|required"):
+            updates.validate_update_url(bad)
+
+    manifest = {
+        "name": "ai-bridge",
+        "version": "0.4.0",
+        "files": [{"path": "a.bin", "sha256": "0" * 64, "url": "http://insecure.example/a.bin"}],
+    }
+    with pytest.raises(ValueError, match="https://"):
+        updates.download_and_stage_update(manifest, staging_dir=tmp_path / "staging")
+
+
+def test_monotonic_version_floor_blocks_rollback(tmp_path, monkeypatch):
+    repo, sha1, sha2 = _make_repo(tmp_path)
+    assert _git(repo, "checkout", "-f", sha1).returncode == 0
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
+
+    # Upgrade to 0.4.0 ratchets the monotonic floor.
+    m_up = {"name": "ai-bridge", "version": "0.4.0", "commit": sha2, "files": []}
+    mp_up, sp_up, pub_up = _write_signed(tmp_path / "up", m_up)
+    res = updates.apply_pinned_git_update(repo, m_up, sp_up.read_text().strip(), pub_up)
+    assert res["ok"] is True
+    assert updates.get_version_floor() == "0.4.0"
+
+    # A validly signed older manifest (0.3.9 or 0.4.0-rc1) must be refused.
+    for older in ("0.3.9", "0.4.0-rc1"):
+        m_old = {"name": "ai-bridge", "version": older, "commit": sha1, "files": []}
+        mp_old, sp_old, pub_old = _write_signed(tmp_path / f"old_{older}", m_old)
+        with pytest.raises(ValueError, match="Rollback refused"):
+            updates.apply_pinned_git_update(repo, m_old, sp_old.read_text().strip(), pub_old)
+        assert _head(repo) == sha2
+
+    # Same-version or higher-version manifest is allowed.
+    m_next = {"name": "ai-bridge", "version": "0.4.1", "commit": sha1, "files": []}
+    mp_next, sp_next, pub_next = _write_signed(tmp_path / "next", m_next)
+    res2 = updates.apply_pinned_git_update(repo, m_next, sp_next.read_text().strip(), pub_next)
+    assert res2["ok"] is True
+    assert updates.get_version_floor() == "0.4.1"
+
+    # download_and_stage_update also refuses downgrades against persisted floor or env floor.
+    with pytest.raises(ValueError, match="Rollback refused"):
+        updates.download_and_stage_update(
+            {"name": "ai-bridge", "version": "0.4.0", "files": []},
+            staging_dir=tmp_path / "staging",
+        )

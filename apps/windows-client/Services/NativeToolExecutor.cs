@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using System.Net.NetworkInformation;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -464,6 +465,74 @@ public sealed class NativeToolExecutor
         return new { path = target, count = entries.Count, entries };
     }
 
+    private static readonly char[] ForbiddenAllowedCommandMetaChars =
+        new[] { '&', '|', ';', '<', '>', '`', '$', '(', ')', '{', '}', '\r', '\n', '\0', '^', '%' };
+
+    /// <summary>
+    /// Validates a shell command against an explicit <c>AllowedCommands</c> allowlist.
+    /// Rejects shell metacharacters, command chaining, redirection, subshells, and newlines
+    /// so an allowlisted first token cannot chain an arbitrary second command.
+    /// </summary>
+    public static void ValidateAllowedCommand(string command, IReadOnlyList<string> allowedCommands)
+    {
+        if (allowedCommands is null || allowedCommands.Count == 0)
+        {
+            return;
+        }
+        var trimmed = (command ?? "").Trim();
+        if (string.IsNullOrEmpty(trimmed))
+        {
+            throw new ArgumentException("Shell command is required.");
+        }
+        if (trimmed.IndexOfAny(ForbiddenAllowedCommandMetaChars) >= 0)
+        {
+            throw new UnauthorizedAccessException(
+                "Policy denied: shell metacharacters are forbidden when AllowedCommands is enforced.");
+        }
+        var tokens = trimmed.Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
+        if (tokens.Length == 0)
+        {
+            throw new ArgumentException("Shell command is required.");
+        }
+        var rawFirst = tokens[0].Trim('"', '\'');
+        var firstToken = Path.GetFileName(rawFirst);
+        if (string.IsNullOrWhiteSpace(firstToken) ||
+            !allowedCommands.Any(c =>
+                string.Equals(Path.GetFileName(c.Trim().Trim('"', '\'')), firstToken, StringComparison.OrdinalIgnoreCase)))
+        {
+            throw new UnauthorizedAccessException($"Policy denied: command '{firstToken}' is not in AllowedCommands.");
+        }
+    }
+
+    /// <summary>
+    /// Streams at most <paramref name="maxChars"/> characters from a file without loading
+    /// the entire file into memory.
+    /// </summary>
+    public static string ReadTextBounded(string path, int maxChars, out bool truncated)
+    {
+        int cap = Math.Max(1, maxChars);
+        truncated = false;
+        using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        using var reader = new StreamReader(fs, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+        var sb = new StringBuilder(Math.Min(cap, 8192));
+        var buf = new char[Math.Min(cap + 1, 8192)];
+        int remaining = cap + 1;
+        while (remaining > 0)
+        {
+            int toRead = Math.Min(buf.Length, remaining);
+            int n = reader.Read(buf, 0, toRead);
+            if (n <= 0) break;
+            sb.Append(buf, 0, n);
+            remaining -= n;
+        }
+        if (sb.Length > cap)
+        {
+            truncated = true;
+            return sb.ToString(0, cap);
+        }
+        return sb.ToString();
+    }
+
     private static object ReadPcFile(AgentGuiConfig config, JsonElement args)
     {
         RequireFullPcAccess(config, "read_pc_file");
@@ -474,13 +543,13 @@ public sealed class NativeToolExecutor
         var requested = args.TryGetProperty("path", out var p) ? p.GetString() ?? "" : "";
         var target = ResolveAccessiblePath(config, requested, requireFullPcFlag: true);
         if (!File.Exists(target)) throw new FileNotFoundException($"File not found: {target}");
-        var content = File.ReadAllText(target);
         int maxRead = Math.Clamp(config.MaxReadBytes, 1024, 2_000_000);
-        if (content.Length > maxRead)
+        var content = ReadTextBounded(target, maxRead, out var truncated);
+        if (truncated)
         {
-            content = content[..maxRead] + "\n...[truncated]";
+            content += "\n...[truncated]";
         }
-        return new { path = target, content };
+        return new { path = target, content, truncated };
     }
 
     private static object WritePcFile(AgentGuiConfig config, JsonElement args)
@@ -577,13 +646,13 @@ public sealed class NativeToolExecutor
         {
             throw new UnauthorizedAccessException($"Reading secret file '{fileName}' is blocked by policy.");
         }
-        var content = File.ReadAllText(target);
         int maxRead = Math.Clamp(config.MaxReadBytes, 1024, 2_000_000);
-        if (content.Length > maxRead)
+        var content = ReadTextBounded(target, maxRead, out var truncated);
+        if (truncated)
         {
-            content = content[..maxRead] + "\n...[truncated]";
+            content += "\n...[truncated]";
         }
-        return new { path = rel, content };
+        return new { path = rel, content, truncated };
     }
 
     private static object SearchWorkspace(AgentGuiConfig config, JsonElement args)
@@ -597,12 +666,24 @@ public sealed class NativeToolExecutor
         var pathArg = args.TryGetProperty("path", out var pEl) ? pEl.GetString() ?? "" : "";
         var root = ConfineWorkspacePath(config.Workspace, pathArg);
         int maxMatches = Math.Clamp(config.MaxListEntries, 10, 1000);
+        int maxRead = Math.Clamp(config.MaxReadBytes, 1024, 2_000_000);
         var matches = new List<object>();
         foreach (var file in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories).Take(500))
         {
             try
             {
-                var text = File.ReadAllText(file);
+                var name = Path.GetFileName(file);
+                if (name.StartsWith(".env", StringComparison.OrdinalIgnoreCase) ||
+                    name.EndsWith(".pem", StringComparison.OrdinalIgnoreCase) ||
+                    name.EndsWith(".key", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+                if (new FileInfo(file).Length > maxRead * 4L)
+                {
+                    continue;
+                }
+                var text = ReadTextBounded(file, maxRead, out _);
                 if (text.Contains(query, StringComparison.OrdinalIgnoreCase))
                 {
                     matches.Add(new { path = Path.GetRelativePath(root, file) });
@@ -651,7 +732,16 @@ public sealed class NativeToolExecutor
 
         if (oldText is not null && newText is not null)
         {
-            var existing = File.ReadAllText(target);
+            long maxEditBytes = Math.Max(Math.Clamp(config.MaxReadBytes, 1024, 2_000_000), 2_000_000);
+            if (new FileInfo(target).Length > maxEditBytes)
+            {
+                throw new InvalidOperationException($"File exceeds safe in-place edit size limit ({maxEditBytes} bytes).");
+            }
+            var existing = ReadTextBounded(target, (int)maxEditBytes, out var wasTruncated);
+            if (wasTruncated)
+            {
+                throw new InvalidOperationException($"File exceeds safe in-place edit size limit ({maxEditBytes} bytes).");
+            }
             if (!existing.Contains(oldText, StringComparison.Ordinal))
             {
                 throw new InvalidOperationException("Target old_text was not found in file.");
@@ -1442,12 +1532,7 @@ public sealed class NativeToolExecutor
 
         if (config.Policy.AllowedCommands.Count > 0)
         {
-            var firstToken = Path.GetFileName(command.Trim().Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries)[0]);
-            if (!config.Policy.AllowedCommands.Any(c =>
-                string.Equals(Path.GetFileName(c.Trim()), firstToken, StringComparison.OrdinalIgnoreCase)))
-            {
-                throw new UnauthorizedAccessException($"Policy denied: command '{firstToken}' is not in AllowedCommands.");
-            }
+            ValidateAllowedCommand(command, config.Policy.AllowedCommands);
         }
 
         int defaultSec = Math.Clamp(config.DefaultTimeoutSeconds, 1, 3600);

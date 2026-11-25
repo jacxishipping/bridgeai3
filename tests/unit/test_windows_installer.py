@@ -217,9 +217,35 @@ def test_assets_icon_exists():
     assert png.exists(), "assets/ai-bridge.png should exist"
 
 
+def test_launcher_never_writes_plaintext_token_and_rejects_batch_injection(tmp_path: Path, monkeypatch):
+    """run-agent.cmd must use DPAPI-sealed device.token and reject cmd metacharacters."""
+    token_file = tmp_path / "device.token"
+    monkeypatch.setattr(installer_gui, "TOKEN_FILE", token_file)
+
+    launcher, _ok, _detail = installer_gui._write_agent_launcher(
+        tmp_path, Path("python.exe"), "https://control.example.com/", "super-secret-device-token"
+    )
+    text = launcher.read_text(encoding="utf-8")
+    assert "super-secret-device-token" not in text
+    assert "AI_BRIDGE_DEVICE_TOKEN" not in text
+    assert f'AI_BRIDGE_TOKEN_FILE={token_file}' in text
+    assert f'--token-file "{token_file}"' in text
+
+    for bad_url in (
+        "https://control.example.com/&calc.exe",
+        "https://control.example.com/|whoami",
+        "https://control.example.com/\r\nwhoami",
+        "https://control.example.com/%COMSPEC%",
+    ):
+        with pytest.raises(installer_gui.InstallerError, match="unsafe batch characters"):
+            installer_gui._write_agent_launcher(tmp_path, Path("python.exe"), bad_url, "tok")
+
+
 @pytest.mark.skipif(platform.system() != "Windows", reason="NTFS ACLs only")
-def test_launcher_acl_is_read_only_for_the_user(tmp_path: Path):
-    """The launcher holds the device token, so the user must not be able to rewrite it."""
+def test_launcher_acl_is_read_only_for_the_user(tmp_path: Path, monkeypatch):
+    """The launcher is read-only for the user and never stores the plaintext device token."""
+    token_file = tmp_path / "device.token"
+    monkeypatch.setattr(installer_gui, "TOKEN_FILE", token_file)
     launcher, ok, detail = installer_gui._write_agent_launcher(
         tmp_path, Path("python.exe"), "https://control.example.com/", "device-token-value"
     )
@@ -232,5 +258,8 @@ def test_launcher_acl_is_read_only_for_the_user(tmp_path: Path):
     assert "NT AUTHORITY\\SYSTEM:(F)" in acl, acl
     assert "BUILTIN\\Administrators:(F)" in acl, acl
     assert "Users:" not in acl, acl
-    # Still readable, so the launcher keeps working.
-    assert "AI_BRIDGE_DEVICE_TOKEN=device-token-value" in launcher.read_text(encoding="utf-8")
+    # Still readable and points to the DPAPI-sealed token file, never plaintext secret.
+    launcher_text = launcher.read_text(encoding="utf-8")
+    assert "AI_BRIDGE_DEVICE_TOKEN" not in launcher_text
+    assert "device-token-value" not in launcher_text
+    assert f"AI_BRIDGE_TOKEN_FILE={token_file}" in launcher_text

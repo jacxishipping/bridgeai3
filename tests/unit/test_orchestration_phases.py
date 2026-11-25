@@ -33,7 +33,8 @@ def _open_policy() -> Policy:
     )
 
 
-def test_webrtc_task_dispatch_passes_monitor_and_bitrate():
+def test_webrtc_task_dispatch_passes_monitor_and_bitrate(monkeypatch):
+    monkeypatch.setenv("AI_BRIDGE_NATIVE_WEBRTC", "off")
     seen: dict = {}
 
     def fake_start(session_id, signaling, scale=1.0, fps=30, monitor_index=None, bitrate_kbps=4500):

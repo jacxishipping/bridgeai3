@@ -38,11 +38,11 @@
 8. **[P1] PostgreSQL drill live-DB overwrite & password-in-argv guards (`scripts/backup_restore.py`):** hard-refused `drill_postgres` when `source_dsn` and `restore_dsn` resolve to the same database, refused overwriting/dropping pre-existing databases (`allow_existing=False`), and passed credentials via `PGPASSWORD` env instead of plaintext in `argv`.
 9. **[P1 — Live Deployment Finding] Agent revocation exit code (`agents/common/poller.py`):** `Poller.run_once()` now calls `_mark_terminal_auth()` when `/api/agent/tasks/next` raises `DeviceRevokedError`/`DeviceTokenExpiredError`, so all platform agents exit cleanly with code `2` instead of `0`.
 
-### Documented Lower-Priority Residuals (Tracked for Release 2/3)
-- `deployment/windows/installer_gui.py`: `run-agent.cmd` still holds the service launcher token on Windows (ACL-locked); migrating service launch to DPAPI-sealed `device.token` + eliminating plaintext cmd interpolation is scheduled for Release 2 agent resilience.
-- `src/ai_bridge/control/supervisor.py` (`enqueue_role_task`) and direct `_queue_webrtc_task` inserts should be unified onto `task_service.create_task()` in Release 2/3 code health.
-- `src/ai_bridge/updates.py`: add monotonic anti-rollback version floor and `https://`-only URL enforcement in Release 2 release engineering.
-- `apps/windows-client/Services/NativeToolExecutor.cs`: tighten `AllowedCommands` to reject shell metacharacters and cap `File.ReadAllText` streaming reads before memory load.
+### Documented Lower-Priority Residuals (Closed Post-R1)
+- ~~`deployment/windows/installer_gui.py`: `run-agent.cmd` still holds the service launcher token on Windows (ACL-locked)~~ — **Closed:** launcher now passes `AI_BRIDGE_TOKEN_FILE` / `--token-file` for DPAPI-sealed `device.token` and rejects batch metacharacters.
+- ~~`src/ai_bridge/control/supervisor.py` (`enqueue_role_task`) and direct `_queue_webrtc_task` inserts should be unified onto `task_service.create_task()`~~ — **Closed:** supervisor and WebRTC queue paths now route through `task_service.create_task()`.
+- ~~`src/ai_bridge/updates.py`: add monotonic anti-rollback version floor and `https://`-only URL enforcement~~ — **Closed:** enforced in `validate_update_url`, `enforce_version_floor`, `apply_pinned_git_update`, `download_and_stage_update`, and Windows/macOS agent update CLIs.
+- ~~`apps/windows-client/Services/NativeToolExecutor.cs`: tighten `AllowedCommands` to reject shell metacharacters and cap `File.ReadAllText` streaming reads before memory load~~ — **Closed:** enforced by `ValidateAllowedCommand` and `ReadTextBounded` (`42/42` C# tests green).
 
 ## 3. Supported-Platform Test Matrix (`5eb8750` — All Green)
 

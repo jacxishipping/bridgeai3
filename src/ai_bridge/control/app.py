@@ -2070,28 +2070,34 @@ def create_app(
         monitor_index: int | None = None,
         bitrate_kbps: int | None = None,
         tool: str = "start_webrtc_stream",
+        actor: str = "webrtc-session",
     ) -> None:
         dev_row = conn.execute("SELECT * FROM devices WHERE id=? AND revoked=0", (device_id,)).fetchone()
         if dev_row is None:
             raise HTTPException(status_code=404, detail="Device not found.")
-        tier = TOOL_TIERS.get(tool)
-        t_val = tier.value if tier else 3
-        task_id = uuid.uuid4().hex[:12]
-        now_ts = dbmod.now()
         # The stream serves a session a human operator just created: mark
         # the task human-initiated so the SEC-08 takeover gate hands it out
         # (a human_control session sets the takeover flag on the device).
-        args = {"session_id": session_id, "scale": scale, "fps": fps, "human_initiated": True}
+        args: dict[str, Any] = {"session_id": session_id, "scale": scale, "fps": fps}
         if monitor_index is not None:
             args["monitor_index"] = monitor_index
         if bitrate_kbps is not None:
             args["bitrate_kbps"] = int(bitrate_kbps)
-        conn.execute(
-            "INSERT INTO tasks (id, device_id, tenant, tool, args_json, tier, status, created_at, updated_at) VALUES (?,?,?,?,?,?,'queued',?,?)",
-            (task_id, device_id, dev_row["tenant"], tool, json.dumps(args), t_val, now_ts, now_ts),
+        task_service_mod.create_task(
+            conn,
+            actor=actor,
+            role="operator",
+            tenant=_row_tenant(dev_row),
+            device_id=device_id,
+            tool=tool,
+            args=args,
+            human_initiated=True,
+            preauthorized_stream=True,
+            device_row=dev_row,
+            get_effective_device_policy=get_effective_device_policy,
+            notify=lambda _d, _t: notify_tasks(),
+            audit_fn=audit,
         )
-        conn.commit()
-        notify_tasks()
 
     # --- Option C: Interactive Live Terminal Endpoints ---
 

@@ -129,10 +129,10 @@ python deployment/smoke_check.py https://YOUR_HOST
 
 ### Tracked residuals (not RC blockers for a small fleet)
 
-- Windows `run-agent.cmd` may still hold an ACL-locked launcher token (DPAPI migration planned)
-- Some supervisor / WebRTC queue paths not fully unified onto `task_service.create_task()`
-- `updates.py`: anti-rollback version floor + HTTPS-only URL enforcement
-- C# `AllowedCommands` metacharacter tightening + bounded large file reads
+- ~~Windows `run-agent.cmd` may still hold an ACL-locked launcher token (DPAPI migration planned)~~ — **Closed** (`deployment/windows/installer_gui.py` now writes `AI_BRIDGE_TOKEN_FILE` / `--token-file` pointing to DPAPI-sealed `device.token` with batch metacharacter rejection; no plaintext token in `run-agent.cmd`).
+- ~~Some supervisor / WebRTC queue paths not fully unified onto `task_service.create_task()`~~ — **Closed** (`supervisor.enqueue_role_task`, `app._queue_webrtc_task`, and `v1_routes` remote WebRTC session queuing now route through `task_service.create_task()`).
+- ~~`updates.py`: anti-rollback version floor + HTTPS-only URL enforcement~~ — **Closed** (`validate_update_url` enforces `https://`-only URLs; monotonic `~/.ai-bridge/update-version-floor.json` + `AI_BRIDGE_UPDATE_MIN_VERSION` blocks signed downgrades).
+- ~~C# `AllowedCommands` metacharacter tightening + bounded large file reads~~ — **Closed** (`NativeToolExecutor.ValidateAllowedCommand` blocks shell metacharacters; `ReadTextBounded` streams bounded chunks without unbounded `File.ReadAllText`).
 
 ---
 

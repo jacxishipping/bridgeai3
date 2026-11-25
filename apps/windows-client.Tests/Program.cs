@@ -571,9 +571,10 @@ await RunTest("AgentTakeoverService: AgentControlling -> TakeOver blocks desktop
 
             AgentTakeoverService.ReturnControlToAgent();
             System.Windows.Threading.Dispatcher.CurrentDispatcher.Invoke(() => { }, System.Windows.Threading.DispatcherPriority.Background);
-            Assert(AgentTakeoverService.State == TakeoverState.Idle && !AgentTakeoverService.IsUserInControl, "Expected Idle after ReturnControlToAgent()");
+            Assert(AgentTakeoverService.State == TakeoverState.AgentControlling && !AgentTakeoverService.IsUserInControl, "Expected AgentControlling after ReturnControlToAgent()");
 
             AgentTakeoverService.Shutdown();
+            Assert(AgentTakeoverService.State == TakeoverState.Idle, "Expected Idle after Shutdown()");
             tcs.SetResult(true);
         }
         catch (Exception ex)
@@ -1047,6 +1048,97 @@ await RunTest("AgentFunctionPermissions: SyncFromEffectivePolicy aligns IsToolAl
     Assert(!DeviceAgentRuntimeService.IsToolAllowed("get_clipboard", cfg, out _), "get_clipboard denied after locked sync");
     Assert(!DeviceAgentRuntimeService.IsToolAllowed("run_shell", cfg, out _), "run_shell denied after locked sync");
     return Task.CompletedTask;
+});
+
+// 41. AllowedCommands rejects shell metacharacter chaining & redirection
+await RunTest("NativeToolExecutor: AllowedCommands blocks shell metacharacters and allows clean commands", async () =>
+{
+    var allowed = new List<string> { "echo", "git" };
+    NativeToolExecutor.ValidateAllowedCommand("git status --short", allowed);
+    NativeToolExecutor.ValidateAllowedCommand("echo hello world", allowed);
+
+    var badCmds = new[]
+    {
+        "git status && whoami",
+        "git status | findstr a",
+        "git status; calc.exe",
+        "echo hi > out.txt",
+        "echo $(whoami)",
+        "echo `whoami`",
+        "echo %USERNAME%",
+        "git status\nwhoami",
+        "powershell.exe -Command dir",
+    };
+    foreach (var bad in badCmds)
+    {
+        bool threw = false;
+        try
+        {
+            NativeToolExecutor.ValidateAllowedCommand(bad, allowed);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            threw = true;
+        }
+        Assert(threw, $"Expected AllowedCommands to reject: {bad}");
+    }
+
+    var tempWs = Path.Combine(Path.GetTempPath(), $"aib-cmd-{Guid.NewGuid():N}");
+    Directory.CreateDirectory(tempWs);
+    try
+    {
+        var cfg = new AgentGuiConfig
+        {
+            Workspace = tempWs,
+            Policy = new AgentPolicyConfig
+            {
+                AllowTier4 = true,
+                AllowShell = true,
+                MaxTierUnattended = 4,
+                AllowedCommands = allowed,
+            },
+        };
+        var exec = new NativeToolExecutor(new SystemMonitorService(), Path.Combine(tempWs, "shots"));
+        var (okChain, _) = await exec.ExecuteAsync("run_shell", "{\"command\":\"echo ok && whoami\"}", cfg, CancellationToken.None);
+        Assert(!okChain, "run_shell must reject chained metacharacter command when AllowedCommands is set");
+    }
+    finally
+    {
+        try { Directory.Delete(tempWs, recursive: true); } catch { /* ignore */ }
+    }
+});
+
+// 42. Bounded streaming file reads cap memory and skip secrets in search
+await RunTest("NativeToolExecutor: ReadTextBounded & ReadWorkspaceFile cap large reads and skip secrets", async () =>
+{
+    var tempWs = Path.Combine(Path.GetTempPath(), $"aib-read-{Guid.NewGuid():N}");
+    Directory.CreateDirectory(tempWs);
+    try
+    {
+        var bigPath = Path.Combine(tempWs, "big.txt");
+        File.WriteAllText(bigPath, new string('A', 20_000));
+        File.WriteAllText(Path.Combine(tempWs, ".env"), "SECRET_NEEDLE=1");
+        File.WriteAllText(Path.Combine(tempWs, "visible.txt"), "VISIBLE_NEEDLE=1");
+
+        var chunk = NativeToolExecutor.ReadTextBounded(bigPath, 1024, out var wasTruncated);
+        Assert(wasTruncated && chunk.Length == 1024, $"Expected bounded read of 1024 chars, got {chunk.Length} (truncated={wasTruncated})");
+
+        var cfg = new AgentGuiConfig { Workspace = tempWs, MaxReadBytes = 1024 };
+        var exec = new NativeToolExecutor(new SystemMonitorService(), Path.Combine(tempWs, "shots"));
+
+        var (okBig, resBig) = await exec.ExecuteAsync("read_workspace_file", "{\"path\":\"big.txt\"}", cfg, CancellationToken.None);
+        Assert(okBig && resBig.Contains("...[truncated]"), "Expected big.txt to be truncated cleanly");
+
+        var (okSearchSecret, resSearchSecret) = await exec.ExecuteAsync("search_workspace", "{\"query\":\"SECRET_NEEDLE\"}", cfg, CancellationToken.None);
+        Assert(okSearchSecret && !resSearchSecret.Contains(".env"), "search_workspace must not match .env secret files");
+
+        var (okSearchVis, resSearchVis) = await exec.ExecuteAsync("search_workspace", "{\"query\":\"VISIBLE_NEEDLE\"}", cfg, CancellationToken.None);
+        Assert(okSearchVis && resSearchVis.Contains("visible.txt"), "search_workspace must find visible.txt");
+    }
+    finally
+    {
+        try { Directory.Delete(tempWs, recursive: true); } catch { /* ignore */ }
+    }
 });
 
 Console.WriteLine($"\nSummary: {passed} passed, {failed} failed ({passed + failed} total)");

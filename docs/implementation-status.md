@@ -91,11 +91,9 @@ Do **not** claim macOS as fully Supported until physical reboot is signed off (o
 
 ## Residuals (tracked, not “unsupported”)
 
-- Windows service launcher token still ACL-locked in `run-agent.cmd` (DPAPI migration planned).
-- Some supervisor / WebRTC queue inserts not fully unified onto `task_service`.
-- Update anti-rollback floor + HTTPS-only URL enforcement.
-- C# `AllowedCommands` metacharacter tightening.
-- Hosted RC evidence (§ Production posture).
+- Hosted RC evidence (§ Production posture: Windows reboot soak, hosted staging gate, hosted Postgres restore drill, cross-NAT TURN).
+- Desktop audio (`F11`) remains off by default (`AI_BRIDGE_DESKTOP_AUDIO=1` emits silent PCM stubs until WASAPI loopback is real).
+- Previously tracked code residuals — DPAPI-only Windows launcher (`run-agent.cmd`), unified `task_service.create_task()` for supervisor/WebRTC queues, `updates.py` monotonic anti-rollback floor + HTTPS-only URLs, and C# `AllowedCommands` metacharacter rejection + bounded file reads — are now **closed with unit tests**.
 
 ---
 

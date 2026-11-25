@@ -169,9 +169,11 @@ def main(argv: list[str] | None = None) -> int:
         _step(log, "corrupt-signature-refused", bad_verify2.returncode != 0,
               f"exit={bad_verify2.returncode}")
 
-        # 7. Hash-verified download into staging (file:// URLs).
+        # 7. Hash-verified download into staging (offline local file:// dry run).
         staging = work / "staging"
-        staged = updates.download_and_stage_update(manifest, staging_dir=staging, apply=False)
+        staged = updates.download_and_stage_update(
+            manifest, staging_dir=staging, apply=False, allow_file_urls=True
+        )
         _step(log, "download-and-stage", staged["ok"] and staged["downloaded"] == ["a.txt", "pyproject.toml"],
               f"downloaded={staged['downloaded']}")
 

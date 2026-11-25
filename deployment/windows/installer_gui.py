@@ -530,21 +530,46 @@ $aces = @($after.Access | ForEach-Object {
     return True, detail
 
 
-def _write_agent_launcher(
-    install_dir: Path, venv_python: Path, control_url: str, token: str
-) -> tuple[Path, bool, str]:
-    """Write a launcher holding the credential, so the task definition does not.
+_BATCH_FORBIDDEN_CHARS = set('\r\n"&|<>^%')
 
-    Returns the path, whether it was locked down to read-only for this user, and
-    a description of the resulting entries.
+
+def _sanitize_batch_value(value: str, label: str) -> str:
+    """Reject cmd.exe metacharacters before writing values into a .cmd launcher."""
+    cleaned = (value or "").strip()
+    bad = sorted({ch for ch in cleaned if ch in _BATCH_FORBIDDEN_CHARS})
+    if bad:
+        raise InstallerError(
+            f"Refusing to write unsafe batch characters ({''.join(bad)!r}) in {label}."
+        )
+    return cleaned
+
+
+def _write_agent_launcher(
+    install_dir: Path,
+    venv_python: Path,
+    control_url: str,
+    token: str = "",
+    *,
+    token_file: Path | None = None,
+) -> tuple[Path, bool, str]:
+    """Write an ACL-locked launcher that reads the DPAPI-sealed token file.
+
+    Never interpolates the plaintext device token into ``run-agent.cmd``: the
+    agent loads and unseals ``AI_BRIDGE_TOKEN_FILE`` (``device.token``) via
+    DPAPI at runtime. Returns ``(path, acl_ok, acl_detail)``.
     """
+    _ = token  # Intentionally unused: token is DPAPI-sealed in device.token, never in cmd.
     launcher = install_dir / "run-agent.cmd"
+    safe_url = _sanitize_batch_value(normalize_control_url(control_url), "control_url")
+    tok_path = _sanitize_batch_value(str(token_file or TOKEN_FILE), "token_file")
+    py_path = _sanitize_batch_value(str(venv_python), "venv_python")
+    script_path = _sanitize_batch_value(str(AGENT_SCRIPT), "agent_script")
     body = (
         "@echo off\r\n"
         "setlocal\r\n"
-        f'set "AI_BRIDGE_CONTROL_URL={normalize_control_url(control_url)}"\r\n'
-        f'set "AI_BRIDGE_DEVICE_TOKEN={token.strip()}"\r\n'
-        f'"{venv_python}" "{AGENT_SCRIPT}"\r\n'
+        f'set "AI_BRIDGE_CONTROL_URL={safe_url}"\r\n'
+        f'set "AI_BRIDGE_TOKEN_FILE={tok_path}"\r\n'
+        f'"{py_path}" "{script_path}" --token-file "{tok_path}"\r\n'
     )
     launcher.write_text(body, encoding="utf-8")
     if platform.system() != "Windows":
@@ -562,8 +587,10 @@ def is_elevated() -> bool:
 
 def register_agent(install_dir: Path, venv_python: Path, control_url: str, token: str, log) -> str:
     """Register the background agent at logon. Returns how it was registered."""
-    launcher, acl_ok, acl_detail = _write_agent_launcher(install_dir, venv_python, control_url, token)
-    log(f"Agent launcher written to {launcher} (token kept out of the task definition)")
+    launcher, acl_ok, acl_detail = _write_agent_launcher(
+        install_dir, venv_python, control_url, token, token_file=TOKEN_FILE
+    )
+    log(f"Agent launcher written to {launcher} (reads DPAPI-sealed token from {TOKEN_FILE}; no plaintext secret in launcher)")
     if platform.system() != "Windows":
         return "unsupported"
     if acl_ok:

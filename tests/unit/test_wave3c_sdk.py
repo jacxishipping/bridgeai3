@@ -386,7 +386,8 @@ def test_sdk_error_code_taxonomy():
 # F-04-07 / F-04-11 — shell contract + SIGKILL escalation
 # ---------------------------------------------------------------------------
 
-def test_shell_contract_echo_and_clean_env():
+def test_shell_contract_echo_and_clean_env(monkeypatch):
+    monkeypatch.delenv("TERM", raising=False)
     assert "AI_BRIDGE_ADMIN_TOKEN" not in terminal_manager.clean_shell_env(
         {"AI_BRIDGE_ADMIN_TOKEN": "leak"})
     env = terminal_manager.clean_shell_env()

@@ -27,6 +27,7 @@ import shutil
 import subprocess
 import sys
 import time
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -102,12 +103,127 @@ def auto_update_allowed() -> bool:
 UPDATE_MANIFEST_ENV = "AI_BRIDGE_UPDATE_MANIFEST_PATH"
 UPDATE_SIGNATURE_ENV = "AI_BRIDGE_UPDATE_SIGNATURE_PATH"
 UPDATE_PUBLIC_KEY_ENV = "AI_BRIDGE_UPDATE_PUBLIC_KEY"
+UPDATE_MIN_VERSION_ENV = "AI_BRIDGE_UPDATE_MIN_VERSION"
 
 _COMMIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+_SEMVER_RE = re.compile(
+    r"^[vV]?(?P<major>0|[1-9]\d*)\.(?P<minor>0|[1-9]\d*)(?:\.(?P<patch>0|[1-9]\d*))?(?:-(?P<pre>[0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$"
+)
 
 
 def _rollback_path() -> Path:
     return Path.home() / ".ai-bridge" / "update-rollback.json"
+
+
+def _version_floor_path() -> Path:
+    return Path.home() / ".ai-bridge" / "update-version-floor.json"
+
+
+def validate_update_url(url: str, *, allow_file_urls: bool = False) -> str:
+    """Enforce HTTPS-only update URLs (reject http://, file://, ftp://, etc.).
+
+    ``allow_file_urls=True`` is reserved exclusively for offline local dry-run
+    harnesses; production callers must never set it.
+    """
+    cleaned = (url or "").strip()
+    if not cleaned:
+        raise ValueError("Update URL is required.")
+    parsed = urllib.parse.urlparse(cleaned)
+    scheme = parsed.scheme.lower()
+    if allow_file_urls and scheme == "file" and parsed.path:
+        return cleaned
+    if scheme != "https" or not parsed.netloc:
+        raise ValueError(
+            f"Update URL must use https:// with a host (got scheme={parsed.scheme!r}): {cleaned!r}"
+        )
+    return cleaned
+
+
+def parse_version_tuple(version: str) -> tuple[int, int, int, int, str]:
+    """Parse a semantic version into a monotonically comparable tuple.
+
+    Final releases sort above pre-releases of the same numeric version
+    (e.g. ``0.3.0`` > ``0.3.0-rc1`` > ``0.2.9``).
+    """
+    raw = (version or "").strip()
+    m = _SEMVER_RE.match(raw)
+    if not m:
+        raise ValueError(f"Invalid update version string: {version!r}")
+    major = int(m.group("major"))
+    minor = int(m.group("minor"))
+    patch = int(m.group("patch") or 0)
+    pre = m.group("pre") or ""
+    is_final = 1 if not pre else 0
+    return (major, minor, patch, is_final, pre)
+
+
+def get_version_floor(floor_path: Path | None = None) -> str | None:
+    """Read the persisted monotonic anti-rollback version floor, if present."""
+    p = Path(floor_path) if floor_path else _version_floor_path()
+    if not p.is_file():
+        return None
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+        val = str(data.get("min_version") or "").strip()
+        if val:
+            parse_version_tuple(val)
+            return val
+    except Exception:
+        return None
+    return None
+
+
+def record_version_floor(version: str, *, floor_path: Path | None = None) -> Path:
+    """Persist the monotonic anti-rollback version floor (ratchets upward only)."""
+    new_tuple = parse_version_tuple(version)
+    p = Path(floor_path) if floor_path else _version_floor_path()
+    existing = get_version_floor(p)
+    effective = version.strip()
+    if existing and parse_version_tuple(existing) > new_tuple:
+        effective = existing
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(
+        json.dumps({"min_version": effective, "updated_at": time.time()}, indent=2),
+        encoding="utf-8",
+    )
+    return p
+
+
+def enforce_version_floor(
+    manifest: dict,
+    *,
+    min_version: str | None = None,
+    floor_path: Path | None = None,
+) -> tuple[str | None, str | None]:
+    """Enforce monotonic anti-rollback against explicit, env, and persisted floors.
+
+    Returns ``(manifest_version, effective_floor)``. Raises ``ValueError`` if
+    an active floor exists and ``manifest["version"]`` is missing, unparseable,
+    or strictly lower than the floor.
+    """
+    candidates: list[str] = []
+    for raw in (min_version, os.environ.get(UPDATE_MIN_VERSION_ENV), get_version_floor(floor_path)):
+        val = str(raw or "").strip()
+        if val:
+            parse_version_tuple(val)
+            candidates.append(val)
+    effective_floor = max(candidates, key=parse_version_tuple) if candidates else None
+
+    m_ver_raw = str(manifest.get("version") or "").strip() or None
+    if effective_floor is None:
+        if m_ver_raw is not None:
+            parse_version_tuple(m_ver_raw)
+        return m_ver_raw, None
+
+    if not m_ver_raw:
+        raise ValueError(
+            f"Rollback refused: manifest is missing a version (minimum allowed: {effective_floor})."
+        )
+    if parse_version_tuple(m_ver_raw) < parse_version_tuple(effective_floor):
+        raise ValueError(
+            f"Rollback refused: manifest version {m_ver_raw!r} is older than version floor {effective_floor!r}."
+        )
+    return m_ver_raw, effective_floor
 
 
 def _resolve_update_paths(
@@ -181,17 +297,21 @@ def apply_pinned_git_update(
     manifest: dict,
     signature_b64: str,
     public_key_path: Path | str,
+    *,
+    min_version: str | None = None,
+    floor_path: Path | None = None,
 ) -> dict:
     """Verify a signed manifest and check out exactly its pinned commit.
 
     Steps: (1) verify the manifest signature (refuse on tamper, before any
-    git network/fetch); (2) require ``manifest["commit"]`` to be a full
-    40-hex SHA; (3) record the current HEAD (commit + branch) as a rollback
-    snapshot at ``~/.ai-bridge/update-rollback.json``; (4) fetch only if the
-    pinned commit is not already present locally, then
-    ``git checkout -f <pinned>`` (never ``origin/main``); (5) verify
-    ``HEAD == pinned``. On any failure, check out the previous HEAD/branch
-    (rollback) and re-raise the original error.
+    git network/fetch); (2) enforce monotonic anti-rollback version floor;
+    (3) require ``manifest["commit"]`` to be a full 40-hex SHA; (4) record
+    the current HEAD (commit + branch) as a rollback snapshot at
+    ``~/.ai-bridge/update-rollback.json``; (5) fetch only if the pinned
+    commit is not already present locally, then ``git checkout -f <pinned>``
+    (never ``origin/main``); (6) verify ``HEAD == pinned`` and ratchet the
+    persisted version floor. On any failure, check out the previous
+    HEAD/branch (rollback) and re-raise the original error.
     """
     repo = Path(repo_dir)
     if not repo.is_dir():
@@ -199,6 +319,9 @@ def apply_pinned_git_update(
     public_key = Path(public_key_path)
     if not verify_manifest(manifest, signature_b64, public_key):
         raise PermissionError("Signed update manifest signature verification failed; update refused.")
+    manifest_version, _ = enforce_version_floor(
+        manifest, min_version=min_version, floor_path=floor_path
+    )
     pinned = str(manifest.get("commit") or "").strip().lower()
     if not _COMMIT_SHA_RE.match(pinned):
         raise ValueError(
@@ -251,6 +374,8 @@ def apply_pinned_git_update(
                 f"Signed update to {pinned} failed and rollback to {previous_commit} also failed: {rollback_exc}"
             ) from rollback_exc
         raise
+    if manifest_version:
+        record_version_floor(manifest_version, floor_path=floor_path)
     return {
         "ok": True,
         "commit": pinned,
@@ -277,11 +402,18 @@ def download_and_stage_update(
     staging_dir: Path,
     install_dir: Path | None = None,
     apply: bool = False,
+    min_version: str | None = None,
+    floor_path: Path | None = None,
+    allow_file_urls: bool = False,
 ) -> dict:
     """Download manifest files into staging, verify hashes, optionally apply into install_dir.
 
-    Each manifest file entry must include ``path``, ``sha256``, and ``url``.
+    Each manifest file entry must include ``path``, ``sha256``, and an ``https://`` ``url``.
+    Enforces the monotonic anti-rollback version floor before any download.
     """
+    manifest_version, _ = enforce_version_floor(
+        manifest, min_version=min_version, floor_path=floor_path
+    )
     staging_dir.mkdir(parents=True, exist_ok=True)
     downloaded: list[str] = []
     for entry in manifest.get("files", []):
@@ -290,9 +422,10 @@ def download_and_stage_update(
         expected = entry.get("sha256")
         if not rel or not url or not expected:
             raise ValueError(f"manifest file entry missing path/url/sha256: {entry}")
+        validated_url = validate_update_url(str(url), allow_file_urls=allow_file_urls)
         dest = _safe_manifest_path(staging_dir, rel)
         dest.parent.mkdir(parents=True, exist_ok=True)
-        with urllib.request.urlopen(url, timeout=60) as resp:
+        with urllib.request.urlopen(validated_url, timeout=60) as resp:
             dest.write_bytes(resp.read())
         if hash_file(dest) != expected:
             dest.unlink(missing_ok=True)
@@ -318,6 +451,8 @@ def download_and_stage_update(
             dst.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(src, dst)
             applied.append(rel)
+        if manifest_version:
+            record_version_floor(manifest_version, floor_path=floor_path)
 
     return {
         "ok": True,

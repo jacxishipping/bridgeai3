@@ -716,25 +716,31 @@ def attach_v1_routes(
                 sess["error"] = str(exc)
             save_webrtc_session_db(conn, app.state, sess)
         else:
-            task_id = uuid.uuid4().hex[:12]
-            now_ts = dbmod.now()
             # The stream serves a session a human operator just created:
-            # mark it human-initiated so the SEC-08 takeover gate (set by a
-            # human_control session) still hands it out.
+            # route through task_service.create_task with human_initiated=True
+            # so e-stop, tenant scoping, task events, and audit are unified.
             args = {
                 "session_id": session_id,
                 "scale": body.scale,
                 "fps": fps,
                 "monitor_index": body.monitor_index,
                 "bitrate_kbps": bitrate_kbps,
-                "human_initiated": True,
             }
-            conn.execute(
-                "INSERT INTO tasks (id, device_id, tenant, tool, args_json, tier, status, created_at, updated_at) VALUES (?,?,?,?,?,3,'queued',?,?)",
-                (task_id, body.device_id, dev_row["tenant"], "start_webrtc_stream", json.dumps(args), now_ts, now_ts),
+            task_service_mod.create_task(
+                conn,
+                actor=actor,
+                role="operator",
+                tenant=dev_row["tenant"],
+                device_id=body.device_id,
+                tool="start_webrtc_stream",
+                args=args,
+                human_initiated=True,
+                preauthorized_stream=True,
+                device_row=dev_row,
+                get_effective_device_policy=get_effective_device_policy,
+                notify=lambda _d, _t: notify_tasks(),
+                audit_fn=audit,
             )
-            conn.commit()
-            notify_tasks()
 
         return format_session_v1(sess)
 

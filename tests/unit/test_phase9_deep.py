@@ -59,10 +59,13 @@ def test_health_endpoint_refreshes_stale_emergency_stop(tmp_path):
 
 def test_poller_mirror_emergency_stop_to_webrtc():
     set_emergency_stop(False)
-    streamer = webrtc_stream.AgentStreamer("s-test", object(), monitor_index=0)
-    set_emergency_stop(True)
-    out = streamer._handle_input_payload(json.dumps({"action": "mousedown", "x": 0.5, "y": 0.5}))
-    assert out.get("error") == "emergency_stop_active"
+    try:
+        streamer = webrtc_stream.AgentStreamer("s-test", object(), monitor_index=0)
+        set_emergency_stop(True)
+        out = streamer._handle_input_payload(json.dumps({"action": "mousedown", "x": 0.5, "y": 0.5}))
+        assert out.get("error") == "emergency_stop_active"
+    finally:
+        set_emergency_stop(False)
 
 
 def test_native_encode_honesty_off(monkeypatch):
@@ -71,7 +74,7 @@ def test_native_encode_honesty_off(monkeypatch):
     assert desc["mode"] == "off"
     assert desc["use_native_encode_timing"] is False
     assert desc["fallback"] == "pyav_screen_track"
-    assert "libwebrtc" in desc["webrtc_path"]
+    assert "aiortc" in desc["webrtc_path"] and "ai_bridge_desktop" in desc["webrtc_path"]
 
 
 def test_browser_hard_isolation_flags(monkeypatch):

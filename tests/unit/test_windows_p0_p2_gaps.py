@@ -116,17 +116,30 @@ def test_require_sign_refuses_unsigned(tmp_path, monkeypatch):
 
 
 def test_download_and_stage_update_apply_gate(tmp_path, monkeypatch):
+    import io
+    import urllib.request
+
     payload = b"hello-update"
     digest = hashlib.sha256(payload).hexdigest()
-    src = tmp_path / "payload.bin"
-    src.write_bytes(payload)
     manifest = {
         "name": "ai-bridge",
         "version": "9.9.9",
-        "files": [{"path": "payload.bin", "sha256": digest, "url": src.as_uri()}],
+        "files": [{"path": "payload.bin", "sha256": digest, "url": "https://releases.example.com/payload.bin"}],
     }
     staging = tmp_path / "staging"
     install = tmp_path / "install"
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
+
+    class _FakeResp(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            self.close()
+            return False
+
+    monkeypatch.setattr(urllib.request, "urlopen", lambda url, timeout=60: _FakeResp(payload))
 
     monkeypatch.delenv("AI_BRIDGE_ALLOW_AUTO_UPDATE", raising=False)
     with pytest.raises(PermissionError, match="AI_BRIDGE_ALLOW_AUTO_UPDATE"):
