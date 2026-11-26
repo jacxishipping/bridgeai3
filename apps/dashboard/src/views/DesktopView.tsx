@@ -36,7 +36,7 @@ import {
   webCodecsSupported,
 } from "../nsl1";
 
-type TransportMode = "jpeg" | "webrtc" | "screen_relay";
+type TransportMode = "auto" | "jpeg" | "webrtc" | "screen_relay";
 
 export function DesktopView({
   api,
@@ -52,7 +52,7 @@ export function DesktopView({
   const [selectedMonitor, setSelectedMonitor] = useState(0);
   const [streaming, setStreaming] = useState(false);
   const [controlArmed, setControlArmed] = useState(false);
-  const [transport, setTransport] = useState<TransportMode>("jpeg");
+  const [transport, setTransport] = useState<TransportMode>("auto");
   const [frameUrl, setFrameUrl] = useState<string | null>(null);
   const [frameError, setFrameError] = useState<string>("");
   const [retryCount, setRetryCount] = useState(0);
@@ -140,6 +140,13 @@ export function DesktopView({
   const screenRelayAvailable = Boolean(
     webCodecsSupported() && !selectedDevice?.revoked && (deviceCaps?.screen_relay_supported ?? true),
   );
+
+  const activeTransport = useMemo<"webrtc" | "screen_relay" | "jpeg">(() => {
+    if (transport !== "auto") return transport;
+    if (screenRelayAvailable) return "screen_relay";
+    if (webrtcAvailable) return "webrtc";
+    return "jpeg";
+  }, [transport, screenRelayAvailable, webrtcAvailable]);
 
   const effectiveDesktopEnabled = useMemo(() => {
     if (deviceCaps) {
@@ -639,7 +646,7 @@ export function DesktopView({
     }
 
     let cancelled = false;
-    if (transport === "jpeg") {
+    if (activeTransport === "jpeg") {
       void pullFrame();
       const timer = window.setInterval(() => {
         void pullFrame();
@@ -650,7 +657,7 @@ export function DesktopView({
       };
     }
 
-    if (transport === "screen_relay") {
+    if (activeTransport === "screen_relay") {
       void startScreenRelay().catch((err) => {
         if (!cancelled) {
           onToast(err instanceof Error ? err.message : "Screen Relay failed — falling back to JPEG");
@@ -665,36 +672,41 @@ export function DesktopView({
 
     void startWebrtc().catch((err) => {
       if (!cancelled) {
-        onToast(err instanceof Error ? err.message : "WebRTC failed — falling back to JPEG");
-        setTransport("jpeg");
+        if (screenRelayAvailable) {
+          onToast("WebRTC unavailable — auto-failing over to Screen Relay (WebCodecs)");
+          setTransport("screen_relay");
+        } else {
+          onToast(err instanceof Error ? err.message : "WebRTC failed — falling back to JPEG");
+          setTransport("jpeg");
+        }
       }
     });
     return () => {
       cancelled = true;
       void stopWebrtc();
     };
-  }, [streaming, transport, pullFrame, startWebrtc, stopWebrtc, startScreenRelay, stopScreenRelay, onToast]);
+  }, [streaming, activeTransport, screenRelayAvailable, pullFrame, startWebrtc, stopWebrtc, startScreenRelay, stopScreenRelay, onToast]);
 
   useEffect(() => {
-    if (!streaming || (transport !== "webrtc" && transport !== "screen_relay") || !sessionIdRef.current) return;
+    if (!streaming || (activeTransport !== "webrtc" && activeTransport !== "screen_relay") || !sessionIdRef.current) return;
     const mode = controlArmed && !controlBlockedReason ? "ai_assisted" : "view_only";
     void api.setWebRtcSessionMode(sessionIdRef.current, mode).catch(() => undefined);
-    if (transport === "screen_relay" && mode !== "view_only" && relayWsRef.current?.readyState === WebSocket.OPEN) {
+    if (activeTransport === "screen_relay" && mode !== "view_only" && relayWsRef.current?.readyState === WebSocket.OPEN) {
       relayWsRef.current.send(JSON.stringify({ type: "claim_control" }));
     }
-  }, [api, controlArmed, controlBlockedReason, streaming, transport]);
+  }, [api, controlArmed, controlBlockedReason, streaming, activeTransport]);
 
   async function dispatchClick(nx: number, ny: number, button: "left" | "right") {
     if (!controlArmed || controlBlockedReason) return;
     const activeMon = monitors[selectedMonitor];
-    if (transport === "screen_relay" && relayWsRef.current?.readyState === WebSocket.OPEN) {
+    if (activeTransport === "screen_relay" && relayWsRef.current?.readyState === WebSocket.OPEN) {
       const seq = relaySeqRef.current++;
       relayWsRef.current.send(encodeNsl1Click(nx, ny, button, seq));
       onToast(`Click via Screen Relay nsl1 (${Math.round(nx * 100)}%, ${Math.round(ny * 100)}%)`);
       return;
     }
     const dc = inputDcRef.current;
-    if (transport === "webrtc" && dc && dc.readyState === "open") {
+    if (activeTransport === "webrtc" && dc && dc.readyState === "open") {
       dc.send(
         JSON.stringify({
           type: "click",
@@ -716,7 +728,7 @@ export function DesktopView({
       screen_height: activeMon?.height ?? 1080,
     });
     onToast(`Click dispatched (${Math.round(nx * 100)}%, ${Math.round(ny * 100)}%)`);
-    if (transport === "jpeg") {
+    if (activeTransport === "jpeg") {
       window.setTimeout(() => void pullFrame(), 300);
     }
   }
@@ -875,11 +887,11 @@ export function DesktopView({
                 : streaming && frameError
                   ? `Degraded · Retrying (${retryCount})`
                   : streaming
-                    ? transport === "webrtc"
-                      ? `WebRTC · ${webrtcStatus}`
-                      : transport === "screen_relay"
-                        ? `Screen Relay · ${relayStatus}${relayFrames > 0 ? ` (${relayFrames}f)` : ""}`
-                        : "Connected · JPEG Live"
+                    ? activeTransport === "webrtc"
+                      ? `WebRTC · ${webrtcStatus}${transport === "auto" ? " (Auto)" : ""}`
+                      : activeTransport === "screen_relay"
+                        ? `Screen Relay · ${relayStatus}${relayFrames > 0 ? ` (${relayFrames}f)` : ""}${transport === "auto" ? " (Auto)" : ""}`
+                        : `Connected · JPEG Live${transport === "auto" ? " (Auto)" : ""}`
                     : "Feed Idle"
             }
           />
@@ -947,7 +959,7 @@ export function DesktopView({
         </div>
       )}
 
-      {streaming && transport === "webrtc" && audioTrackActive && (
+      {streaming && activeTransport === "webrtc" && audioTrackActive && (
         <div
           role="status"
           style={{
@@ -1071,7 +1083,7 @@ export function DesktopView({
                 const nextIdx = Number(e.target.value);
                 setSelectedMonitor(nextIdx);
                 const dc = inputDcRef.current;
-                if (streaming && transport === "webrtc" && dc && dc.readyState === "open") {
+                if (streaming && activeTransport === "webrtc" && dc && dc.readyState === "open") {
                   dc.send(
                     JSON.stringify({
                       type: "switch_monitor",
@@ -1081,7 +1093,7 @@ export function DesktopView({
                   );
                 } else if (
                   streaming &&
-                  transport === "screen_relay" &&
+                  activeTransport === "screen_relay" &&
                   relayWsRef.current?.readyState === WebSocket.OPEN
                 ) {
                   relayWsRef.current.send(
@@ -1108,19 +1120,20 @@ export function DesktopView({
           <select
             aria-label="Stream transport"
             className="field mono"
-            style={{ width: 205 }}
+            style={{ width: 225 }}
             value={transport}
             disabled={streaming}
             onChange={(e) => setTransport(e.target.value as TransportMode)}
-            title="JPEG fallback, Screen Relay WebCodecs H.264 (Win/Mac/Linux, zero TURN), or WebRTC H.264 P2P (Windows)"
+            title="Unified Auto negotiation (WebCodecs / WebRTC / JPEG), or force a specific transport"
           >
-            <option value="jpeg">JPEG · ~1.2s</option>
+            <option value="auto">Auto (Unified Transport)</option>
             <option value="screen_relay" disabled={!screenRelayAvailable}>
               Screen Relay · WebCodecs
             </option>
             <option value="webrtc" disabled={!webrtcAvailable}>
               WebRTC · H.264 P2P
             </option>
+            <option value="jpeg">JPEG · ~1.2s</option>
           </select>
 
           {activeMonitor && (
@@ -1186,7 +1199,7 @@ export function DesktopView({
             position: "relative",
           }}
         >
-          {transport === "screen_relay" && streaming ? (
+          {activeTransport === "screen_relay" && streaming ? (
             <div style={{ position: "relative", display: "inline-block", maxWidth: "100%" }}>
               <canvas
                 ref={canvasRef}
@@ -1228,7 +1241,7 @@ export function DesktopView({
                 </div>
               )}
             </div>
-          ) : transport === "webrtc" && streaming ? (
+          ) : activeTransport === "webrtc" && streaming ? (
             <div style={{ position: "relative", display: "inline-block", maxWidth: "100%" }}>
               <video
                 ref={videoRef}
@@ -1615,10 +1628,10 @@ export function DesktopView({
               disabled={!typeText}
               onClick={async () => {
                 try {
-                  if (transport === "screen_relay" && relayWsRef.current?.readyState === WebSocket.OPEN) {
+                  if (activeTransport === "screen_relay" && relayWsRef.current?.readyState === WebSocket.OPEN) {
                     const seq = relaySeqRef.current++;
                     relayWsRef.current.send(encodeNsl1Text(typeText, seq));
-                  } else if (transport === "webrtc" && inputDcRef.current && inputDcRef.current.readyState === "open") {
+                  } else if (activeTransport === "webrtc" && inputDcRef.current && inputDcRef.current.readyState === "open") {
                     inputDcRef.current.send(JSON.stringify({ type: "type", action: "type", text: typeText }));
                   } else {
                     await api.sendDesktopInput(deviceId, { action: "type", text: typeText });
@@ -1646,7 +1659,7 @@ export function DesktopView({
               onClick={async () => {
                 try {
                   const dc = inputDcRef.current;
-                  if (transport === "webrtc" && dc && dc.readyState === "open") {
+                  if (activeTransport === "webrtc" && dc && dc.readyState === "open") {
                     // Approximate hotkey as key_down/key_up sequence for simple single keys
                     dc.send(JSON.stringify({ type: "key_down", key: hotkey }));
                     dc.send(JSON.stringify({ type: "key_up", key: hotkey }));
@@ -1668,7 +1681,7 @@ export function DesktopView({
               onClick={async () => {
                 try {
                   const dc = inputDcRef.current;
-                  if (transport === "webrtc" && dc && dc.readyState === "open") {
+                  if (activeTransport === "webrtc" && dc && dc.readyState === "open") {
                     dc.send(JSON.stringify({ type: "clipboard_sync", direction: "from_agent" }));
                     onToast("Requested agent clipboard");
                     return;
@@ -1696,7 +1709,7 @@ export function DesktopView({
                 try {
                   const text = (await navigator.clipboard?.readText()) || "";
                   const dc = inputDcRef.current;
-                  if (transport === "webrtc" && dc && dc.readyState === "open") {
+                  if (activeTransport === "webrtc" && dc && dc.readyState === "open") {
                     dc.send(JSON.stringify({ type: "clipboard_sync", direction: "to_agent", text }));
                     onToast("Local clipboard sent to agent");
                     return;

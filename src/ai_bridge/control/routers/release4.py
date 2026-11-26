@@ -394,4 +394,71 @@ def create_release4_router(ctx: ControlContext) -> APIRouter:
         ffmod.record_adoption("desktop_capabilities_v2", "inspect")
         return capmod.device_desktop_capabilities(dict(row), eff_policy)
 
+    @router.get("/api/devices/{device_id}/memory", summary="Recall device-scoped episodic memories and recovery playbooks")
+    def get_device_memory_route(
+        device_id: str,
+        q: str | None = None,
+        episode_type: str | None = None,
+        limit: int = 20,
+        x_admin_token: str | None = Header(default=None),
+        x_session_token: str | None = Header(default=None),
+    ):
+        require_role("viewer", x_admin_token, x_session_token)
+        if device_id != "local":
+            row = conn.execute("SELECT * FROM devices WHERE id=?", (device_id,)).fetchone()
+            if row is None:
+                raise HTTPException(status_code=404, detail="Device not found.")
+            _require_row_tenant(row, x_admin_token, x_session_token)
+            eff_tenant = str(row["tenant"] or "default")
+        else:
+            eff_tenant = resolve_request_tenant(None, x_admin_token, x_session_token)
+        items = memorymod.recall_device_memories(
+            conn,
+            tenant=eff_tenant,
+            device_id=device_id,
+            query=q,
+            episode_type=episode_type,
+            limit=limit,
+        )
+        return {"device_id": device_id, "tenant": eff_tenant, "count": len(items), "episodes": items}
+
+    @router.post("/api/devices/{device_id}/memory/learn", summary="Record a device-level learned recovery episode or UI quirk")
+    def learn_device_memory_route(
+        device_id: str,
+        body: dict = Body(default={}),
+        x_admin_token: str | None = Header(default=None),
+        x_session_token: str | None = Header(default=None),
+    ):
+        actor = require_role("operator", x_admin_token, x_session_token)
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail="Body must be a JSON object.")
+        if device_id != "local":
+            row = conn.execute("SELECT * FROM devices WHERE id=?", (device_id,)).fetchone()
+            if row is None:
+                raise HTTPException(status_code=404, detail="Device not found.")
+            _require_row_tenant(row, x_admin_token, x_session_token)
+            eff_tenant = str(row["tenant"] or "default")
+        else:
+            eff_tenant = resolve_request_tenant(body.get("tenant"), x_admin_token, x_session_token)
+        episode = memorymod.record_device_episode(
+            conn,
+            tenant=eff_tenant,
+            device_id=device_id,
+            agent_id=str(body.get("agent_id") or f"operator:{actor}"),
+            episode_type=str(body.get("episode_type") or "recovery_playbook"),
+            tool=str(body.get("tool") or ""),
+            context_summary=str(body.get("context_summary") or ""),
+            outcome=str(body.get("outcome") or "resolved"),
+            resolution=str(body.get("resolution") or ""),
+        )
+        audit(
+            actor,
+            device_id,
+            "learn_device_memory",
+            {"episode_id": episode["id"], "episode_type": episode["episode_type"], "tool": episode["tool"]},
+            "allowed",
+            tenant=eff_tenant,
+        )
+        return episode
+
     return router

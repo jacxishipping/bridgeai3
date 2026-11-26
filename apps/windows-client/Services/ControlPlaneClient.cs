@@ -534,6 +534,15 @@ public sealed class ControlPlaneClient : IDisposable
                     os = "Windows",
                     hostname = Environment.MachineName,
                     agent_version = "0.3.0-csharp",
+                    capabilities = new
+                    {
+                        display_server = "win32",
+                        transports = new[] { "webrtc", "screen_relay", "jpeg" },
+                        a11y_backend = HybridA11yService.FindAgentDesktopCli() is not null ? "agent_desktop_cli" : "windows_uia",
+                        audio_loopback = true,
+                        audio_backend = "wasapi_loopback",
+                        runtimes = new[] { "dotnet", "powershell" },
+                    },
                     metrics = new
                     {
                         cpu_percent = t.CpuPercent,

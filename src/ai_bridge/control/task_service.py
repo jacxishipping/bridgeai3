@@ -208,7 +208,12 @@ def _load_stored_effective_policy(conn: Any, device_row: Any) -> dict[str, Any]:
     return base
 
 
-_PREAUTHORIZED_STREAM_TOOLS = frozenset({"start_webrtc_stream", "stop_webrtc_stream"})
+_PREAUTHORIZED_STREAM_TOOLS = frozenset({
+    "start_webrtc_stream",
+    "stop_webrtc_stream",
+    "start_screen_relay_stream",
+    "stop_screen_relay_stream",
+})
 
 
 def create_task(
@@ -266,10 +271,23 @@ def create_task(
         )
     if plane_state.load_emergency_stop(conn):
         # Stopping an active stream is always safe during emergency stop; all other tasks are blocked.
-        if not (preauthorized_stream and human_initiated and tool_name == "stop_webrtc_stream"):
+        if not (preauthorized_stream and human_initiated and tool_name in ("stop_webrtc_stream", "stop_screen_relay_stream")):
             raise HTTPException(
                 status_code=403, detail="Emergency stop is active; no new tasks accepted."
             )
+
+    # Pillar 9: Enforce SaaS tenant status & daily task quota when a custom tenant configuration exists
+    if not (preauthorized_stream and human_initiated):
+        try:
+            from . import tenancy as tenancymod
+
+            t_row = conn.execute("SELECT 1 FROM settings WHERE key=?", (f"tenant.config.{tenant}",)).fetchone()
+            if t_row is not None:
+                tenancymod.check_tenant_quota(conn, tenant, "tasks")
+        except HTTPException:
+            raise
+        except Exception:
+            pass
 
     if human_initiated:
         args["human_initiated"] = True

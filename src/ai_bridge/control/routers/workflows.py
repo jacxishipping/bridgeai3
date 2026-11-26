@@ -13,7 +13,7 @@ import json
 import threading
 import uuid
 
-from fastapi import APIRouter, Header, HTTPException, Query
+from fastapi import APIRouter, Body, Header, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
 from ...policy import TOOL_TIERS, normalize_tool_name
@@ -332,6 +332,51 @@ def create_workflows_router(ctx: ControlContext) -> APIRouter:
                 await asyncio.sleep(0.5)
 
         return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+    @router.post("/api/supervisor/plan", summary="Synthesize a capability-aware multi-agent execution DAG from a goal")
+    def supervisor_plan_api(
+        body: dict = Body(default={}),
+        x_admin_token: str | None = Header(default=None),
+        x_session_token: str | None = Header(default=None),
+    ):
+        actor = require_role("operator", x_admin_token, x_session_token)
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail="Body must be a JSON object.")
+        tenant = resolve_request_tenant(body.get("tenant"), x_admin_token, x_session_token)
+        device_id = str(body.get("device_id") or "local").strip() or "local"
+        eff_policy = {}
+        if device_id != "local":
+            dev = conn.execute("SELECT * FROM devices WHERE id=? AND revoked=0", (device_id,)).fetchone()
+            if dev is None:
+                raise HTTPException(status_code=404, detail="Device not found.")
+            _require_row_tenant(dev, x_admin_token, x_session_token)
+            eff_policy = get_effective_device_policy(dev)
+        else:
+            eff_policy = get_current_policy()
+
+        goal = str(body.get("goal") or "").strip()
+        if not goal:
+            raise HTTPException(status_code=400, detail="goal is required.")
+        profile = str(body.get("profile") or "auto").strip()
+        target_devices = body.get("target_devices") if isinstance(body.get("target_devices"), list) else None
+        plan = supervisormod.plan_goal_dag(
+            conn,
+            goal=goal,
+            device_id=device_id,
+            tenant=tenant,
+            profile=profile,
+            target_devices=target_devices,
+            effective_policy=eff_policy,
+        )
+        audit(
+            actor,
+            device_id,
+            "supervisor_plan_goal",
+            {"goal": goal[:200], "profile": plan["profile"], "total_steps": plan["total_steps"]},
+            "allowed",
+            tenant=tenant,
+        )
+        return plan
 
     @router.post("/api/supervisor/handoff")
     def supervisor_handoff_api(

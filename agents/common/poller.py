@@ -632,6 +632,15 @@ class Poller:
     def _heartbeat_once(self) -> dict:
         agent_ver, agent_commit = self._agent_version_info()
         pol_hash = self._last_policy_hash or self._policy_hash(self.policy)
+        caps = getattr(self, "_cached_capabilities", None)
+        if caps is None:
+            try:
+                from ai_bridge.control.desktop_capabilities import probe_local_capabilities
+
+                caps = probe_local_capabilities()
+            except Exception:
+                caps = {}
+            self._cached_capabilities = caps
         hb_body = {
             "hostname": platform.node(),
             "os": f"{platform.system()} {platform.release()}".strip(),
@@ -641,6 +650,7 @@ class Poller:
             "policy_hash": pol_hash,
             "poll_state": self._poll_state_snapshot(),
             "spool_stats": self.spooler.stats(),
+            "capabilities": caps,
         }
         try:
             hb = self._req("POST", "/api/agent/heartbeat", hb_body)

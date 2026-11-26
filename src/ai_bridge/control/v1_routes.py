@@ -42,7 +42,7 @@ from . import task_service as task_service_mod
 
 VALID_SESSION_MODES = {"view_only", "human_control", "ai_assisted"}
 VALID_VIDEO_CODECS = {"H264", "VP8", "VP9", "AV1"}
-VALID_TRANSPORTS = {"webrtc", "screen_relay"}
+VALID_TRANSPORTS = {"auto", "webrtc", "screen_relay", "jpeg"}
 
 # Global in-process registry of human takeover state by device_id so MCP tools and
 # REST/WebSocket handlers share immediate human-takeover enforcement.
@@ -219,13 +219,16 @@ def format_session_v1(sess: dict[str, Any]) -> dict[str, Any]:
     offer_sdp = offer_obj.get("sdp") if isinstance(offer_obj, dict) else None
     offer_type = offer_obj.get("type", "offer") if isinstance(offer_obj, dict) else "offer"
     transport = str(sess.get("transport") or "webrtc")
-    protocol = str(sess.get("protocol") or ("nsl1" if transport == "screen_relay" else "webrtc"))
+    protocol = str(sess.get("protocol") or ("nsl1" if transport == "screen_relay" else ("http_jpeg" if transport == "jpeg" else "webrtc")))
     return {
         "session_id": sid,
         "device_id": str(sess.get("device_id") or "local"),
         "user_id": str(sess.get("user_id") or "admin"),
         "mode": str(sess.get("mode") or "ai_assisted"),
         "transport": transport,
+        "requested_transport": str(sess.get("requested_transport") or transport),
+        "fallback_chain": list(sess.get("fallback_chain") or [transport]),
+        "failover_history": list(sess.get("failover_history") or []),
         "protocol": protocol,
         "video": video,
         "permissions": sess.get("permissions")
@@ -646,12 +649,11 @@ def attach_v1_routes(
     ):
         actor, _role = auth_context(x_admin_token, x_session_token, authorization)
         mode = body.mode if body.mode in VALID_SESSION_MODES else "ai_assisted"
-        transport = body.transport.strip().lower() if body.transport.strip().lower() in VALID_TRANSPORTS else "webrtc"
+        raw_transport = (body.transport or "webrtc").strip().lower()
+        requested_transport = raw_transport if raw_transport in VALID_TRANSPORTS else "webrtc"
         codec = body.codec.upper() if body.codec.upper() in VALID_VIDEO_CODECS else "H264"
         even_w = max(120, (int(body.width) // 2) * 2)
         even_h = max(120, (int(body.height) // 2) * 2)
-        max_fps = 120 if transport == "screen_relay" else 60
-        fps = max(1, min(max_fps, int(body.fps)))
         bitrate_kbps = max(250, min(50000, int(body.bitrate_kbps)))
 
         import platform as _platform
@@ -660,8 +662,10 @@ def attach_v1_routes(
 
         # Reject unsupported OS before creating a session or queueing stream tasks.
         dev_row = None
+        raw_caps: Any = None
         if body.device_id == "local":
             device_os = _platform.system()
+            raw_caps = desktop_capabilitiesmod.probe_local_capabilities()
         else:
             dev_row = conn.execute("SELECT * FROM devices WHERE id=? AND revoked=0", (body.device_id,)).fetchone()
             if dev_row is None:
@@ -672,7 +676,24 @@ def attach_v1_routes(
                 device_os = None
             if device_os is None and hasattr(dev_row, "keys"):
                 device_os = dict(dev_row).get("os")
-        if transport == "screen_relay":
+            try:
+                raw_caps = dev_row["capabilities_json"]
+            except Exception:
+                raw_caps = None
+
+        discovery = desktop_capabilitiesmod.normalize_agent_capabilities(raw_caps, device_os)
+        fallback_chain = list(discovery.get("transports") or ["screen_relay", "jpeg"])
+
+        # Negotiate transport when "auto" is requested
+        if requested_transport == "auto":
+            transport = str(discovery.get("recommended_transport") or (fallback_chain[0] if fallback_chain else "screen_relay"))
+        else:
+            transport = requested_transport
+
+        max_fps = 120 if transport == "screen_relay" else 60
+        fps = max(1, min(max_fps, int(body.fps)))
+
+        if transport in ("screen_relay", "jpeg"):
             family = desktop_capabilitiesmod.normalize_platform_family(device_os)
             if family not in ("Windows", "Linux", "Darwin"):
                 audit(
@@ -684,7 +705,7 @@ def attach_v1_routes(
                 )
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Screen Relay streaming unavailable for unknown platform {device_os or 'unknown'}.",
+                    detail=f"Desktop streaming ({transport}) unavailable for unknown platform {device_os or 'unknown'}.",
                 )
         else:
             gate = desktop_capabilitiesmod.stream_gate_for_os(device_os)
@@ -703,6 +724,19 @@ def attach_v1_routes(
                 )
                 raise HTTPException(status_code=400, detail=detail)
 
+        # Enforce SaaS tenant concurrent stream quota when configured for the device's tenant
+        dev_tenant = str(dev_row["tenant"] if (dev_row is not None and "tenant" in dev_row.keys()) else "default")
+        try:
+            from . import tenancy as tenancymod
+
+            t_row = conn.execute("SELECT 1 FROM settings WHERE key=?", (f"tenant.config.{dev_tenant}",)).fetchone()
+            if t_row is not None:
+                tenancymod.check_tenant_quota(conn, dev_tenant, "streams", app_state=app.state)
+        except HTTPException:
+            raise
+        except Exception:
+            pass
+
         eff_policy = get_effective_device_policy(body.device_id)
         if body.device_id == "local":
             eff_policy = {**eff_policy, "desktop_enabled": True}
@@ -712,6 +746,7 @@ def attach_v1_routes(
         set_device_human_takeover(body.device_id, takeover, actor=actor, conn=conn)
 
         session_id = f"session_{uuid.uuid4().hex[:10]}"
+        protocol = "nsl1" if transport == "screen_relay" else ("http_jpeg" if transport == "jpeg" else "webrtc")
         sess = {
             "id": session_id,
             "session_id": session_id,
@@ -719,7 +754,10 @@ def attach_v1_routes(
             "user_id": actor,
             "mode": mode,
             "transport": transport,
-            "protocol": "nsl1" if transport == "screen_relay" else "webrtc",
+            "requested_transport": requested_transport,
+            "fallback_chain": fallback_chain,
+            "failover_history": [],
+            "protocol": protocol,
             "video": {
                 "codec": codec,
                 "width": even_w,
@@ -729,7 +767,7 @@ def attach_v1_routes(
             },
             "permissions": permissions,
             "human_takeover_active": takeover,
-            "status": "waiting",
+            "status": "streaming" if transport == "jpeg" else "waiting",
             "offer": None,
             "answer": None,
             "agent_candidates": [],
@@ -746,11 +784,20 @@ def attach_v1_routes(
             actor,
             body.device_id,
             "v1_create_session",
-            {"session_id": session_id, "mode": mode, "transport": transport, "codec": codec, "fps": fps},
+            {
+                "session_id": session_id,
+                "mode": mode,
+                "transport": transport,
+                "requested_transport": requested_transport,
+                "codec": codec,
+                "fps": fps,
+            },
             "allowed",
         )
 
-        if body.device_id == "local":
+        if transport == "jpeg":
+            pass
+        elif body.device_id == "local":
             try:
                 if transport == "screen_relay":
                     from .. import screen_relay as screen_relay_mod
@@ -972,6 +1019,124 @@ def attach_v1_routes(
         audit(actor, device_id, "v1_terminate_session", {"session_id": session_id}, "allowed")
         await _broadcast_ws(session_id, {"type": "session_terminated", "session_id": session_id})
         return format_session_v1(sess)
+
+    @app.post("/api/v1/sessions/{session_id}/failover")
+    async def v1_failover_session_transport(
+        session_id: str,
+        body: dict = Body(default={}),
+        x_admin_token: str | None = Header(default=None),
+        x_session_token: str | None = Header(default=None),
+        authorization: str | None = Header(default=None),
+    ):
+        """Pillar 8: Seamlessly fail over an active desktop session to the next transport in its fallback chain."""
+        actor, _role = auth_context(x_admin_token, x_session_token, authorization)
+        sess = load_webrtc_session_db(conn, app.state, session_id)
+        if sess is None:
+            raise HTTPException(status_code=404, detail="Session not found.")
+        current_transport = str(sess.get("transport") or "webrtc")
+        chain = list(sess.get("fallback_chain") or ["webrtc", "screen_relay", "jpeg"])
+        target_transport = str((body or {}).get("target_transport") or "").strip().lower()
+        reason = str((body or {}).get("reason") or "automatic_transport_failover").strip()[:200]
+
+        if not target_transport:
+            if current_transport in chain:
+                idx = chain.index(current_transport)
+                target_transport = chain[idx + 1] if idx + 1 < len(chain) else "jpeg"
+            elif current_transport == "webrtc":
+                target_transport = "screen_relay"
+            else:
+                target_transport = "jpeg"
+
+        if target_transport not in {"webrtc", "screen_relay", "jpeg"}:
+            raise HTTPException(status_code=400, detail=f"Unsupported failover transport '{target_transport}'.")
+
+        device_id = str(sess.get("device_id") or "local")
+        # Stop previous local stream if applicable
+        if current_transport == "webrtc":
+            try:
+                webrtc_stream.stop_stream(session_id)
+            except Exception:
+                pass
+        elif current_transport == "screen_relay":
+            try:
+                from .. import screen_relay as screen_relay_mod
+
+                screen_relay_mod.stop_relay_session(session_id)
+            except Exception:
+                pass
+
+        sess["transport"] = target_transport
+        sess["protocol"] = "nsl1" if target_transport == "screen_relay" else ("http_jpeg" if target_transport == "jpeg" else "webrtc")
+        sess["status"] = "streaming" if target_transport in ("screen_relay", "jpeg") else "waiting"
+        sess["error"] = None
+        history = list(sess.get("failover_history") or [])
+        history.append({
+            "from_transport": current_transport,
+            "to_transport": target_transport,
+            "reason": reason,
+            "timestamp": time.time(),
+        })
+        sess["failover_history"] = history
+
+        fps = int(sess.get("fps") or 30)
+        scale = float(sess.get("scale") or 1.0)
+        bitrate_kbps = int(sess.get("bitrate_kbps") or 4500)
+        monitor_index = int(sess.get("monitor_index") or 0)
+
+        if device_id == "local":
+            if target_transport == "screen_relay":
+                try:
+                    from .. import screen_relay as screen_relay_mod
+
+                    screen_relay_mod.start_relay_session(
+                        session_id,
+                        fps=fps,
+                        scale=scale,
+                        bitrate_kbps=bitrate_kbps,
+                        monitor_index=monitor_index,
+                        on_binary_frame=lambda b, _sid=session_id: _emit_binary_from_thread(_sid, b),
+                    )
+                    sess["status"] = "streaming"
+                except Exception as exc:
+                    sess["status"] = "error"
+                    sess["error"] = str(exc)
+        elif target_transport in ("screen_relay", "webrtc"):
+            dev_row = conn.execute("SELECT * FROM devices WHERE id=? AND revoked=0", (device_id,)).fetchone()
+            if dev_row is not None:
+                stream_tool = "start_screen_relay_stream" if target_transport == "screen_relay" else "start_webrtc_stream"
+                task_service_mod.create_task(
+                    conn,
+                    actor=actor,
+                    role="operator",
+                    tenant=dev_row["tenant"],
+                    device_id=device_id,
+                    tool=stream_tool,
+                    args={
+                        "session_id": session_id,
+                        "scale": scale,
+                        "fps": fps,
+                        "monitor_index": monitor_index,
+                        "bitrate_kbps": bitrate_kbps,
+                    },
+                    human_initiated=True,
+                    preauthorized_stream=True,
+                    device_row=dev_row,
+                    get_effective_device_policy=get_effective_device_policy,
+                    notify=lambda _d, _t: notify_tasks(),
+                    audit_fn=audit,
+                )
+
+        save_webrtc_session_db(conn, app.state, sess)
+        audit(
+            actor,
+            device_id,
+            "v1_failover_session",
+            {"session_id": session_id, "from": current_transport, "to": target_transport, "reason": reason},
+            "allowed",
+        )
+        formatted = format_session_v1(sess)
+        await _broadcast_ws(session_id, {"type": "transport_failover", "session": formatted})
+        return formatted
 
     @app.post("/api/v1/sessions/{session_id}/offer")
     async def v1_post_offer(

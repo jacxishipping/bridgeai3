@@ -52,6 +52,9 @@ def create_devices_router(ctx: ControlContext) -> APIRouter:
     def enroll(body: EnrollIn, x_admin_token: str | None = Header(default=None), x_session_token: str | None = Header(default=None)):
         actor = require_admin(x_admin_token, x_session_token)
         tenant = resolve_request_tenant(body.tenant, x_admin_token, x_session_token)
+        from .. import tenancy as tenancymod
+
+        tenancymod.check_tenant_quota(conn, tenant, "devices", app_state=app.state)
         device_id = uuid.uuid4().hex[:12]
         device_token = secrets.token_urlsafe(32)
         issued = dbmod.now()
@@ -798,6 +801,51 @@ def create_devices_router(ctx: ControlContext) -> APIRouter:
         payload["native_encode"] = __import__("ai_bridge.native_encode", fromlist=["describe_native_encode"]).describe_native_encode()
         audit(actor, "", "fleet_desktop_capabilities_view", {}, "allowed")
         return payload
+
+    @router.get("/api/devices/{device_id}/intelligence", summary="Unified device intelligence profile")
+    def get_device_intelligence_route(
+        device_id: str,
+        x_admin_token: str | None = Header(default=None),
+        x_session_token: str | None = Header(default=None),
+    ):
+        require_role("viewer", x_admin_token, x_session_token)
+        from .. import device_intelligence as intelmod
+
+        if device_id == "local":
+            eff_policy = get_current_policy()
+            live_meta = _get_device_live_meta("local")
+            return intelmod.build_device_intelligence(
+                conn,
+                {"id": "local", "name": "local", "os": __import__("platform").system(), "status": "online", "tenant": "default"},
+                effective_policy=eff_policy,
+                live_meta=live_meta,
+            )
+        row = conn.execute("SELECT * FROM devices WHERE id=?", (device_id,)).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Device not found.")
+        _require_row_tenant(row, x_admin_token, x_session_token)
+        eff_policy = get_effective_device_policy(row)
+        live_meta = _get_device_live_meta(device_id)
+        return intelmod.build_device_intelligence(conn, row, effective_policy=eff_policy, live_meta=live_meta)
+
+    @router.get("/api/fleet/intelligence", summary="Unified fleet intelligence and cross-platform capability summary")
+    def get_fleet_intelligence_route(
+        tenant: str | None = None,
+        x_admin_token: str | None = Header(default=None),
+        x_session_token: str | None = Header(default=None),
+    ):
+        require_role("viewer", x_admin_token, x_session_token)
+        eff_tenant = resolve_request_tenant(tenant, x_admin_token, x_session_token)
+        from .. import device_intelligence as intelmod
+
+        dev_rows = conn.execute("SELECT id FROM devices WHERE tenant=? AND revoked=0", (eff_tenant,)).fetchall()
+        live_metas = _get_devices_live_meta([r["id"] for r in dev_rows]) if dev_rows else {}
+        return intelmod.build_fleet_intelligence(
+            conn,
+            tenant=eff_tenant,
+            get_effective_device_policy=get_effective_device_policy,
+            live_meta_by_device=live_metas,
+        )
 
     @router.get("/api/fleet/version")
     def get_fleet_version(

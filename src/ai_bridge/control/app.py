@@ -1621,9 +1621,11 @@ def create_app(
                 return
 
             step_name = step.get("name") or f"Step {idx + 1}"
-            action = step.get("action", "")
+            action = step.get("action") or step.get("tool") or ""
             args = dict(step.get("args") or {})
             verify_cfg = step.get("verify")
+            guard_cfg = step.get("guard") if isinstance(step.get("guard"), dict) else None
+            step_dev = str(step.get("device_id") or target_dev or "local").strip() or "local"
             retries_left = max(0, int(step.get("retries", max_retries)))
 
             tier_enum = TOOL_TIERS.get(action)
@@ -1697,13 +1699,54 @@ def create_app(
 
             t0 = time.time()
             success = False
+            attempts_used = 0
+            from . import context_execution as ctxexecmod
+            from . import supervisor as _sup_bb
+
+            # Resolve any {{blackboard.step_N.*}} bindings from upstream workflow steps
+            bb_state = {"steps": {}, "shared": {}}
+            for prev_entry in results:
+                if isinstance(prev_entry, dict):
+                    p_idx = int(prev_entry.get("index") or 0)
+                    p_id = str(prev_entry.get("step_id") or f"step_{p_idx}")
+                    p_out = prev_entry.get("result")
+                    p_sum = str(p_out.get("summary") if isinstance(p_out, dict) else p_out or "")[:400]
+                    bb_state["steps"][p_id] = {"output": p_out, "summary": p_sum, "status": prev_entry.get("status")}
+                    bb_state["steps"][f"step_{p_idx}"] = bb_state["steps"][p_id]
+            args = _sup_bb.resolve_blackboard_bindings(args, bb_state)
+            step_entry["args"] = args
+            step_entry["step_id"] = step.get("step_id") or f"step_{idx + 1}"
+            step_entry["role"] = step.get("role") or ""
+            step_entry["device_id"] = step_dev
+
+            pre_ctx = ctxexecmod.capture_execution_context(
+                conn,
+                device_id=step_dev,
+                tenant=tenant,
+                live_meta=_get_device_live_meta(step_dev) if step_dev != "local" else {},
+            )
+            step_entry["pre_context"] = pre_ctx
 
             while retries_left >= 0 and not success:
+                attempts_used += 1
                 try:
+                    if guard_cfg:
+                        guard_res = ctxexecmod.evaluate_context_guard(
+                            guard_cfg,
+                            pre_ctx,
+                            execute_tool_fn=_execute_workflow_step_sync,
+                            device_id=step_dev if step_dev != "local" else target_dev,
+                            tenant=tenant,
+                            actor=actor,
+                        )
+                        step_entry["guard_evaluation"] = guard_res
+                        if not guard_res.get("passed"):
+                            raise RuntimeError("Context guard failed: " + "; ".join(guard_res.get("reasons") or []))
+
                     res = _execute_workflow_step_sync(
                         action,
                         args,
-                        target_dev,
+                        step_dev if step_dev != "local" else target_dev,
                         tenant,
                         actor,
                         workflow_approved=workflow_approved,
@@ -1795,6 +1838,17 @@ def create_app(
                         time.sleep(1.0)
 
             step_entry["duration_seconds"] = round(time.time() - t0, 2)
+            step_entry["attempts"] = attempts_used
+            ctxexecmod.record_execution_learning(
+                conn,
+                tenant=tenant,
+                device_id=step_dev,
+                tool=action,
+                pre_context=pre_ctx,
+                success=success,
+                attempts_used=attempts_used,
+                error_message=str(step_entry.get("error") or ""),
+            )
             results.append(step_entry)
 
             conn.execute("UPDATE workflows SET results_json=?, updated_at=? WHERE id=?", (json.dumps(results), dbmod.now(), wf_id))

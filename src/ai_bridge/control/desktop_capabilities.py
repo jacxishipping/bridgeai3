@@ -224,4 +224,189 @@ def device_desktop_capabilities(device_row: dict[str, Any], effective_policy: di
         "policy_desktop_enabled": policy_desktop,
         "advertised_mode": mode,
         "reason": reason,
+        "discovery": normalize_agent_capabilities(device_row.get("capabilities_json"), device_row.get("os")),
+    }
+
+
+def _default_display_server(family: str) -> str:
+    if family == "Windows":
+        return "win32"
+    if family == "Darwin":
+        return "quartz"
+    if family == "Linux":
+        if os.environ.get("WAYLAND_DISPLAY"):
+            return "wayland"
+        if os.environ.get("DISPLAY"):
+            return "x11"
+        return "x11"
+    return "headless"
+
+
+def _default_a11y_backend(family: str) -> str:
+    if family == "Windows":
+        return "windows_uia"
+    if family == "Darwin":
+        return "macos_ax"
+    if family == "Linux":
+        return "linux_atspi"
+    return "som_ocr"
+
+
+def probe_local_capabilities() -> dict[str, Any]:
+    """Probe the local host for display server, desktop transports, A11y backend, audio loopback, and CLI runtimes."""
+    import shutil
+
+    host_os = platform.system()
+    family = normalize_platform_family(host_os)
+
+    # Display server detection
+    if family == "Windows":
+        display_server = "win32"
+    elif family == "Darwin":
+        display_server = "quartz"
+    elif family == "Linux":
+        if os.environ.get("WAYLAND_DISPLAY"):
+            display_server = "wayland"
+        elif os.environ.get("DISPLAY"):
+            display_server = "x11"
+        else:
+            display_server = "headless"
+    else:
+        display_server = "headless"
+
+    # Available transports ordered by performance
+    transports: list[str] = []
+    if family == "Windows":
+        transports.append("webrtc")
+    if family in ("Windows", "Darwin", "Linux"):
+        transports.append("screen_relay")
+    transports.append("jpeg")
+
+    # A11y backend detection
+    a11y_backend = _default_a11y_backend(family)
+    try:
+        from ai_bridge import hybrid_desktop
+
+        if getattr(hybrid_desktop, "_load_agent_desktop_ffi", lambda: None)() is not None:
+            a11y_backend = "agent_desktop_ffi"
+        elif getattr(hybrid_desktop, "_find_agent_desktop_binary", lambda: None)() is not None:
+            a11y_backend = "agent_desktop_cli"
+    except Exception:
+        pass
+
+    # Audio loopback detection
+    audio_loopback = False
+    audio_backend = "none"
+    if family == "Windows":
+        try:
+            from ai_bridge import desktop_audio
+
+            probe = desktop_audio.probe_wasapi_loopback()
+            if probe.get("available"):
+                audio_loopback = True
+                audio_backend = str(probe.get("backend") or "wasapi_loopback")
+        except Exception:
+            pass
+
+    # Runtimes discovery
+    candidate_runtimes = ("python", "node", "dotnet", "git", "docker", "powershell", "bash")
+    runtimes = [rt for rt in candidate_runtimes if shutil.which(rt) is not None]
+
+    # Monitors discovery
+    monitors: list[dict[str, Any]] = []
+    try:
+        from ai_bridge.screen_capture import get_monitors
+
+        raw_mons = get_monitors()
+        if isinstance(raw_mons, list):
+            monitors = raw_mons[:8]
+    except Exception:
+        pass
+    if not monitors:
+        monitors = [{"index": 0, "name": "Primary Display", "width": 1920, "height": 1080, "is_primary": True}]
+
+    return {
+        "schema": "ai-bridge-capability-discovery/v1",
+        "platform_family": family,
+        "display_server": display_server,
+        "transports": transports,
+        "recommended_transport": transports[0] if transports else "jpeg",
+        "a11y_backend": a11y_backend,
+        "audio_loopback": audio_loopback,
+        "audio_backend": audio_backend,
+        "runtimes": runtimes,
+        "monitors": monitors,
+        "monitor_count": len(monitors),
+    }
+
+
+def normalize_agent_capabilities(raw: Any, os_value: str | None = None) -> dict[str, Any]:
+    """Normalize agent-reported capabilities JSON or dict into the canonical cross-platform discovery contract."""
+    import json
+
+    family = normalize_platform_family(os_value)
+    parsed: dict[str, Any] = {}
+    raw_list: list[str] = []
+    if isinstance(raw, str) and raw.strip():
+        try:
+            loaded = json.loads(raw)
+            if isinstance(loaded, dict):
+                parsed = loaded
+            elif isinstance(loaded, list):
+                raw_list = [str(x) for x in loaded if x]
+        except Exception:
+            pass
+    elif isinstance(raw, dict):
+        parsed = dict(raw)
+    elif isinstance(raw, list):
+        raw_list = [str(x) for x in raw if x]
+
+    default_transports: list[str] = []
+    if family == "Windows":
+        default_transports.append("webrtc")
+    if family in ("Windows", "Darwin", "Linux"):
+        default_transports.append("screen_relay")
+    default_transports.append("jpeg")
+
+    raw_transports = parsed.get("transports")
+    if isinstance(raw_transports, list) and raw_transports:
+        transports = [str(t).strip().lower() for t in raw_transports if str(t).strip().lower() in {"webrtc", "screen_relay", "jpeg"}]
+        if family != "Windows":
+            transports = [t for t in transports if t != "webrtc"]
+        if "jpeg" not in transports:
+            transports.append("jpeg")
+    else:
+        transports = default_transports
+
+    display_server = str(parsed.get("display_server") or _default_display_server(family)).strip().lower()
+    a11y_backend = str(parsed.get("a11y_backend") or _default_a11y_backend(family)).strip().lower()
+    audio_loopback = bool(parsed.get("audio_loopback", family == "Windows"))
+    audio_backend = str(parsed.get("audio_backend") or ("wasapi_loopback" if audio_loopback and family == "Windows" else "none"))
+
+    raw_runtimes = parsed.get("runtimes")
+    if isinstance(raw_runtimes, list):
+        runtimes = [str(r).strip().lower() for r in raw_runtimes if str(r).strip()]
+    elif raw_list:
+        runtimes = [str(r).strip().lower() for r in raw_list if str(r).strip()]
+    else:
+        runtimes = ["python", "powershell"] if family == "Windows" else (["python", "bash"] if family in ("Linux", "Darwin") else ["python"])
+
+    raw_monitors = parsed.get("monitors")
+    monitors = raw_monitors if isinstance(raw_monitors, list) and raw_monitors else [
+        {"index": 0, "name": "Primary Display", "width": 1920, "height": 1080, "is_primary": True}
+    ]
+
+    return {
+        "schema": "ai-bridge-capability-discovery/v1",
+        "platform_family": family,
+        "display_server": display_server,
+        "transports": transports,
+        "recommended_transport": transports[0] if transports else "jpeg",
+        "a11y_backend": a11y_backend,
+        "audio_loopback": audio_loopback,
+        "audio_backend": audio_backend,
+        "runtimes": runtimes,
+        "monitors": monitors,
+        "monitor_count": len(monitors),
+        "probed_by_agent": bool(parsed),
     }

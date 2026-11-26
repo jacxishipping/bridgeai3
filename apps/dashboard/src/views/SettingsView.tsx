@@ -8,6 +8,7 @@ import type {
   AuthSession,
   BackupItem,
   ReadinessResponse,
+  TenantUsageSummary,
   ThemeMode,
   UserRecord,
 } from "../types";
@@ -47,6 +48,11 @@ export function SettingsView({
     generic_webhook: "",
   });
   const [deliveries, setDeliveries] = useState<AlertDelivery[]>([]);
+  const [tenants, setTenants] = useState<TenantUsageSummary[]>([]);
+  const [tenantOpen, setTenantOpen] = useState(false);
+  const [newTenantId, setNewTenantId] = useState("");
+  const [newTenantName, setNewTenantName] = useState("");
+  const [newTenantTier, setNewTenantTier] = useState<"free" | "pro" | "enterprise">("pro");
 
   // Create User Modal
   const [userOpen, setUserOpen] = useState(false);
@@ -55,12 +61,13 @@ export function SettingsView({
   const [newRole, setNewRole] = useState<"viewer" | "operator" | "admin">("operator");
 
   async function loadAll() {
-    const [rd, us, bk, al, dl] = await Promise.all([
+    const [rd, us, bk, al, dl, tn] = await Promise.all([
       api.getReadiness().catch(() => null),
       api.listUsers().catch(() => []),
       api.listBackups().catch(() => ({ items: [], backend: "sqlite" })),
       api.getAlertsConfig().catch(() => null),
       api.listAlertDeliveries().catch(() => []),
+      api.listTenants().catch(() => ({ tenants: ["default"], items: [] })),
     ]);
     setReadiness(rd);
     setUsers(us);
@@ -68,6 +75,7 @@ export function SettingsView({
     setBackupBackend(bk.backend || "sqlite");
     if (al) setAlerts((prev) => ({ ...prev, ...al }));
     setDeliveries(dl);
+    setTenants(tn.items || []);
   }
 
   useEffect(() => {
@@ -391,6 +399,126 @@ export function SettingsView({
           </div>
         )}
       </SurfaceCard>
+
+      {/* Pillar 9: Production SaaS Multi-Tenancy, Quotas & Usage Metering */}
+      <SurfaceCard style={{ padding: 18, display: "flex", flexDirection: "column", gap: 12 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 7, fontSize: 13.5, fontWeight: 600 }}>
+            <Globe size={15} style={{ color: "var(--accent)" }} /> Production SaaS Tenancy &amp; Resource Quotas ({tenants.length || 1})
+          </span>
+          <Button size="sm" variant="primary" onClick={() => setTenantOpen(true)}>
+            <Plus size={12} /> Provision Tenant
+          </Button>
+        </div>
+
+        {tenants.length === 0 ? (
+          <div style={{ fontSize: 12, color: "var(--text-muted)" }}>
+            Default Enterprise Workspace active. Provision additional tenants to isolate devices, tasks, streams, and memory quotas.
+          </div>
+        ) : (
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 10 }}>
+            {tenants.map((t) => (
+              <div
+                key={t.tenant_id}
+                style={{
+                  padding: 12,
+                  borderRadius: 10,
+                  background: "var(--bg-elevated)",
+                  border: "1px solid var(--border-hair)",
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 8,
+                  fontSize: 12,
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                  <div>
+                    <div style={{ fontWeight: 600 }}>{t.name}</div>
+                    <div className="mono" style={{ fontSize: 11, color: "var(--text-muted)" }}>
+                      tenant: {t.tenant_id} · {t.quotas.rate_limit_rpm} RPM
+                    </div>
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    <StatusBadge
+                      status={t.status === "active" ? "ok" : "err"}
+                      label={`${t.plan_tier.toUpperCase()} · ${t.status}`}
+                    />
+                  </div>
+                </div>
+
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, fontSize: 11.5 }} className="mono">
+                  <div>
+                    Devices: {t.usage.active_devices}/{t.quotas.max_devices} ({t.utilization_pct.devices}%)
+                  </div>
+                  <div>
+                    Streams: {t.usage.active_streams}/{t.quotas.max_concurrent_streams}
+                  </div>
+                  <div>
+                    24h Tasks: {t.usage.daily_tasks}/{t.quotas.max_daily_tasks}
+                  </div>
+                  <div>
+                    Memory: {t.usage.memory_chunks}/{t.quotas.max_memory_chunks}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </SurfaceCard>
+
+      {/* Provision SaaS Tenant Modal */}
+      <Modal open={tenantOpen} title="Provision / Configure SaaS Tenant" onClose={() => setTenantOpen(false)}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          <input
+            className="field mono"
+            placeholder="Tenant ID (e.g. acme-prod)"
+            value={newTenantId}
+            onChange={(e) => setNewTenantId(e.target.value)}
+          />
+          <input
+            className="field"
+            placeholder="Organization / Workspace Name (e.g. Acme Robotics)"
+            value={newTenantName}
+            onChange={(e) => setNewTenantName(e.target.value)}
+          />
+          <select
+            className="field mono"
+            value={newTenantTier}
+            onChange={(e) => setNewTenantTier(e.target.value as "free" | "pro" | "enterprise")}
+          >
+            <option value="free">free (5 devices · 2 streams · 500 daily tasks)</option>
+            <option value="pro">pro (50 devices · 15 streams · 10,000 daily tasks)</option>
+            <option value="enterprise">enterprise (10,000 devices · 500 streams · 1M daily tasks)</option>
+          </select>
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+            <Button variant="ghost" onClick={() => setTenantOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              variant="primary"
+              disabled={!newTenantId.trim()}
+              onClick={async () => {
+                try {
+                  await api.createOrConfigureTenant({
+                    tenant_id: newTenantId.trim(),
+                    name: newTenantName.trim() || newTenantId.trim(),
+                    plan_tier: newTenantTier,
+                  });
+                  setTenantOpen(false);
+                  setNewTenantId("");
+                  setNewTenantName("");
+                  onToast(`Configured SaaS tenant '${newTenantId.trim()}' (${newTenantTier})`);
+                  await loadAll();
+                } catch (err) {
+                  onToast(err instanceof Error ? err.message : "Failed to configure tenant");
+                }
+              }}
+            >
+              Save Tenant
+            </Button>
+          </div>
+        </div>
+      </Modal>
 
       {/* Add User Modal */}
       <Modal open={userOpen} title="Create Control Plane User" onClose={() => setUserOpen(false)}>

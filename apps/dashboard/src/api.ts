@@ -927,7 +927,7 @@ export class ApiClient {
   async createWebRtcSession(payload: {
     device_id: string;
     mode?: "view_only" | "human_control" | "ai_assisted";
-    transport?: "webrtc" | "screen_relay";
+    transport?: "auto" | "webrtc" | "screen_relay" | "jpeg";
     fps?: number;
     scale?: number;
     monitor_index?: number;
@@ -938,6 +938,16 @@ export class ApiClient {
     return this.request<WebRtcSessionV1>("/api/v1/sessions", {
       method: "POST",
       body: JSON.stringify(payload),
+    });
+  }
+
+  async failoverSessionTransport(
+    sessionId: string,
+    payload?: { target_transport?: "webrtc" | "screen_relay" | "jpeg"; reason?: string },
+  ): Promise<WebRtcSessionV1> {
+    return this.request<WebRtcSessionV1>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/failover`, {
+      method: "POST",
+      body: JSON.stringify(payload || {}),
     });
   }
 
@@ -1029,5 +1039,112 @@ export class ApiClient {
 
   async deleteMemorySnippet(snippetId: string): Promise<{ snippet_id: string; deleted: boolean }> {
     return this.request(`/api/memory/snippets/${encodeURIComponent(snippetId)}`, { method: "DELETE" });
+  }
+
+  // 9-Pillar Architectural Expansion APIs
+  async getDeviceIntelligence(deviceId: string): Promise<import("./types").DeviceIntelligenceProfile> {
+    return this.request(`/api/devices/${encodeURIComponent(deviceId)}/intelligence`);
+  }
+
+  async getFleetIntelligence(): Promise<{
+    total_devices: number;
+    online_devices: number;
+    optimal_devices: number;
+    fleet_health_score: number;
+    total_anomalies: number;
+    platform_breakdown: Record<string, number>;
+    transport_breakdown: Record<string, number>;
+    a11y_backend_breakdown: Record<string, number>;
+    devices: Array<import("./types").DeviceIntelligenceProfile>;
+  }> {
+    return this.request("/api/fleet/intelligence");
+  }
+
+  async supervisorPlanGoal(payload: {
+    device_id: string;
+    goal: string;
+    profile?: string;
+    target_devices?: string[];
+  }): Promise<import("./types").AutonomousPlanResponse> {
+    return this.request("/api/supervisor/plan", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async getHandoffStatus(handoffId: string): Promise<Record<string, unknown>> {
+    return this.request(`/api/supervisor/handoffs/${encodeURIComponent(handoffId)}`);
+  }
+
+  async getDeviceMemories(
+    deviceId: string,
+    params?: { q?: string; episode_type?: string; limit?: number },
+  ): Promise<{ device_id: string; tenant: string; count: number; episodes: Array<import("./types").DeviceMemoryEpisode> }> {
+    const qs = new URLSearchParams();
+    if (params?.q) qs.set("q", params.q);
+    if (params?.episode_type) qs.set("episode_type", params.episode_type);
+    if (params?.limit != null) qs.set("limit", String(params.limit));
+    const suffix = qs.toString() ? `?${qs.toString()}` : "";
+    return this.request(`/api/devices/${encodeURIComponent(deviceId)}/memory${suffix}`);
+  }
+
+  async learnDeviceMemory(
+    deviceId: string,
+    payload: {
+      episode_type?: string;
+      tool?: string;
+      context_summary?: string;
+      outcome?: string;
+      resolution: string;
+    },
+  ): Promise<import("./types").DeviceMemoryEpisode> {
+    return this.request(`/api/devices/${encodeURIComponent(deviceId)}/memory/learn`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async listTenants(): Promise<{ tenants: string[]; items?: Array<import("./types").TenantUsageSummary> }> {
+    return this.request("/api/tenants");
+  }
+
+  async createOrConfigureTenant(payload: {
+    tenant_id: string;
+    name?: string;
+    plan_tier?: "free" | "pro" | "enterprise";
+    status?: "active" | "suspended";
+    max_devices?: number;
+    max_concurrent_streams?: number;
+    max_daily_tasks?: number;
+    max_memory_chunks?: number;
+    rate_limit_rpm?: number;
+  }): Promise<import("./types").TenantUsageSummary> {
+    return this.request("/api/tenants", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async getTenantUsage(tenantId: string): Promise<import("./types").TenantUsageSummary> {
+    return this.request(`/api/tenants/${encodeURIComponent(tenantId)}/usage`);
+  }
+
+  async updateTenantQuotas(
+    tenantId: string,
+    payload: Partial<{
+      name: string;
+      plan_tier: "free" | "pro" | "enterprise";
+      status: "active" | "suspended";
+      max_devices: number;
+      max_concurrent_streams: number;
+      max_daily_tasks: number;
+      max_memory_chunks: number;
+      rate_limit_rpm: number;
+    }>,
+  ): Promise<import("./types").TenantUsageSummary> {
+    return this.request(`/api/tenants/${encodeURIComponent(tenantId)}/quotas`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    });
   }
 }

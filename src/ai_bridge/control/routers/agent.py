@@ -54,6 +54,8 @@ def create_agent_router(ctx: ControlContext) -> APIRouter:
         policy_hash = (str(body.get("policy_hash") or "").strip()[:128]) if isinstance(body, dict) else ""
         poll_state = body.get("poll_state") if isinstance(body, dict) and isinstance(body.get("poll_state"), dict) else None
         spool_stats = body.get("spool_stats") if isinstance(body, dict) and isinstance(body.get("spool_stats"), dict) else None
+        capabilities = body.get("capabilities") if isinstance(body, dict) and isinstance(body.get("capabilities"), (dict, list)) else None
+        foreground_window = (str(body.get("foreground_window") or "").strip()[:300]) if isinstance(body, dict) else ""
 
         set_parts = ["status='online'", "last_seen=?"]
         set_params: list = [now_ts]
@@ -78,6 +80,9 @@ def create_agent_router(ctx: ControlContext) -> APIRouter:
         if spool_stats is not None:
             set_parts.append("spool_stats_json=?")
             set_params.append(json.dumps(spool_stats, default=str)[:4000])
+        if capabilities is not None:
+            set_parts.append("capabilities_json=?")
+            set_params.append(json.dumps(capabilities, default=str)[:8000])
         set_params.append(row["id"])
         try:
             conn.execute(f"UPDATE devices SET {', '.join(set_parts)} WHERE id=?", tuple(set_params))
@@ -103,6 +108,12 @@ def create_agent_router(ctx: ControlContext) -> APIRouter:
             meta_entry["ip_address"] = str(client_ip)
         elif client_ip and not meta_entry.get("ip_address"):
             meta_entry["ip_address"] = str(client_ip)
+        if capabilities is not None:
+            meta_entry["capabilities"] = capabilities
+        if foreground_window:
+            meta_entry["foreground_window"] = foreground_window
+        elif isinstance(metrics, dict) and metrics.get("foreground_window"):
+            meta_entry["foreground_window"] = str(metrics["foreground_window"])[:300]
 
         if metrics and isinstance(metrics, dict):
             cpu_p = metrics.get("cpu_percent")

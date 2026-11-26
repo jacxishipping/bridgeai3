@@ -641,3 +641,158 @@ export interface MemorySnippetRecord {
   read_only: boolean;
   opt_in_prompt: boolean;
 }
+
+// 9-Pillar Architectural Expansion Types
+export interface DeviceCapabilityDiscovery {
+  schema?: string;
+  platform_family: string;
+  display_server: string;
+  transports: string[];
+  recommended_transport: string;
+  a11y_backend: string;
+  audio_loopback: boolean;
+  audio_backend: string;
+  runtimes: string[];
+  monitor_count: number;
+  probed_by_agent?: boolean;
+}
+
+export interface DeviceIntelligenceProfile {
+  schema: string;
+  device_id: string;
+  device_name: string;
+  hostname: string;
+  os: string;
+  platform_family: string;
+  tenant: string;
+  online: boolean;
+  revoked: boolean;
+  heartbeat_age_sec: number | null;
+  health_score: number;
+  readiness_state: "optimal" | "degraded" | "critical" | "offline" | "revoked";
+  capabilities: DeviceCapabilityDiscovery;
+  recommended_transport: string;
+  recommended_a11y_backend: string;
+  context: {
+    foreground_window?: string;
+    active_user?: string;
+    ip_address?: string;
+    cpu_percent?: number | null;
+    memory_percent?: number | null;
+    disk_percent?: number | null;
+  };
+  reliability: {
+    recent_tasks_evaluated: number;
+    completed: number;
+    failed: number;
+    active_or_queued: number;
+    success_rate_pct: number;
+    last_failed_tool?: string | null;
+    learned_memory_episodes: number;
+  };
+  anomalies: Array<{ code: string; severity: string; detail: string }>;
+  suggested_actions: Array<{ action: string; title: string; tool: string }>;
+}
+
+export interface WorkflowDagStep {
+  step_id?: string;
+  index?: number;
+  name?: string;
+  role?: string;
+  role_name?: string;
+  device_id?: string;
+  tool: string;
+  action?: string;
+  args?: Record<string, unknown>;
+  depends_on?: string[];
+  tier?: number;
+  requires_approval?: boolean;
+  guard?: {
+    require_online?: boolean;
+    require_window_title_contains?: string;
+    require_a11y_ref_present?: string;
+    max_cpu_pct?: number;
+    max_memory_pct?: number;
+  };
+  verify?: {
+    mode?: string;
+    text?: string;
+    window?: string;
+    capture_after?: boolean;
+    timeout_seconds?: number;
+  } | null;
+  retries?: number;
+  fallback_role?: string;
+}
+
+export interface AutonomousPlanResponse {
+  schema: string;
+  ok: boolean;
+  goal: string;
+  profile: string;
+  device_id: string;
+  tenant: string;
+  total_steps: number;
+  max_tier: number;
+  approval_required_steps: number;
+  roles_involved: string[];
+  device_intelligence: {
+    health_score: number;
+    readiness_state: string;
+    platform_family: string;
+    recommended_transport: string;
+    recommended_a11y_backend: string;
+  };
+  recalled_memories: Array<{
+    id: string;
+    episode_type?: string;
+    tool?: string;
+    content?: string;
+  }>;
+  steps: WorkflowDagStep[];
+}
+
+export interface DeviceMemoryEpisode {
+  id: string;
+  tenant: string;
+  device_id: string;
+  agent_id: string;
+  episode_type: string;
+  tool: string;
+  outcome?: string;
+  context_summary?: string;
+  resolution?: string;
+  content: string;
+  created_at: number;
+}
+
+export interface TenantUsageSummary {
+  schema?: string;
+  tenant_id: string;
+  name: string;
+  plan_tier: "free" | "pro" | "enterprise" | string;
+  status: "active" | "suspended" | string;
+  quotas: {
+    max_devices: number;
+    max_concurrent_streams: number;
+    max_daily_tasks: number;
+    max_memory_chunks: number;
+    rate_limit_rpm: number;
+  };
+  usage: {
+    active_devices: number;
+    online_devices: number;
+    active_streams: number;
+    daily_tasks: number;
+    memory_chunks: number;
+    workflows_total: number;
+    active_users: number;
+  };
+  utilization_pct: {
+    devices: number;
+    streams: number;
+    daily_tasks: number;
+    memory_chunks: number;
+  };
+}
+

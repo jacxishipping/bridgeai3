@@ -128,6 +128,9 @@ beyond the approver.
 | GET | `/api/devices/{device_id}/desktop/webrtc/{session_id}` | Admin, Session | get_webrtc_session |
 | POST | `/api/devices/{device_id}/desktop/webrtc/{session_id}/answer` | Admin, Session | post_webrtc_answer |
 | POST | `/api/devices/{device_id}/desktop/webrtc/{session_id}/candidates` | Admin, Session | post_webrtc_viewer_candidate |
+| GET | `/api/devices/{device_id}/intelligence` | Admin, Session | Unified device intelligence profile |
+| GET | `/api/devices/{device_id}/memory` | Admin, Session | Recall device-scoped episodic memories and recovery playbooks |
+| POST | `/api/devices/{device_id}/memory/learn` | Admin, Session | Record a device-level learned recovery episode or UI quirk |
 | PUT | `/api/devices/{device_id}/metadata` | Admin, Session | set_metadata |
 | POST | `/api/devices/{device_id}/mtls-fingerprint` | Admin, Session | set_device_mtls_fingerprint |
 | GET | `/api/devices/{device_id}/overview` | Admin, Session | get_device_overview |
@@ -203,6 +206,9 @@ beyond the approver.
 | GET | `/api/roles` | Admin, Session | list_roles_api |
 | POST | `/api/roles/{role_id}/enable` | Admin, Session | enable_role_agent_api |
 | GET | `/api/tenants` | Admin, Session | list_tenants |
+| POST | `/api/tenants` | Admin, Session | Create or configure a SaaS tenant with plan tier and resource quotas |
+| PUT | `/api/tenants/{tenant_id}/quotas` | Admin, Session | Update SaaS resource quotas, plan tier, or active/suspended status for a tenant |
+| GET | `/api/tenants/{tenant_id}/usage` | Admin, Session | Get live SaaS quota utilization and resource consumption for a tenant |
 
 ### Approvals
 
@@ -300,6 +306,7 @@ beyond the approver.
 | GET | `/api/v1/sessions/{session_id}` | Bearer, Admin, Session | v1_get_session |
 | POST | `/api/v1/sessions/{session_id}/answer` | Bearer, Admin, Session | v1_post_answer |
 | POST | `/api/v1/sessions/{session_id}/clipboard` | Bearer, Admin, Session | v1_session_clipboard |
+| POST | `/api/v1/sessions/{session_id}/failover` | Bearer, Admin, Session | v1_failover_session_transport |
 | POST | `/api/v1/sessions/{session_id}/ice` | Bearer, Admin, mTLS, Device, Session | v1_post_ice |
 | PATCH | `/api/v1/sessions/{session_id}/mode` | Bearer, Admin, Session | v1_update_session_mode |
 | POST | `/api/v1/sessions/{session_id}/mode` | Bearer, Admin, Session | v1_update_session_mode |
@@ -385,6 +392,7 @@ beyond the approver.
 | GET | `/api/fleet/desktop-capabilities` | Admin, Session | fleet_desktop_capabilities |
 | GET | `/api/fleet/desktop/frames` | Bearer, Admin, Session | get_fleet_desktop_frames |
 | GET | `/api/fleet/health` | Admin, Session | fleet_health_summary |
+| GET | `/api/fleet/intelligence` | Admin, Session | Unified fleet intelligence and cross-platform capability summary |
 | GET | `/api/fleet/inventory` | Admin, Session | inventory |
 | GET | `/api/fleet/notifications` | Admin, Session | notifications |
 | GET | `/api/fleet/rollouts` | Admin, Session | list_fleet_rollouts |
@@ -410,10 +418,11 @@ beyond the approver.
 | POST | `/api/settings/webhook/test` | Admin, Session | test_webhook_setting |
 | POST | `/api/supervisor/handoff` | Admin, Session | supervisor_handoff_api |
 | GET | `/api/supervisor/handoffs/{handoff_id}` | Admin, Session | supervisor_handoff_status_api |
+| POST | `/api/supervisor/plan` | Admin, Session | Synthesize a capability-aware multi-agent execution DAG from a goal |
 | POST | `/api/supervisor/recover` | Admin, Session | supervisor_recover_api |
 | GET | `/api/traces/{trace_id}` | Admin, Session | get_trace_timeline |
 
-*253 (method, path) pairs listed — generated from the live app; see the note at the top of this file.*
+*262 (method, path) pairs listed — generated from the live app; see the note at the top of this file.*
 <!-- END GENERATED ROUTES -->
 
 ## Mounted surfaces (combined app)

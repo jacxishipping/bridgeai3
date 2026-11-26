@@ -296,23 +296,53 @@ def run_supervisor_handoff_enqueue(
     goal: str,
     profile: str = "code",
     mode: str = "gated",
+    custom_steps: list[dict[str, Any]] | None = None,
 ) -> dict:
     """Enqueue a supervised handoff. Default mode=gated enqueues only the first step."""
     profile = (profile or "code").strip().lower()
     mode = (mode or "gated").strip().lower()
     if mode not in {"gated", "fanout"}:
         raise ValueError("mode must be 'gated' or 'fanout'")
-    steps = supervisor_handoff_plan(goal, profile=profile)
+    if custom_steps and isinstance(custom_steps, list):
+        steps = []
+        for idx, st in enumerate(custom_steps):
+            if not isinstance(st, dict):
+                continue
+            tool_name = str(st.get("tool") or st.get("action") or "").strip()
+            role_name = str(st.get("role") or "computer_operator").strip().lower()
+            s_args = dict(st.get("args") or {})
+            s_args.setdefault("goal", goal)
+            steps.append({
+                "step_id": str(st.get("step_id") or f"step_{idx + 1}"),
+                "name": str(st.get("name") or f"{role_name}:{tool_name}"),
+                "role": role_name,
+                "device_id": str(st.get("device_id") or device_id),
+                "tool": tool_name,
+                "args": s_args,
+            })
+        if profile not in HANDOFF_PROFILES:
+            profile = "code"
+    elif profile == "auto":
+        dag = plan_goal_dag(conn, goal=goal, device_id=device_id, tenant=tenant, profile="auto")
+        steps = dag["steps"]
+        profile = dag["profile"]
+    else:
+        steps = supervisor_handoff_plan(goal, profile=profile)
     handoff_id = uuid.uuid4().hex[:12]
+    if custom_steps or profile:
+        save_custom_handoff_plan(conn, handoff_id, steps)
     queued: list[dict] = []
     to_enqueue = steps if mode == "fanout" else steps[:1]
     for idx, step in enumerate(to_enqueue):
+        target_dev = str(step.get("device_id") or device_id)
+        step_args = dict(step.get("args") or {})
+        step_args["_step_id"] = step.get("step_id") or f"step_{idx + 1}"
         res = enqueue_role_task(
             conn,
-            device_id=device_id,
+            device_id=target_dev,
             tenant=tenant,
             tool=step["tool"],
-            args=step.get("args") or {},
+            args=step_args,
             role=str(step.get("role") or ""),
             handoff_id=handoff_id,
             parent_task_id=None,
@@ -321,7 +351,7 @@ def run_supervisor_handoff_enqueue(
             profile=profile,
             mode=mode,
         )
-        queued.append({**res, "name": step.get("name")})
+        queued.append({**res, "name": step.get("name"), "device_id": target_dev})
     return {
         "ok": True,
         "goal": goal,
@@ -370,17 +400,33 @@ def advance_handoff(conn: Any, task: Any, *, status: str, commit: bool = True) -
     status_l = (status or "").strip().lower()
 
     if status_l == "completed":
-        plan = supervisor_handoff_plan(goal, profile=profile)
+        plan = load_custom_handoff_plan(conn, handoff_id) or supervisor_handoff_plan(goal, profile=profile)
         next_idx = step_index + 1
+        # Update shared multi-agent blackboard with completed step output
+        raw_res = task["result"] if hasattr(task, "keys") else (task.get("result") if isinstance(task, dict) else "")
+        step_id = str(args.get("_step_id") or f"step_{step_index + 1}")
+        update_handoff_blackboard(
+            conn,
+            handoff_id,
+            step_id=step_id,
+            step_index=step_index,
+            role=str(args.get("_role") or ""),
+            tool=str(task["tool"] if hasattr(task, "keys") else task.get("tool") or ""),
+            status="completed",
+            output=raw_res,
+        )
         if next_idx >= len(plan):
             return {"ok": True, "handoff_id": handoff_id, "advanced": False, "reason": "handoff_complete"}
         step = plan[next_idx]
+        bb = get_handoff_blackboard(conn, handoff_id)
+        resolved_args = resolve_blackboard_bindings(step.get("args") or {}, bb)
+        target_dev = str(step.get("device_id") or device_id)
         res = enqueue_role_task(
             conn,
-            device_id=device_id,
+            device_id=target_dev,
             tenant=tenant,
             tool=step["tool"],
-            args=step.get("args") or {},
+            args={**resolved_args, "_step_id": step.get("step_id") or f"step_{next_idx + 1}"},
             role=str(step.get("role") or ""),
             handoff_id=handoff_id,
             parent_task_id=parent_id,
@@ -626,6 +672,7 @@ def handoff_status(conn: Any, handoff_id: str) -> dict:
         "blocked_reason": blocked_reason,
         "tasks": children,
         "count": len(children),
+        "blackboard": get_handoff_blackboard(conn, handoff_id),
     }
 
 
@@ -737,3 +784,307 @@ def dispatch_supervisor_recover(args: dict) -> dict:
     device_id = args.get("device_id") or args.get("device")
     device_id = str(device_id).strip() if device_id else None
     return recover_failed_role_tasks(conn, role=role, device_id=device_id)
+
+
+# ---------------------------------------------------------------------------
+# Pillar 3 & Pillar 4: Autonomous Task Planning & Multi-Agent Blackboard
+# ---------------------------------------------------------------------------
+
+_BLACKBOARD_KEY_PREFIX = "handoff.blackboard."
+_PLAN_KEY_PREFIX = "handoff.plan."
+
+
+def get_handoff_blackboard(conn: Any, handoff_id: str) -> dict[str, Any]:
+    """Load the shared multi-agent blackboard state for a handoff session."""
+    if not handoff_id:
+        return {"steps": {}, "shared": {}}
+    try:
+        row = conn.execute(
+            "SELECT value FROM settings WHERE key=?",
+            (f"{_BLACKBOARD_KEY_PREFIX}{handoff_id}",),
+        ).fetchone()
+        if row and row["value"]:
+            data = json.loads(str(row["value"]))
+            if isinstance(data, dict):
+                data.setdefault("steps", {})
+                data.setdefault("shared", {})
+                return data
+    except Exception:
+        pass
+    return {"steps": {}, "shared": {}}
+
+
+def update_handoff_blackboard(
+    conn: Any,
+    handoff_id: str,
+    *,
+    step_id: str,
+    step_index: int,
+    role: str,
+    tool: str,
+    status: str,
+    output: Any,
+    shared_updates: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Record a step's result into the shared handoff blackboard so downstream roles can reference it."""
+    bb = get_handoff_blackboard(conn, handoff_id)
+    parsed_out = output
+    if isinstance(output, str) and output.strip():
+        try:
+            parsed_out = json.loads(output)
+        except Exception:
+            parsed_out = output[:4000]
+    summary = ""
+    if isinstance(parsed_out, dict):
+        summary = str(parsed_out.get("summary") or parsed_out.get("status") or parsed_out.get("system") or json.dumps(parsed_out)[:400])
+    else:
+        summary = str(parsed_out or "")[:400]
+    entry = {
+        "step_id": step_id,
+        "step_index": step_index,
+        "role": role,
+        "tool": tool,
+        "status": status,
+        "output": parsed_out,
+        "summary": summary,
+        "updated_at": dbmod.now(),
+    }
+    bb["steps"][step_id] = entry
+    bb["steps"][f"step_{step_index + 1}"] = entry
+    if shared_updates and isinstance(shared_updates, dict):
+        bb["shared"].update(shared_updates)
+    try:
+        key = f"{_BLACKBOARD_KEY_PREFIX}{handoff_id}"
+        conn.execute(
+            "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
+            (key, json.dumps(bb, default=str)),
+        )
+    except Exception:
+        pass
+    return bb
+
+
+def save_custom_handoff_plan(conn: Any, handoff_id: str, steps: list[dict[str, Any]]) -> None:
+    """Persist a dynamically planned step DAG for a handoff session."""
+    if not handoff_id:
+        return
+    try:
+        key = f"{_PLAN_KEY_PREFIX}{handoff_id}"
+        conn.execute(
+            "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
+            (key, json.dumps(steps, default=str)),
+        )
+    except Exception:
+        pass
+
+
+def load_custom_handoff_plan(conn: Any, handoff_id: str) -> list[dict[str, Any]] | None:
+    """Load a persisted dynamic DAG plan for a handoff session if one exists."""
+    if not handoff_id:
+        return None
+    try:
+        row = conn.execute(
+            "SELECT value FROM settings WHERE key=?",
+            (f"{_PLAN_KEY_PREFIX}{handoff_id}",),
+        ).fetchone()
+        if row and row["value"]:
+            parsed = json.loads(str(row["value"]))
+            if isinstance(parsed, list) and parsed:
+                return parsed
+    except Exception:
+        pass
+    return None
+
+
+def resolve_blackboard_bindings(args: dict[str, Any], blackboard: dict[str, Any]) -> dict[str, Any]:
+    """Resolve ``{{blackboard.<step_id>.output}}`` and ``{{blackboard.<step_id>.summary}}`` placeholders in step args."""
+    import re
+
+    steps_map = (blackboard or {}).get("steps") or {}
+    shared_map = (blackboard or {}).get("shared") or {}
+    pattern = re.compile(r"\{\{\s*blackboard\.([A-Za-z0-9_-]+)\.([A-Za-z0-9_]+)\s*\}\}")
+
+    def _sub_val(val: Any) -> Any:
+        if isinstance(val, str):
+            def _repl(m: re.Match) -> str:
+                target = m.group(1)
+                field = m.group(2)
+                if target == "shared":
+                    return str(shared_map.get(field, ""))
+                step_obj = steps_map.get(target)
+                if isinstance(step_obj, dict):
+                    v = step_obj.get(field)
+                    if isinstance(v, (dict, list)):
+                        return json.dumps(v)
+                    return str(v if v is not None else "")
+                return m.group(0)
+
+            return pattern.sub(_repl, val)
+        if isinstance(val, dict):
+            return {k: _sub_val(v) for k, v in val.items()}
+        if isinstance(val, list):
+            return [_sub_val(x) for x in val]
+        return val
+
+    return _sub_val(dict(args or {}))
+
+
+def plan_goal_dag(
+    conn: Any,
+    *,
+    goal: str,
+    device_id: str = "local",
+    tenant: str = "default",
+    profile: str | None = None,
+    target_devices: list[str] | None = None,
+    effective_policy: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Synthesize a capability-aware, memory-augmented multi-agent execution DAG from a natural-language goal."""
+    from ..policy import normalize_tool_name
+    from . import agent_memory as memorymod
+    from . import device_intelligence as intelmod
+
+    clean_goal = (goal or "").strip() or "Inspect device health and verify environment readiness"
+    low_goal = clean_goal.lower()
+
+    # 1. Auto-detect optimal profile when not explicitly forced or when 'auto' is passed
+    chosen_profile = (profile or "auto").strip().lower()
+    if chosen_profile in ("", "auto"):
+        if any(k in low_goal for k in ("browser", "url", "http", "web", "website", "page", "dom")):
+            chosen_profile = "browser"
+        elif any(k in low_goal for k in ("window", "click", "desktop", "screen", "ui", "a11y", "notepad", "app")):
+            chosen_profile = "desktop"
+        elif any(k in low_goal for k in ("full", "end-to-end", "deploy", "release")):
+            chosen_profile = "full"
+        elif any(k in low_goal for k in ("code", "test", "git", "repo", "build", "lint", "refactor", "fix")):
+            chosen_profile = "code"
+        else:
+            chosen_profile = "research"
+    if chosen_profile not in HANDOFF_PROFILES:
+        chosen_profile = "code"
+
+    # 2. Gather target device intelligence & capability discovery
+    dev_row = None
+    if device_id and device_id != "local":
+        try:
+            dev_row = conn.execute("SELECT * FROM devices WHERE id=?", (device_id,)).fetchone()
+        except Exception:
+            dev_row = None
+    if dev_row is None:
+        dev_row = {"id": device_id or "local", "name": device_id or "local", "os": "Windows", "status": "online", "tenant": tenant}
+    eff_pol = dict(effective_policy or {})
+    intel = intelmod.build_device_intelligence(conn, dev_row, effective_policy=eff_pol)
+
+    # 3. Recall relevant device-scoped episodic memories (Pillar 7)
+    memories = memorymod.recall_device_memories(conn, tenant=tenant, device_id=device_id or "local", limit=5)
+
+    # 4. Build dynamic DAG nodes with context bindings, guards, verification, and tier classification
+    base_steps = list(HANDOFF_PROFILES[chosen_profile])
+
+    # Augment steps based on specific keywords in the goal and device capabilities
+    dynamic_steps: list[dict[str, Any]] = []
+    for idx, st in enumerate(base_steps):
+        tool_name = normalize_tool_name(st["tool"])
+        step_id = f"step_{idx + 1}"
+        prev_id = f"step_{idx}" if idx > 0 else None
+        step_args = dict(st.get("args") or {})
+        step_args["goal"] = clean_goal
+        if prev_id:
+            step_args["_upstream_context"] = f"{{{{blackboard.{prev_id}.summary}}}}"
+
+        # Assign target device (supports multi-device orchestration if target_devices provided)
+        assigned_device = device_id or "local"
+        if target_devices and len(target_devices) > 0:
+            assigned_device = target_devices[idx % len(target_devices)]
+
+        tier_enum = TOOL_TIERS.get(tool_name)
+        tier_val = tier_enum.value if tier_enum is not None else 1
+        max_unattended = int(eff_pol.get("max_tier_unattended", 2) or 2)
+        unrestricted = bool(eff_pol.get("unrestricted", False))
+        requires_approval = (not unrestricted) and (tier_val > max_unattended or tier_val >= 3)
+
+        guard: dict[str, Any] = {"require_online": assigned_device != "local"}
+        verify: dict[str, Any] | None = None
+        if st["role"] == "computer_operator":
+            verify = {"mode": "verify", "capture_after": True, "timeout_seconds": 5}
+        elif st["role"] == "browser_operator":
+            verify = {"mode": "wait", "text": "", "timeout_seconds": 8}
+
+        dynamic_steps.append({
+            "step_id": step_id,
+            "index": idx + 1,
+            "name": st["name"],
+            "role": st["role"],
+            "role_name": ROLES.get(st["role"], {}).get("name", st["role"]),
+            "device_id": assigned_device,
+            "tool": tool_name,
+            "action": tool_name,
+            "args": step_args,
+            "depends_on": [prev_id] if prev_id else [],
+            "tier": tier_val,
+            "requires_approval": requires_approval,
+            "guard": guard,
+            "verify": verify,
+            "retries": 1,
+            "fallback_role": "recovery",
+        })
+
+    # If goal mentions accessibility / UI inspection and desktop_a11y_snapshot isn't already in the DAG, inject it
+    if any(k in low_goal for k in ("a11y", "accessibility", "ui tree", "element", "@e")) and not any(
+        s["tool"] == "desktop_a11y_snapshot" for s in dynamic_steps
+    ):
+        next_idx = len(dynamic_steps) + 1
+        prev_id = f"step_{next_idx - 1}" if dynamic_steps else None
+        dynamic_steps.append({
+            "step_id": f"step_{next_idx}",
+            "index": next_idx,
+            "name": "computer_operator:desktop_a11y_snapshot",
+            "role": "computer_operator",
+            "role_name": ROLES["computer_operator"]["name"],
+            "device_id": device_id or "local",
+            "tool": "desktop_a11y_snapshot",
+            "action": "desktop_a11y_snapshot",
+            "args": {"interactive_only": True, "max_elements": 80, "goal": clean_goal},
+            "depends_on": [prev_id] if prev_id else [],
+            "tier": TOOL_TIERS["desktop_a11y_snapshot"].value if "desktop_a11y_snapshot" in TOOL_TIERS else 1,
+            "requires_approval": False,
+            "guard": {"require_online": (device_id or "local") != "local"},
+            "verify": None,
+            "retries": 1,
+            "fallback_role": "recovery",
+        })
+
+    max_tier = max((s["tier"] for s in dynamic_steps), default=1)
+    approval_steps = sum(1 for s in dynamic_steps if s["requires_approval"])
+    roles_involved = list(dict.fromkeys(s["role"] for s in dynamic_steps))
+
+    return {
+        "schema": "ai-bridge-autonomous-plan/v1",
+        "ok": True,
+        "goal": clean_goal,
+        "profile": chosen_profile,
+        "device_id": device_id or "local",
+        "tenant": tenant,
+        "total_steps": len(dynamic_steps),
+        "max_tier": max_tier,
+        "approval_required_steps": approval_steps,
+        "roles_involved": roles_involved,
+        "device_intelligence": {
+            "health_score": intel["health_score"],
+            "readiness_state": intel["readiness_state"],
+            "platform_family": intel["platform_family"],
+            "recommended_transport": intel["recommended_transport"],
+            "recommended_a11y_backend": intel["recommended_a11y_backend"],
+        },
+        "recalled_memories": [
+            {
+                "id": m["id"],
+                "episode_type": m.get("episode_type"),
+                "tool": m.get("tool"),
+                "content": m.get("content"),
+            }
+            for m in memories
+        ],
+        "steps": dynamic_steps,
+    }
+

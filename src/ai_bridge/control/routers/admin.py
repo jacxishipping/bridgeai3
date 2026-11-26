@@ -624,17 +624,83 @@ def create_admin_router(ctx: ControlContext) -> APIRouter:
     @router.get("/api/tenants")
     def list_tenants(x_admin_token: str | None = Header(default=None), x_session_token: str | None = Header(default=None)):
         require_role("viewer", x_admin_token, x_session_token)
+        from .. import tenancy as tenancymod
+
         tenant, is_legacy = session_tenant_for_request(x_admin_token, x_session_token)
         if not is_legacy:
-            return {"tenants": [tenant]}
-        tenants = {"default"}
-        for tbl in ("devices", "tasks", "workflows", "custom_agents", "mcp_servers"):
-            try:
-                for r in conn.execute(f"SELECT DISTINCT tenant FROM {tbl}").fetchall():
-                    if r["tenant"]:
-                        tenants.add(r["tenant"])
-            except Exception:
-                pass
-        return {"tenants": sorted(tenants)}
+            summary = tenancymod.get_tenant_usage(conn, tenant, app_state=app.state)
+            return {"tenants": [tenant], "items": [summary]}
+        items = tenancymod.list_all_tenants(conn, app_state=app.state)
+        return {"tenants": [it["tenant_id"] for it in items], "items": items}
+
+    @router.post("/api/tenants", summary="Create or configure a SaaS tenant with plan tier and resource quotas")
+    def create_or_configure_tenant(
+        body: dict = Body(default={}),
+        x_admin_token: str | None = Header(default=None),
+        x_session_token: str | None = Header(default=None),
+    ):
+        actor = require_admin(x_admin_token, x_session_token)
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail="Body must be a JSON object.")
+        from .. import tenancy as tenancymod
+
+        tenant_id = str(body.get("tenant_id") or body.get("id") or body.get("tenant") or "").strip()
+        if not tenant_id:
+            raise HTTPException(status_code=400, detail="tenant_id is required.")
+        cfg = tenancymod.save_tenant_config(
+            conn,
+            tenant_id,
+            name=body.get("name"),
+            plan_tier=body.get("plan_tier"),
+            status=body.get("status"),
+            max_devices=body.get("max_devices"),
+            max_concurrent_streams=body.get("max_concurrent_streams"),
+            max_daily_tasks=body.get("max_daily_tasks"),
+            max_memory_chunks=body.get("max_memory_chunks"),
+            rate_limit_rpm=body.get("rate_limit_rpm"),
+        )
+        audit(actor, "", "configure_tenant", {"tenant_id": tenant_id, "plan_tier": cfg["plan_tier"], "status": cfg["status"]}, "allowed", tenant=tenant_id)
+        return tenancymod.get_tenant_usage(conn, tenant_id, app_state=app.state)
+
+    @router.get("/api/tenants/{tenant_id}/usage", summary="Get live SaaS quota utilization and resource consumption for a tenant")
+    def get_tenant_usage_route(
+        tenant_id: str,
+        x_admin_token: str | None = Header(default=None),
+        x_session_token: str | None = Header(default=None),
+    ):
+        require_role("viewer", x_admin_token, x_session_token)
+        req_tenant, is_legacy = session_tenant_for_request(x_admin_token, x_session_token)
+        if not is_legacy and tenant_id != req_tenant:
+            raise HTTPException(status_code=403, detail="Not authorized to view usage for another tenant.")
+        from .. import tenancy as tenancymod
+
+        return tenancymod.get_tenant_usage(conn, tenant_id, app_state=app.state)
+
+    @router.put("/api/tenants/{tenant_id}/quotas", summary="Update SaaS resource quotas, plan tier, or active/suspended status for a tenant")
+    def update_tenant_quotas_route(
+        tenant_id: str,
+        body: dict = Body(default={}),
+        x_admin_token: str | None = Header(default=None),
+        x_session_token: str | None = Header(default=None),
+    ):
+        actor = require_admin(x_admin_token, x_session_token)
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail="Body must be a JSON object.")
+        from .. import tenancy as tenancymod
+
+        cfg = tenancymod.save_tenant_config(
+            conn,
+            tenant_id,
+            name=body.get("name"),
+            plan_tier=body.get("plan_tier"),
+            status=body.get("status"),
+            max_devices=body.get("max_devices"),
+            max_concurrent_streams=body.get("max_concurrent_streams"),
+            max_daily_tasks=body.get("max_daily_tasks"),
+            max_memory_chunks=body.get("max_memory_chunks"),
+            rate_limit_rpm=body.get("rate_limit_rpm"),
+        )
+        audit(actor, "", "update_tenant_quotas", {"tenant_id": tenant_id, "plan_tier": cfg["plan_tier"], "status": cfg["status"]}, "allowed", tenant=tenant_id)
+        return tenancymod.get_tenant_usage(conn, tenant_id, app_state=app.state)
 
     return router

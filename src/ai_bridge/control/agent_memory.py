@@ -330,3 +330,124 @@ def format_governed_snippets_for_prompt(
         return ""
     lines.append("</governed_workspace_snippets>")
     return "\n".join(lines) + "\n"
+
+
+# Pillar 7: Device-Level Episodic Learning & Memory
+_VALID_EPISODE_TYPES = frozenset({"recovery_playbook", "ui_quirk", "verified_workflow", "fact"})
+
+
+def record_device_episode(
+    conn: Any,
+    *,
+    tenant: str,
+    device_id: str,
+    agent_id: str = "device-learner",
+    episode_type: str = "recovery_playbook",
+    tool: str = "",
+    context_summary: str = "",
+    outcome: str = "resolved",
+    resolution: str = "",
+) -> dict[str, Any]:
+    """Record a device-scoped episodic memory or recovery playbook with prompt-injection guards."""
+    from fastapi import HTTPException
+
+    from ..security import redact
+
+    dev_id = (device_id or "").strip() or "local"
+    ep_type = (episode_type or "recovery_playbook").strip().lower()
+    if ep_type not in _VALID_EPISODE_TYPES:
+        ep_type = "fact"
+    res_text = (resolution or "").strip()
+    ctx_text = (context_summary or "").strip()
+    tool_name = (tool or "").strip()
+    if not res_text and not ctx_text:
+        raise HTTPException(status_code=400, detail="Either resolution or context_summary is required for a device memory episode.")
+
+    combined = f"{tool_name} {ctx_text} {res_text}"
+    flagged = _contains_prompt_injection(combined)
+    if flagged:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Device memory episode rejected by prompt-injection filter (matched '{flagged}').",
+        )
+
+    safe_ctx = redact(ctx_text)[:600]
+    safe_res = redact(res_text)[:1200]
+    payload = {
+        "device_id": dev_id,
+        "episode_type": ep_type,
+        "tool": tool_name,
+        "outcome": (outcome or "resolved").strip()[:60],
+        "context_summary": safe_ctx,
+        "resolution": safe_res,
+    }
+    content_line = (
+        f"[{ep_type}] tool={tool_name or 'general'} outcome={payload['outcome']} | "
+        f"context: {safe_ctx or 'n/a'} | resolution: {safe_res or 'n/a'}"
+    )
+    project_tag = f"device:{dev_id}"
+    task_tag = f"episode:{ep_type}" + (f":{tool_name}" if tool_name else "")
+    chunk = append_memory_chunk(
+        conn,
+        agent_id=agent_id,
+        tenant=tenant,
+        content=content_line,
+        project_tag=project_tag,
+        task_tag=task_tag,
+    )
+    return {
+        "id": chunk.get("id") or chunk.get("chunk_id"),
+        "tenant": tenant,
+        "device_id": dev_id,
+        "agent_id": agent_id,
+        "episode_type": ep_type,
+        "tool": tool_name,
+        "outcome": payload["outcome"],
+        "context_summary": safe_ctx,
+        "resolution": safe_res,
+        "content": content_line,
+        "project_tag": project_tag,
+        "task_tag": task_tag,
+        "created_at": dbmod.now(),
+    }
+
+
+def recall_device_memories(
+    conn: Any,
+    *,
+    tenant: str,
+    device_id: str,
+    query: str | None = None,
+    episode_type: str | None = None,
+    limit: int = 12,
+) -> list[dict[str, Any]]:
+    """Recall device-scoped episodic memories and learned recovery playbooks for one device."""
+    dev_id = (device_id or "").strip() or "local"
+    project_tag = f"device:{dev_id}"
+    safe_limit = max(1, min(int(limit or 12), 100))
+    params: list[Any] = [tenant, project_tag]
+    sql = (
+        "SELECT id, agent_id, tenant, chunk_index, content, project_tag, task_tag, created_at, updated_at "
+        "FROM agent_memory_chunks WHERE tenant=? AND project_tag=?"
+    )
+    if episode_type:
+        ep = episode_type.strip().lower()
+        sql += " AND task_tag LIKE ?"
+        params.append(f"episode:{ep}%")
+    if query and query.strip():
+        q = f"%{query.strip().lower()}%"
+        sql += " AND (LOWER(content) LIKE ? OR LOWER(COALESCE(task_tag, '')) LIKE ?)"
+        params.extend([q, q])
+    sql += " ORDER BY created_at DESC LIMIT ?"
+    params.append(safe_limit)
+    rows = conn.execute(sql, tuple(params)).fetchall()
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        d = dict(r)
+        tt = str(d.get("task_tag") or "")
+        parts = tt.split(":", 2)
+        d["device_id"] = dev_id
+        d["episode_type"] = parts[1] if len(parts) > 1 else "fact"
+        d["tool"] = parts[2] if len(parts) > 2 else ""
+        out.append(d)
+    return out
