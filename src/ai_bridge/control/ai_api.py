@@ -2107,6 +2107,22 @@ def attach_ai_routes(
         req: Request,
         x_admin_token: str | None = Header(default=None),
         x_session_token: str | None = Header(default=None),
+    ):
+        """Autonomous ReAct agent that accepts a natural language instruction,
+        calls tools across your connected devices, and returns the final answer.
+        """
+        return await _run_autonomous_agent_impl(
+            body,
+            req,
+            x_admin_token=x_admin_token,
+            x_session_token=x_session_token,
+        )
+
+    async def _run_autonomous_agent_impl(
+        body: AIAgentIn,
+        req: Request,
+        x_admin_token: str | None = Header(default=None),
+        x_session_token: str | None = Header(default=None),
         on_event: Callable[[dict[str, Any]], None] | None = None,
     ):
         """Autonomous ReAct agent that accepts a natural language instruction,
@@ -2842,7 +2858,7 @@ def attach_ai_routes(
 
         async def _worker() -> None:
             try:
-                agent_res = await run_autonomous_agent(agent_in, req, x_admin_token=x_admin_token, x_session_token=x_session_token, on_event=_emit)
+                agent_res = await _run_autonomous_agent_impl(agent_in, req, x_admin_token=x_admin_token, x_session_token=x_session_token, on_event=_emit)
                 if isinstance(agent_res, Response):
                     try:
                         err_payload = json.loads(agent_res.body.decode("utf-8"))
