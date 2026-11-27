@@ -817,6 +817,7 @@ public sealed class ControlPlaneClient : IDisposable
             DurationMs = Math.Round(sw.Elapsed.TotalMilliseconds, 1),
             ArgsJson = "{}",
             ResultPreview = "Task content omitted from local history.",
+            HandoffId = TryExtractHandoffId(argsJson) ?? "",
         };
         TaskRecorded?.Invoke(record);
         LogMessage?.Invoke(status == "succeeded" ? "ok" : (status == "cancelled" ? "warn" : "err"),
@@ -1347,6 +1348,326 @@ public sealed class ControlPlaneClient : IDisposable
         {
             return (false, ex.Message);
         }
+    }
+
+    public async Task<(bool Ok, DeviceIntelligenceResult? Intel, string Detail)> GetDeviceIntelligenceAsync(
+        string controlUrl,
+        string deviceId,
+        string operatorToken,
+        bool isAdminToken,
+        CancellationToken ct = default)
+    {
+        var baseUrl = NormalizeUrl(controlUrl);
+        var targetId = string.IsNullOrWhiteSpace(deviceId) ? "local" : deviceId.Trim();
+        if (string.IsNullOrWhiteSpace(operatorToken))
+        {
+            return (false, null, "Operator session required for device intelligence.");
+        }
+
+        try
+        {
+            using var req = new HttpRequestMessage(HttpMethod.Get, $"{baseUrl}/api/devices/{Uri.EscapeDataString(targetId)}/intelligence");
+            if (isAdminToken)
+            {
+                req.Headers.Add("X-Admin-Token", operatorToken.Trim());
+            }
+            else
+            {
+                req.Headers.Add("X-Session-Token", operatorToken.Trim());
+            }
+
+            using var resp = await _http.SendAsync(req, ct);
+            var body = await resp.Content.ReadAsStringAsync(ct);
+            if (resp.StatusCode == HttpStatusCode.NotFound)
+            {
+                return (false, null, "Device intelligence not found (404).");
+            }
+
+            if (!resp.IsSuccessStatusCode)
+            {
+                return (false, null, ExtractApiDetail(body, $"HTTP {(int)resp.StatusCode}"));
+            }
+
+            using var doc = JsonDocument.Parse(body);
+            var root = doc.RootElement;
+            var score = root.TryGetProperty("health_score", out var hs) && hs.TryGetDouble(out var hsd)
+                ? Math.Clamp((int)Math.Round(hsd), 0, 100)
+                : 0;
+            var readiness = root.TryGetProperty("readiness_state", out var rs) ? rs.GetString() ?? "" : "";
+            var anomalySummaries = new List<string>();
+            if (root.TryGetProperty("anomalies", out var anEl) && anEl.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var a in anEl.EnumerateArray())
+                {
+                    var code = a.TryGetProperty("code", out var cEl) ? cEl.GetString() ?? "" : "";
+                    var detail = a.TryGetProperty("detail", out var dEl) ? dEl.GetString() ?? "" : "";
+                    anomalySummaries.Add(string.IsNullOrWhiteSpace(detail) ? code : detail);
+                }
+            }
+
+            return (true, new DeviceIntelligenceResult
+            {
+                HealthScore = score,
+                AnomalyCount = anomalySummaries.Count,
+                ReadinessState = readiness,
+                AnomalySummaries = anomalySummaries,
+            }, "OK");
+        }
+        catch (Exception ex)
+        {
+            return (false, null, ex.Message);
+        }
+    }
+
+    public async Task<(bool Ok, List<DeviceMemoryEpisodeItem> Episodes, string Detail)> GetDeviceMemoryAsync(
+        string controlUrl,
+        string deviceId,
+        string operatorToken,
+        bool isAdminToken,
+        int limit = 30,
+        CancellationToken ct = default)
+    {
+        var baseUrl = NormalizeUrl(controlUrl);
+        var targetId = string.IsNullOrWhiteSpace(deviceId) ? "local" : deviceId.Trim();
+        if (string.IsNullOrWhiteSpace(operatorToken))
+        {
+            return (false, new List<DeviceMemoryEpisodeItem>(), "Operator session required for cloud memory.");
+        }
+
+        try
+        {
+            var url = $"{baseUrl}/api/devices/{Uri.EscapeDataString(targetId)}/memory?limit={Math.Clamp(limit, 1, 100)}";
+            using var req = new HttpRequestMessage(HttpMethod.Get, url);
+            if (isAdminToken)
+            {
+                req.Headers.Add("X-Admin-Token", operatorToken.Trim());
+            }
+            else
+            {
+                req.Headers.Add("X-Session-Token", operatorToken.Trim());
+            }
+
+            using var resp = await _http.SendAsync(req, ct);
+            var body = await resp.Content.ReadAsStringAsync(ct);
+            if (resp.StatusCode == HttpStatusCode.NotFound)
+            {
+                return (false, new List<DeviceMemoryEpisodeItem>(), "Device memory endpoint not found (404).");
+            }
+
+            if (!resp.IsSuccessStatusCode)
+            {
+                return (false, new List<DeviceMemoryEpisodeItem>(), ExtractApiDetail(body, $"HTTP {(int)resp.StatusCode}"));
+            }
+
+            var episodes = new List<DeviceMemoryEpisodeItem>();
+            using var doc = JsonDocument.Parse(body);
+            if (doc.RootElement.TryGetProperty("episodes", out var arr) && arr.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var el in arr.EnumerateArray())
+                {
+                    episodes.Add(new DeviceMemoryEpisodeItem
+                    {
+                        Id = el.TryGetProperty("id", out var idEl) ? idEl.GetString() ?? "" : "",
+                        EpisodeType = el.TryGetProperty("episode_type", out var etEl) ? etEl.GetString() ?? "" : "",
+                        ContextSummary = el.TryGetProperty("context_summary", out var csEl) ? csEl.GetString() ?? "" : "",
+                        Resolution = el.TryGetProperty("resolution", out var resEl) ? resEl.GetString() ?? "" : "",
+                        Tool = el.TryGetProperty("tool", out var toolEl) ? toolEl.GetString() ?? "" : "",
+                        RecordedAt = el.TryGetProperty("recorded_at", out var raEl) ? raEl.GetString() ?? "" : "",
+                    });
+                }
+            }
+
+            return (true, episodes, "OK");
+        }
+        catch (Exception ex)
+        {
+            return (false, new List<DeviceMemoryEpisodeItem>(), ex.Message);
+        }
+    }
+
+    public async Task<(bool Ok, string Detail)> LearnDeviceMemoryAsync(
+        string controlUrl,
+        string deviceId,
+        string operatorToken,
+        bool isAdminToken,
+        string contextSummary,
+        string resolution,
+        string episodeType = "user_preference",
+        CancellationToken ct = default)
+    {
+        var baseUrl = NormalizeUrl(controlUrl);
+        var targetId = string.IsNullOrWhiteSpace(deviceId) ? "local" : deviceId.Trim();
+        if (string.IsNullOrWhiteSpace(operatorToken))
+        {
+            return (false, "Operator session required to push device memory.");
+        }
+
+        if (string.IsNullOrWhiteSpace(contextSummary) && string.IsNullOrWhiteSpace(resolution))
+        {
+            return (false, "Memory episode requires context or resolution.");
+        }
+
+        try
+        {
+            var payload = JsonSerializer.Serialize(new
+            {
+                episode_type = string.IsNullOrWhiteSpace(episodeType) ? "user_preference" : episodeType.Trim(),
+                context_summary = contextSummary.Trim(),
+                resolution = resolution.Trim(),
+                outcome = "resolved",
+            });
+            using var req = new HttpRequestMessage(HttpMethod.Post, $"{baseUrl}/api/devices/{Uri.EscapeDataString(targetId)}/memory/learn");
+            await AddOperatorHeadersAsync(req, baseUrl, operatorToken, isAdminToken, true, ct);
+            req.Content = new StringContent(payload, Encoding.UTF8, "application/json");
+            using var resp = await _http.SendAsync(req, ct);
+            var body = await resp.Content.ReadAsStringAsync(ct);
+            return resp.IsSuccessStatusCode
+                ? (true, "Pushed local memory episode to Control Plane.")
+                : (false, ExtractApiDetail(body, $"HTTP {(int)resp.StatusCode}"));
+        }
+        catch (Exception ex)
+        {
+            return (false, ex.Message);
+        }
+    }
+
+    public async Task<(bool Ok, SupervisorHandoffSnapshot? Snapshot, string Detail)> GetSupervisorHandoffAsync(
+        string controlUrl,
+        string handoffId,
+        string operatorToken,
+        bool isAdminToken,
+        CancellationToken ct = default)
+    {
+        var baseUrl = NormalizeUrl(controlUrl);
+        var hid = (handoffId ?? "").Trim();
+        if (string.IsNullOrWhiteSpace(hid))
+        {
+            return (false, null, "handoff_id is required.");
+        }
+
+        if (string.IsNullOrWhiteSpace(operatorToken))
+        {
+            return (false, null, "Operator session required for supervisor handoff status.");
+        }
+
+        try
+        {
+            using var req = new HttpRequestMessage(HttpMethod.Get, $"{baseUrl}/api/supervisor/handoffs/{Uri.EscapeDataString(hid)}");
+            if (isAdminToken)
+            {
+                req.Headers.Add("X-Admin-Token", operatorToken.Trim());
+            }
+            else
+            {
+                req.Headers.Add("X-Session-Token", operatorToken.Trim());
+            }
+
+            using var resp = await _http.SendAsync(req, ct);
+            var body = await resp.Content.ReadAsStringAsync(ct);
+            if (resp.StatusCode == HttpStatusCode.NotFound)
+            {
+                return (false, null, "Handoff not found (404).");
+            }
+
+            if (!resp.IsSuccessStatusCode)
+            {
+                return (false, null, ExtractApiDetail(body, $"HTTP {(int)resp.StatusCode}"));
+            }
+
+            using var doc = JsonDocument.Parse(body);
+            var root = doc.RootElement;
+            var tasks = new List<HandoffTaskStepRow>();
+            if (root.TryGetProperty("tasks", out var taskArr) && taskArr.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var t in taskArr.EnumerateArray())
+                {
+                    int? stepIndex = null;
+                    if (t.TryGetProperty("step_index", out var siEl) && siEl.TryGetInt32(out var si))
+                    {
+                        stepIndex = si;
+                    }
+
+                    tasks.Add(new HandoffTaskStepRow
+                    {
+                        TaskId = t.TryGetProperty("task_id", out var idEl) ? idEl.GetString() ?? "" : "",
+                        StepIndex = stepIndex,
+                        Role = t.TryGetProperty("role", out var rEl) ? rEl.GetString() ?? "" : "",
+                        Tool = t.TryGetProperty("tool", out var toolEl) ? toolEl.GetString() ?? "" : "",
+                        Status = t.TryGetProperty("status", out var stEl) ? stEl.GetString() ?? "" : "",
+                    });
+                }
+            }
+
+            var bbRows = new List<HandoffBlackboardRow>();
+            var seenStepIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            if (root.TryGetProperty("blackboard", out var bbEl) && bbEl.ValueKind == JsonValueKind.Object &&
+                bbEl.TryGetProperty("steps", out var stepsEl) && stepsEl.ValueKind == JsonValueKind.Object)
+            {
+                foreach (var stepProp in stepsEl.EnumerateObject())
+                {
+                    var s = stepProp.Value;
+                    var stepId = s.TryGetProperty("step_id", out var sidEl) ? sidEl.GetString() ?? stepProp.Name : stepProp.Name;
+                    if (!seenStepIds.Add(stepId))
+                    {
+                        continue;
+                    }
+
+                    var stepIndex = s.TryGetProperty("step_index", out var sixEl) && sixEl.TryGetInt32(out var six) ? six : 0;
+                    bbRows.Add(new HandoffBlackboardRow
+                    {
+                        StepId = stepId,
+                        StepIndex = stepIndex,
+                        Role = s.TryGetProperty("role", out var roleEl) ? roleEl.GetString() ?? "" : "",
+                        Tool = s.TryGetProperty("tool", out var toolEl) ? toolEl.GetString() ?? "" : "",
+                        Status = s.TryGetProperty("status", out var stEl) ? stEl.GetString() ?? "" : "",
+                        Summary = s.TryGetProperty("summary", out var sumEl) ? sumEl.GetString() ?? "" : "",
+                    });
+                }
+            }
+
+            bbRows = bbRows.OrderBy(r => r.StepIndex).ToList();
+            tasks = tasks.OrderBy(t => t.StepIndex ?? int.MaxValue).ThenBy(t => t.TaskId, StringComparer.Ordinal).ToList();
+
+            var snap = new SupervisorHandoffSnapshot
+            {
+                HandoffId = root.TryGetProperty("handoff_id", out var hEl) ? hEl.GetString() ?? hid : hid,
+                Status = root.TryGetProperty("status", out var stRoot) ? stRoot.GetString() ?? "" : "",
+                Goal = root.TryGetProperty("goal", out var goalEl) ? goalEl.GetString() ?? "" : "",
+                Profile = root.TryGetProperty("profile", out var profEl) ? profEl.GetString() ?? "" : "",
+                BlockedReason = root.TryGetProperty("blocked_reason", out var brEl) ? brEl.GetString() ?? "" : "",
+                Tasks = tasks,
+                BlackboardSteps = bbRows,
+            };
+            return (true, snap, "OK");
+        }
+        catch (Exception ex)
+        {
+            return (false, null, ex.Message);
+        }
+    }
+
+    private static string? TryExtractHandoffId(string argsJson)
+    {
+        if (string.IsNullOrWhiteSpace(argsJson))
+        {
+            return null;
+        }
+
+        try
+        {
+            using var doc = JsonDocument.Parse(argsJson);
+            if (doc.RootElement.TryGetProperty("_handoff_id", out var el))
+            {
+                var id = el.GetString();
+                return string.IsNullOrWhiteSpace(id) ? null : id.Trim();
+            }
+        }
+        catch
+        {
+            // Ignore malformed args_json in telemetry-only extraction.
+        }
+
+        return null;
     }
 
     public async Task<(bool Ok, string Detail)> DispatchSupervisorHandoffAsync(

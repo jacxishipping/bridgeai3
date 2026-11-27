@@ -109,6 +109,8 @@ export default function App() {
   const [telemetry, setTelemetry] = useState<FleetTelemetrySummary | null>(null);
   const [inspectedDevice, setInspectedDevice] = useState<DeviceRecord | null>(null);
   const [inspectedTraceId, setInspectedTraceId] = useState<string>("");
+  const [tenantOptions, setTenantOptions] = useState<string[]>([]);
+  const [activeTenant, setActiveTenant] = useState<string>(() => session?.tenant || "default");
 
   const showToast = useCallback((msg: string) => {
     setToast(msg);
@@ -177,12 +179,40 @@ export default function App() {
 
   useEffect(() => {
     if (!session) return;
+    setActiveTenant(session.tenant || "default");
+    void (async () => {
+      const own = session.tenant || "default";
+      if (session.mode !== "admin_token") {
+        setTenantOptions([own]);
+        return;
+      }
+      try {
+        const res = await api.listTenants();
+        const ids = (res.items || []).map((t) => t.tenant_id).filter(Boolean);
+        const merged = Array.from(
+          new Set([...(res.tenants || []), ...ids, own].filter(Boolean)),
+        );
+        setTenantOptions(merged);
+      } catch {
+        setTenantOptions([own]);
+      }
+    })();
+  }, [api, session]);
+
+  useEffect(() => {
+    if (!session) return;
+    // Legacy admin token may address any tenant via ?tenant=; session users stay scoped server-side.
+    api.setTenantFilter(session.mode === "admin_token" ? activeTenant || "default" : null);
+  }, [activeTenant, api, session]);
+
+  useEffect(() => {
+    if (!session) return;
     void refreshAll(true);
     const id = window.setInterval(() => {
       void refreshAll(false);
     }, 12000);
     return () => window.clearInterval(id);
-  }, [session, refreshAll]);
+  }, [session, refreshAll, activeTenant]);
 
   // Ctrl+K / Cmd+K Quick Jump Shortcut
   useEffect(() => {
@@ -412,6 +442,48 @@ export default function App() {
           </div>
 
           <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+            <label
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 6,
+                fontSize: 11.5,
+                color: "var(--text-muted)",
+              }}
+              title={
+                session.mode === "admin_token"
+                  ? "Switch active tenant filter across Devices, Tasks, Workflows, and Desktop"
+                  : "Session users are scoped to their own tenant"
+              }
+            >
+              <span className="breadcrumb-prefix">Tenant</span>
+              <select
+                className="field mono"
+                aria-label="Active tenant"
+                value={activeTenant}
+                disabled={session.mode !== "admin_token" && tenantOptions.length <= 1}
+                onChange={(e) => {
+                  const next = e.target.value;
+                  setActiveTenant(next);
+                  showToast(`Active tenant: ${next}`);
+                }}
+                style={{
+                  width: "auto",
+                  minWidth: 110,
+                  maxWidth: 180,
+                  padding: "4px 8px",
+                  fontSize: 12,
+                  height: 32,
+                }}
+              >
+                {tenantOptions.map((tn) => (
+                  <option key={tn} value={tn}>
+                    {tn}
+                  </option>
+                ))}
+              </select>
+            </label>
+
             <Button
               size="sm"
               onClick={() => {

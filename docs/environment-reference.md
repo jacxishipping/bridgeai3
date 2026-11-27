@@ -99,7 +99,7 @@ Total documented variables: **147**
 | `AI_BRIDGE_OIDC_ROLE_MAP` | — | `src/ai_bridge/control/oidc.py` |
 | `AI_BRIDGE_SECRETS_BACKEND` | — | `src/ai_bridge/control/secrets_backend.py` |
 | `AI_BRIDGE_TOKEN` | — | `src/ai_bridge/client.py` |
-| `AI_BRIDGE_TOKEN_FILE` | `''` | `agents/linux/agent_main.py`, `agents/windows/agent_main.py`, `src/ai_bridge/client.py` |
+| `AI_BRIDGE_TOKEN_FILE` | `''` | `agents/linux/agent_main.py`, `agents/linux/tui_app.py`, `agents/macos/agent_main.py` (+3 more) |
 | `AI_BRIDGE_VAULT_ADDR` | — | `src/ai_bridge/control/production_readiness.py`, `src/ai_bridge/control/secrets_backend.py` |
 | `AI_BRIDGE_VAULT_SECRET_PATH` | — | `src/ai_bridge/control/secrets_backend.py` |
 | `AI_BRIDGE_VAULT_TOKEN` | — | `src/ai_bridge/control/secrets_backend.py` |
@@ -151,9 +151,9 @@ Total documented variables: **147**
 | Variable | Observed default(s) | Referenced in |
 |---|---|---|
 | `AI_BRIDGE_AGENT_REPO_DIR` | — | `src/ai_bridge/tools/fleet.py` |
-| `AI_BRIDGE_CONTROL_URL` | `''`, `'http://127.0.0.1:8000'` | `agents/linux/agent_main.py`, `agents/macos/agent_main.py`, `agents/windows/agent_main.py` (+4 more) |
+| `AI_BRIDGE_CONTROL_URL` | `''`, `'http://127.0.0.1:8000'` | `agents/linux/agent_main.py`, `agents/linux/tui_app.py`, `agents/macos/agent_main.py` (+6 more) |
 | `AI_BRIDGE_DEVICE_MTLS` | `''` | `src/ai_bridge/control/device_mtls.py` |
-| `AI_BRIDGE_DEVICE_TOKEN` | `''` | `agents/linux/agent_main.py`, `agents/macos/agent_main.py`, `agents/windows/agent_main.py` (+2 more) |
+| `AI_BRIDGE_DEVICE_TOKEN` | `''` | `agents/linux/agent_main.py`, `agents/linux/tui_app.py`, `agents/macos/agent_main.py` (+4 more) |
 | `AI_BRIDGE_DEVICE_TOKEN_TTL_DAYS` | `'7'` | `src/ai_bridge/control/app.py` |
 | `AI_BRIDGE_UPDATE_STAGING` | — | `agents/macos/agent_main.py`, `agents/windows/agent_main.py` |
 

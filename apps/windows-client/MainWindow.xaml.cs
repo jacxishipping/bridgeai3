@@ -75,6 +75,14 @@ public partial class MainWindow : Window
     private const int SparklineCapacity = 60;
 
     private readonly DispatcherTimer _monitorTimer;
+    private readonly DispatcherTimer _pillarSyncTimer;
+    private readonly ObservableCollection<DeviceMemoryEpisodeItem> _cloudMemoryEpisodes = new();
+    private readonly ObservableCollection<HandoffTaskStepRow> _handoffDagRows = new();
+    private readonly ObservableCollection<HandoffBlackboardRow> _handoffBlackboardRows = new();
+    private readonly HashSet<string> _knownHandoffIds = new(StringComparer.OrdinalIgnoreCase);
+    private string _selectedHandoffId = "";
+    private bool _pillarSyncInFlight;
+    private DeviceIntelligenceResult? _lastIntel;
     private readonly ObservableCollection<ToastItem> _toasts = new();
     private NotifyIcon? _trayIcon;
     private readonly System.Windows.Controls.Button[] _navButtons;
@@ -136,6 +144,14 @@ public partial class MainWindow : Window
         _deviceToken = _configService.LoadToken();
         _agentApiKey = _configService.LoadAgentApiKey();
         _taskHistory = _configService.LoadTaskHistory();
+        foreach (var rec in _taskHistory)
+        {
+            if (!string.IsNullOrWhiteSpace(rec.HandoffId))
+            {
+                _knownHandoffIds.Add(rec.HandoffId);
+            }
+        }
+
         foreach (var entry in _configService.LoadPolicyAudit())
         {
             _policyAuditHistory.Add(entry);
@@ -173,6 +189,24 @@ public partial class MainWindow : Window
         _monitorTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(Math.Clamp(_config.MonitorIntervalMs, 500, 5000)) };
         _monitorTimer.Tick += (_, _) => RefreshSystemMonitor();
 
+        _pillarSyncTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(60) };
+        _pillarSyncTimer.Tick += (_, _) => _ = RefreshPillarIntegrationsAsync();
+
+        if (HandoffDagGrid is not null)
+        {
+            HandoffDagGrid.ItemsSource = _handoffDagRows;
+        }
+
+        if (HandoffBlackboardGrid is not null)
+        {
+            HandoffBlackboardGrid.ItemsSource = _handoffBlackboardRows;
+        }
+
+        if (AgCloudMemoryList is not null)
+        {
+            AgCloudMemoryList.ItemsSource = _cloudMemoryEpisodes;
+        }
+
         AgentTakeoverService.StateChanged += OnTakeoverStateChanged;
         AgentTakeoverService.ExtraAllowedRegions = GetTakeoverAllowedRegions;
 
@@ -206,6 +240,7 @@ public partial class MainWindow : Window
         {
             _client.Start(_config, _deviceToken);
             SetAgentButtonState(running: true, paused: false);
+            _pillarSyncTimer.Start();
         }
         if (_config.AutoCheckUpdates)
         {
@@ -216,6 +251,10 @@ public partial class MainWindow : Window
         {
             ShowSignInPage(accountMode: true);
         }
+
+        RefreshHandoffIdCombo();
+        UpdateIntelligenceChrome(BuildLocalIntelligenceFallback(), "Local estimate until operator sign-in.");
+        _ = RefreshPillarIntegrationsAsync();
     }
 
     protected override void OnSourceInitialized(EventArgs e)
@@ -713,6 +752,7 @@ public partial class MainWindow : Window
 
     private void OnTakeoverStateChanged(TakeoverState state)
     {
+        RefreshHandoffTakeoverMeta();
         if (TopTakeoverBtn is null) return;
         if (state == TakeoverState.AgentControlling)
         {
@@ -826,6 +866,7 @@ public partial class MainWindow : Window
         _allowRealClose = true;
         PersistWindowBounds();
         _monitorTimer.Stop();
+        _pillarSyncTimer.Stop();
         await _client.StopAsync();
         _client.Dispose();
         try
@@ -878,6 +919,12 @@ public partial class MainWindow : Window
         if (idx == 6)
         {
             RefreshLocalAgentsSummary();
+            _ = RefreshPillarIntegrationsAsync();
+        }
+        else if (idx == 1)
+        {
+            RefreshHandoffIdCombo();
+            _ = RefreshSelectedHandoffDagAsync();
         }
     }
 
@@ -1114,6 +1161,10 @@ public partial class MainWindow : Window
         UpdatePulseBeacon(tone == "ok");
         SetAgentButtonState(_client.IsRunning, _client.IsPaused);
         RefreshLocalAgentsSummary();
+        if (_client.IsRunning && !_pillarSyncTimer.IsEnabled)
+        {
+            _pillarSyncTimer.Start();
+        }
 
         if (_trayIcon is not null)
         {
@@ -1293,6 +1344,17 @@ public partial class MainWindow : Window
         }
         _configService.SaveTaskHistory(_taskHistory, limit);
         KpiTasksText.Text = _taskHistory.Count.ToString();
+        if (!string.IsNullOrWhiteSpace(rec.HandoffId) && _knownHandoffIds.Add(rec.HandoffId))
+        {
+            RefreshHandoffIdCombo();
+            if (string.IsNullOrWhiteSpace(_selectedHandoffId))
+            {
+                _selectedHandoffId = rec.HandoffId;
+                HandoffIdCombo.Text = rec.HandoffId;
+                _ = RefreshSelectedHandoffDagAsync();
+            }
+        }
+
         RefreshTaskGrid();
         if (_config.NotificationsEnabled && !IsActive)
         {
@@ -1407,7 +1469,9 @@ public partial class MainWindow : Window
         if (_client.IsRunning)
         {
             await _client.StopAsync();
+            _pillarSyncTimer.Stop();
             SetAgentButtonState(running: false, paused: false);
+            UpdateIntelligenceChrome(null, "Connect poller and sign in for fleet intelligence.");
             return;
         }
 
@@ -1419,6 +1483,8 @@ public partial class MainWindow : Window
 
         _client.Start(_config, _deviceToken);
         SetAgentButtonState(running: true, paused: false);
+        _pillarSyncTimer.Start();
+        _ = RefreshPillarIntegrationsAsync();
     }
 
     private void OnTogglePauseClick(object sender, RoutedEventArgs e)
@@ -2997,10 +3063,25 @@ public partial class MainWindow : Window
     private void OnAgShowMemoryClick(object sender, RoutedEventArgs e)
     {
         var mem = AgentMemoryService.Load();
+        var cloudCount = _cloudMemoryEpisodes.Count;
         var body = mem.Count == 0
             ? "No persistent memories saved yet.\n\nAsk the agent: \"Remember that my favorite browser is Chrome\" or \"Remember my workspace path\"."
             : string.Join("\n", mem.Select(kv => $"• {kv.Key}: {kv.Value}"));
-        OpenDrawer("Persistent Agent Memory", $"{mem.Count} saved fact(s) · ~/.ai-bridge/agent_memory.json", body);
+        if (cloudCount > 0)
+        {
+            body += "\n\n--- Cloud Memory (read-only) ---\n" +
+                    string.Join("\n", _cloudMemoryEpisodes.Take(20).Select(ep => $"• [{ep.EpisodeType}] {ep.DisplayLine}"));
+        }
+
+        OpenDrawer(
+            "Persistent Agent Memory",
+            $"{mem.Count} local · {cloudCount} cloud episode(s)",
+            body);
+    }
+
+    private async void OnAgSyncCloudMemoryClick(object sender, RoutedEventArgs e)
+    {
+        await SyncDeviceMemoryCloudAsync(pushLocal: true, pullRemote: true);
     }
 
     private void OnAgUndoLastClick(object sender, RoutedEventArgs e)
@@ -4418,6 +4499,7 @@ public partial class MainWindow : Window
         AgAuthStatusText.Text = detail;
         RefreshLocalAgentsSummary();
         await LoadFleetAgentsAndRolesAsync();
+        _ = RefreshPillarIntegrationsAsync();
     }
 
     private async void OnAgentsRefreshClick(object sender, RoutedEventArgs e)
@@ -4513,5 +4595,400 @@ public partial class MainWindow : Window
                 item.Id);
             ShowToast(detail);
         }
+    }
+
+    private void UpdateIntelligenceChrome(DeviceIntelligenceResult? intel, string? offlineDetail = null)
+    {
+        if (TopIntelScoreText is null || SidebarIntelScoreText is null)
+        {
+            return;
+        }
+
+        if (intel is null)
+        {
+            TopIntelScoreText.Text = "—";
+            SidebarIntelScoreText.Text = "—";
+            TopIntelScoreText.Foreground = (System.Windows.Media.Brush)FindResource("TextSecondary");
+            SidebarIntelScoreText.Foreground = (System.Windows.Media.Brush)FindResource("TextSecondary");
+            if (TopAnomalyBadge is not null)
+            {
+                TopAnomalyBadge.Visibility = Visibility.Collapsed;
+            }
+
+            if (SidebarAnomalyBadge is not null)
+            {
+                SidebarAnomalyBadge.Visibility = Visibility.Collapsed;
+            }
+
+            if (TopIntelBadge is not null && !string.IsNullOrWhiteSpace(offlineDetail))
+            {
+                TopIntelBadge.ToolTip = offlineDetail;
+            }
+
+            return;
+        }
+
+        _lastIntel = intel;
+        var scoreText = $"{intel.HealthScore}";
+        TopIntelScoreText.Text = scoreText;
+        SidebarIntelScoreText.Text = scoreText;
+        var scoreBrushKey = intel.HealthScore switch
+        {
+            >= 80 => "SuccessText",
+            >= 55 => "WarningText",
+            _ => "ErrorText",
+        };
+        var scoreBrush = (System.Windows.Media.Brush)FindResource(scoreBrushKey);
+        TopIntelScoreText.Foreground = scoreBrush;
+        SidebarIntelScoreText.Foreground = scoreBrush;
+
+        if (intel.AnomalyCount > 0 && TopAnomalyBadge is not null && SidebarAnomalyBadge is not null)
+        {
+            var badgeText = intel.AnomalyCount.ToString();
+            TopAnomalyCountText.Text = badgeText;
+            SidebarAnomalyCountText.Text = badgeText;
+            TopAnomalyBadge.Visibility = Visibility.Visible;
+            SidebarAnomalyBadge.Visibility = Visibility.Visible;
+            if (TopIntelBadge is not null)
+            {
+                var lines = string.Join("\n", intel.AnomalySummaries.Take(8));
+                TopIntelBadge.ToolTip =
+                    $"Device intelligence ({intel.ReadinessState}) · {intel.AnomalyCount} anomaly/anomalies\n{lines}";
+            }
+        }
+        else
+        {
+            if (TopAnomalyBadge is not null)
+            {
+                TopAnomalyBadge.Visibility = Visibility.Collapsed;
+            }
+
+            if (SidebarAnomalyBadge is not null)
+            {
+                SidebarAnomalyBadge.Visibility = Visibility.Collapsed;
+            }
+
+            if (TopIntelBadge is not null)
+            {
+                TopIntelBadge.ToolTip =
+                    $"Device intelligence · readiness {intel.ReadinessState}";
+            }
+        }
+    }
+
+    private DeviceIntelligenceResult BuildLocalIntelligenceFallback()
+    {
+        var t = _monitor.Sample();
+        var anomalies = new List<string>();
+        var score = 100;
+        if (t.CpuPercent > 90)
+        {
+            score -= 25;
+            anomalies.Add($"High CPU ({t.CpuPercent:F0}%)");
+        }
+        else if (t.CpuPercent > 75)
+        {
+            score -= 10;
+        }
+
+        if (t.MemoryPercent > 90)
+        {
+            score -= 25;
+            anomalies.Add($"High memory ({t.MemoryPercent:F0}%)");
+        }
+        else if (t.MemoryPercent > 80)
+        {
+            score -= 8;
+        }
+
+        if (t.DiskPercent > 95)
+        {
+            score -= 20;
+            anomalies.Add($"Low disk space ({t.DiskPercent:F0}% used)");
+        }
+
+        if (!_client.IsRunning)
+        {
+            score -= 12;
+            anomalies.Add("Fleet poller stopped");
+        }
+
+        return new DeviceIntelligenceResult
+        {
+            HealthScore = Math.Clamp(score, 0, 100),
+            AnomalyCount = anomalies.Count,
+            ReadinessState = "local_estimate",
+            AnomalySummaries = anomalies,
+        };
+    }
+
+    private async Task RefreshDeviceIntelligenceAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_config.ControlUrl))
+        {
+            Dispatcher.Invoke(() => UpdateIntelligenceChrome(BuildLocalIntelligenceFallback(), "Control Plane URL not configured."));
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(_operatorToken))
+        {
+            Dispatcher.Invoke(() => UpdateIntelligenceChrome(
+                BuildLocalIntelligenceFallback(),
+                "Local estimate · sign in (Agents → Authenticate) for Control Plane intelligence."));
+            return;
+        }
+
+        var deviceId = string.IsNullOrWhiteSpace(_config.DeviceId) ? Environment.MachineName : _config.DeviceId;
+        var (ok, intel, detail) = await _client.GetDeviceIntelligenceAsync(
+            _config.ControlUrl,
+            deviceId,
+            _operatorToken,
+            _operatorIsAdminToken);
+        Dispatcher.Invoke(() =>
+        {
+            if (ok && intel is not null)
+            {
+                UpdateIntelligenceChrome(intel);
+            }
+            else
+            {
+                var fallback = BuildLocalIntelligenceFallback();
+                UpdateIntelligenceChrome(fallback, string.IsNullOrWhiteSpace(detail) ? "Intelligence unavailable." : detail);
+            }
+        });
+    }
+
+    private async Task SyncDeviceMemoryCloudAsync(bool pushLocal, bool pullRemote)
+    {
+        if (string.IsNullOrWhiteSpace(_operatorToken))
+        {
+            Dispatcher.Invoke(() =>
+            {
+                if (AgCloudMemoryMetaText is not null)
+                {
+                    AgCloudMemoryMetaText.Text = "Sign in (Agents → Authenticate) to sync cloud memory";
+                }
+            });
+            return;
+        }
+
+        var deviceId = string.IsNullOrWhiteSpace(_config.DeviceId) ? Environment.MachineName : _config.DeviceId;
+        if (pushLocal)
+        {
+            foreach (var kv in AgentMemoryService.GetUnsyncedEntries())
+            {
+                var (ok, detail) = await _client.LearnDeviceMemoryAsync(
+                    _config.ControlUrl,
+                    deviceId,
+                    _operatorToken,
+                    _operatorIsAdminToken,
+                    kv.Key,
+                    kv.Value,
+                    "user_preference");
+                if (ok)
+                {
+                    AgentMemoryService.MarkCloudKeySynced(kv.Key);
+                }
+                else if (!detail.Contains("404", StringComparison.OrdinalIgnoreCase))
+                {
+                    AppendLog("warn", $"Cloud memory push failed for '{kv.Key}': {detail}");
+                    break;
+                }
+            }
+        }
+
+        if (!pullRemote)
+        {
+            return;
+        }
+
+        var (okPull, episodes, pullDetail) = await _client.GetDeviceMemoryAsync(
+            _config.ControlUrl,
+            deviceId,
+            _operatorToken,
+            _operatorIsAdminToken);
+        Dispatcher.Invoke(() =>
+        {
+            if (okPull)
+            {
+                _cloudMemoryEpisodes.Clear();
+                foreach (var ep in episodes.Take(40))
+                {
+                    _cloudMemoryEpisodes.Add(ep);
+                }
+
+                AgentMemoryService.SetLastCloudPullUtc(DateTimeOffset.UtcNow);
+                if (AgCloudMemoryMetaText is not null)
+                {
+                    AgCloudMemoryMetaText.Text = _cloudMemoryEpisodes.Count == 0
+                        ? "No cloud episodes yet for this device"
+                        : $"{_cloudMemoryEpisodes.Count} episode(s) · pulled {DateTime.Now:HH:mm}";
+                }
+            }
+            else if (AgCloudMemoryMetaText is not null)
+            {
+                AgCloudMemoryMetaText.Text = string.IsNullOrWhiteSpace(pullDetail)
+                    ? "Cloud memory unavailable"
+                    : pullDetail.Length > 80 ? pullDetail[..80] + "…" : pullDetail;
+            }
+        });
+    }
+
+    private void RefreshHandoffIdCombo()
+    {
+        if (HandoffIdCombo is null)
+        {
+            return;
+        }
+
+        var ids = _knownHandoffIds.OrderByDescending(x => x, StringComparer.Ordinal).ToList();
+        var current = HandoffIdCombo.Text?.Trim() ?? _selectedHandoffId;
+        HandoffIdCombo.ItemsSource = ids;
+        if (!string.IsNullOrWhiteSpace(current))
+        {
+            HandoffIdCombo.Text = current;
+        }
+    }
+
+    private void RefreshHandoffTakeoverMeta()
+    {
+        if (HandoffMetaText is null)
+        {
+            return;
+        }
+
+        var takeover = AgentTakeoverService.State switch
+        {
+            TakeoverState.AgentControlling => "Agent controlling desktop",
+            TakeoverState.UserControl => "User takeover active",
+            _ => "Local takeover idle",
+        };
+        if (_lastIntel is not null)
+        {
+            HandoffMetaText.Text =
+                $"{takeover} · health {_lastIntel.HealthScore} · handoff {_selectedHandoffId ?? "none"}";
+        }
+        else
+        {
+            HandoffMetaText.Text = $"{takeover} · handoff {_selectedHandoffId ?? "none"}";
+        }
+    }
+
+    private async Task RefreshPillarIntegrationsAsync()
+    {
+        if (_pillarSyncInFlight)
+        {
+            return;
+        }
+
+        _pillarSyncInFlight = true;
+        try
+        {
+            await RefreshDeviceIntelligenceAsync();
+            await SyncDeviceMemoryCloudAsync(pushLocal: true, pullRemote: !string.IsNullOrWhiteSpace(_operatorToken));
+            if (!string.IsNullOrWhiteSpace(_selectedHandoffId) && !string.IsNullOrWhiteSpace(_operatorToken))
+            {
+                await RefreshSelectedHandoffDagAsync(silent: true);
+            }
+            else
+            {
+                RefreshHandoffTakeoverMeta();
+            }
+        }
+        finally
+        {
+            _pillarSyncInFlight = false;
+        }
+    }
+
+    private async Task RefreshSelectedHandoffDagAsync(bool silent = false)
+    {
+        var handoffId = HandoffIdCombo?.Text?.Trim() ?? _selectedHandoffId.Trim();
+        if (string.IsNullOrWhiteSpace(handoffId))
+        {
+            _handoffDagRows.Clear();
+            _handoffBlackboardRows.Clear();
+            RefreshHandoffTakeoverMeta();
+            return;
+        }
+
+        _selectedHandoffId = handoffId;
+        if (string.IsNullOrWhiteSpace(_operatorToken))
+        {
+            HandoffMetaText.Text = "Operator sign-in required to load supervisor handoff DAG";
+            return;
+        }
+
+        var (ok, snap, detail) = await _client.GetSupervisorHandoffAsync(
+            _config.ControlUrl,
+            handoffId,
+            _operatorToken,
+            _operatorIsAdminToken);
+        Dispatcher.Invoke(() =>
+        {
+            _handoffDagRows.Clear();
+            _handoffBlackboardRows.Clear();
+            if (!ok || snap is null)
+            {
+                HandoffMetaText.Text = string.IsNullOrWhiteSpace(detail) ? "Handoff unavailable" : detail;
+                if (!silent)
+                {
+                    ShowToast(detail);
+                }
+
+                return;
+            }
+
+            foreach (var row in snap.Tasks)
+            {
+                _handoffDagRows.Add(row);
+            }
+
+            foreach (var row in snap.BlackboardSteps)
+            {
+                _handoffBlackboardRows.Add(row);
+            }
+
+            var blocked = string.IsNullOrWhiteSpace(snap.BlockedReason) ? "" : $" · {snap.BlockedReason}";
+            HandoffMetaText.Text =
+                $"{snap.Status} · {snap.Profile} profile · {snap.Tasks.Count} step(s){blocked} · {AgentTakeoverService.State}";
+            if (HandoffMetaText.Text.Length > 140)
+            {
+                HandoffMetaText.Text = HandoffMetaText.Text[..140] + "…";
+            }
+        });
+    }
+
+    private void OnHandoffIdComboChanged(object sender, SelectionChangedEventArgs e)
+    {
+        var id = HandoffIdCombo?.SelectedItem as string ?? HandoffIdCombo?.Text?.Trim() ?? "";
+        if (string.IsNullOrWhiteSpace(id))
+        {
+            return;
+        }
+
+        _selectedHandoffId = id;
+        _ = RefreshSelectedHandoffDagAsync();
+    }
+
+    private async void OnRefreshHandoffDagClick(object sender, RoutedEventArgs e)
+    {
+        RefreshHandoffIdCombo();
+        await RefreshSelectedHandoffDagAsync();
+    }
+
+    private async void OnLoadHandoffByIdClick(object sender, RoutedEventArgs e)
+    {
+        var id = HandoffIdCombo?.Text?.Trim() ?? "";
+        if (string.IsNullOrWhiteSpace(id))
+        {
+            ShowToast("Enter or select a handoff_id");
+            return;
+        }
+
+        _knownHandoffIds.Add(id);
+        RefreshHandoffIdCombo();
+        _selectedHandoffId = id;
+        await RefreshSelectedHandoffDagAsync();
     }
 }

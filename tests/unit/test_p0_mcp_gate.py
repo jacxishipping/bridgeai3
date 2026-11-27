@@ -70,7 +70,7 @@ def test_every_mcp_tool_has_a_tier_entry():
                 f = d.func if isinstance(d, ast.Call) else d
                 if isinstance(f, ast.Attribute) and f.attr == "tool":
                     tools.append(node.name)
-    assert len(tools) == 109
+    assert len(tools) == 119
     missing = [t for t in tools
                if t not in TOOL_TIERS and normalize_tool_name(t) not in TOOL_TIERS]
     assert missing == []

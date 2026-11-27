@@ -1,7 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ArrowUpDown, Bookmark, Plus, RefreshCw, ShieldAlert, Trash2 } from "lucide-react";
+import { ArrowUpDown, Bookmark, Plus, RefreshCw, ShieldAlert, Trash2, Zap } from "lucide-react";
 import type { ApiClient } from "../api";
-import type { DeviceOverview, DeviceRecord, EnrollResult, PolicyState } from "../types";
+import type {
+  DeviceIntelligenceProfile,
+  DeviceOverview,
+  DeviceRecord,
+  EnrollResult,
+  PolicyState,
+} from "../types";
 import {
   Button,
   Chip,
@@ -99,6 +105,8 @@ export function FleetView({
   // Drawer Inspector State
   const [drawerTab, setDrawerTab] = useState<"overview" | "processes" | "policy" | "tags">("overview");
   const [overview, setOverview] = useState<DeviceOverview | null>(null);
+  const [deviceIntel, setDeviceIntel] = useState<DeviceIntelligenceProfile | null>(null);
+  const [intelActionBusy, setIntelActionBusy] = useState<string | null>(null);
   const [globalPolicy, setGlobalPolicy] = useState<PolicyState | null>(null);
   const [localGroup, setLocalGroup] = useState("");
   const [localTags, setLocalTags] = useState<string[]>([]);
@@ -206,9 +214,11 @@ export function FleetView({
     setLocalTags(dev.tags ?? []);
     applyPolicyToForm(dev.policy, dev.effective_policy, globalPolicy, Boolean(dev.has_custom_policy));
     setOverview(null);
-    const [ov, gp] = await Promise.all([
+    setDeviceIntel(null);
+    const [ov, gp, intel] = await Promise.all([
       api.getDeviceOverview(dev.id).catch(() => null),
       api.getPolicy().catch(() => null),
+      api.getDeviceIntelligence(dev.id).catch(() => null),
     ]);
     if (ov) {
       setOverview(ov);
@@ -216,6 +226,7 @@ export function FleetView({
         onSelectDevice({ ...dev, ...ov.device });
       }
     }
+    if (intel) setDeviceIntel(intel);
     const resolvedGlobal = gp?.policy ?? globalPolicy;
     if (gp?.policy) {
       setGlobalPolicy(gp.policy);
@@ -1017,6 +1028,60 @@ export function FleetView({
                     </span>
                   </div>
                 </SurfaceCard>
+
+                {deviceIntel && (
+                  <SurfaceCard style={{ padding: 14, display: "flex", flexDirection: "column", gap: 10 }}>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                      <span style={{ fontSize: 12.5, fontWeight: 600 }}>Unified Device Intelligence</span>
+                      <StatusBadge
+                        status={
+                          deviceIntel.health_score >= 80
+                            ? "ok"
+                            : deviceIntel.health_score >= 50
+                              ? "warn"
+                              : "err"
+                        }
+                        label={`Score ${deviceIntel.health_score}/100 · ${deviceIntel.readiness_state}`}
+                      />
+                    </div>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                      <Chip>Transport: {deviceIntel.recommended_transport}</Chip>
+                      <Chip>A11y: {deviceIntel.recommended_a11y_backend}</Chip>
+                      <Chip>Anomalies: {deviceIntel.anomalies.length}</Chip>
+                    </div>
+                    {deviceIntel.suggested_actions.length > 0 && (
+                      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                        <span style={{ fontSize: 11.5, color: "var(--text-muted)" }}>Suggested Actions</span>
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                          {deviceIntel.suggested_actions.slice(0, 3).map((action) => (
+                            <Button
+                              key={`${action.action}-${action.tool}`}
+                              size="sm"
+                              disabled={intelActionBusy === action.tool}
+                              onClick={async () => {
+                                setIntelActionBusy(action.tool);
+                                try {
+                                  await api.submitTask({
+                                    device_id: selectedDevice.id,
+                                    tool: action.tool,
+                                    args: {},
+                                  });
+                                  onToast(`Queued: ${action.title}`);
+                                } catch (err) {
+                                  onToast(err instanceof Error ? err.message : "Action failed");
+                                } finally {
+                                  setIntelActionBusy(null);
+                                }
+                              }}
+                            >
+                              <Zap size={11} /> {action.title}
+                            </Button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </SurfaceCard>
+                )}
 
                 <div style={{ display: "flex", gap: 8 }}>
                   <Button

@@ -1,11 +1,11 @@
 # AI Bridge — Production Readiness Assessment
 
-**Date:** 23 November 2026  
-**Branch / HEAD:** `fix/windows-desktop-stack-gaps` @ `78fdbb4`  
-**Release 1 evidence anchor:** `5eb8750` (20 Nov 2026; HEAD is **58 commits** ahead)  
+**Date:** 27 November 2026  
+**Branch / HEAD:** `main` @ `v0.3.0` release train (post 9-pillar + Terminal Studio)  
+**Release 1 evidence anchor:** `5eb8750` (20 Nov 2026)  
 **Supersedes:** `analysis/FINAL_PRODUCTION_READINESS.md` (removed — Nov 17 NO-GO snapshot; no longer authoritative)
 
-**Canonical companions:** [docs/ROADMAP.md](../docs/ROADMAP.md) · [docs/release-1-verification.md](../docs/release-1-verification.md) · [docs/support-matrix.md](../docs/support-matrix.md) · [docs/fleet-limits.md](../docs/fleet-limits.md) · [docs/production-readiness.md](../docs/production-readiness.md) (ops checklist) · `src/ai_bridge/control/production_readiness.py`
+**Canonical companions:** [docs/ROADMAP.md](../docs/ROADMAP.md) · [docs/release-1-verification.md](../docs/release-1-verification.md) · [docs/support-matrix.md](../docs/support-matrix.md) · [docs/release-signing.md](../docs/release-signing.md) · [docs/fleet-limits.md](../docs/fleet-limits.md) · [docs/production-readiness.md](../docs/production-readiness.md) (ops checklist) · `src/ai_bridge/control/production_readiness.py`
 
 ---
 
@@ -46,13 +46,18 @@
 - Independent security review: all P0/P1 findings remediated with regression tests
 - Windows suite record: **945 passed, 0 failed** (at R1 anchor)
 
-### In tree since R1 (through `78fdbb4`)
+### In tree since R1 (through v0.3.0)
 
 - Prefer native `ai_bridge_desktop` WebRTC on Windows fleet dispatch
 - Plane ICE / TURN pull into native peer; WebRTC production E2E harness
 - Multi-worker e-stop / clipboard / device-function alignment
 - WPF UX: poller vs Agents clarity, takeover Return Control, toasts, a11y, visual polish
 - ChatGPT Custom GPT Actions pack (`integrations/chatgpt/actions/`) + Bearer on desktop/approval routes
+- **Cross-OS nsl1 WebCodecs screen-relay** (dashboard Desktop + optional `relay-engine` release artifacts)
+- **In-process agent-desktop FFI** + `@ref` Accessibility Tree Inspector (HybridA11y / optional release matrix)
+- **Interactive Linux Terminal Studio** (`ai-bridge-linux-tui` curses/REPL; release zipapp)
+- **9-Pillar expansion:** Unified Device Intelligence, Autonomous Planner, Multi-Agent Blackboard, Visual DAG Builder, Device Episodic Memory, SaaS Tenancy Quotas (operator-scoped)
+- macOS Terminal Studio + TCC doctor + `ai-bridge-macos-tui` release bundle (Preview)
 
 ---
 
@@ -64,9 +69,9 @@
 | 2 | Hosted staging release gate | **P0** | `scripts/staging_release_gate.py --url https://<staging>` + archive artifact |
 | 3 | Hosted Postgres backup / PITR drill | **P0** | `scripts/backup_drill.sh` against real staging/prod DB; record RTO/RPO |
 | 4 | Cross-NAT public TURN | **P0** | coturn + enrolled Windows device via `analysis/webrtc-e2e-harness.html` |
-| 5 | Re-anchor CI green on HEAD | **P0 hygiene** | Confirm full matrix on `78fdbb4` (58 commits past `5eb8750`) |
+| 5 | Re-anchor CI green on HEAD / release gate | **P0 hygiene** | Green `build-sign-and-bundle` verify step so `publish-github-release` ships `AIBridgeSetup.exe` + `ai-bridge-linux-tui` (+ macOS TUI) |
 | 6 | macOS physical reboot **or** keep Preview | **P1 / scope** | Physical Mac check, or leave macOS as Preview in support matrix |
-| 7 | First tagged release ceremony | **P1** | `.github/workflows/release.yml` with production Ed25519 keypair + evidence bundle |
+| 7 | Production Ed25519 release signing | **P1** | `python scripts/generate_release_signing_key.py` → secret `AI_BRIDGE_RELEASE_SIGNING_KEY` → `release-manifest.json.sig` ([docs/release-signing.md](../docs/release-signing.md)) |
 | 8 | Multi-host staging load soak | **P1** | Beyond CI/local (`ops-proof.yml` / soak scripts against hosted plane) |
 
 Until items **1–4** (and preferably **5**) are archived with the RC, do **not** claim “production signed.”
@@ -107,12 +112,15 @@ python deployment/smoke_check.py https://YOUR_HOST
 
 ## 4. Platform support (honest)
 
-| Platform | Support | Desktop / WebRTC |
+| Platform | Support | Desktop / streaming / interactive client |
 |---|---|---|
-| Windows 10/11 / Server | **Supported** | Interactive control **Supported** (opt-in Tier 3/desktop) |
-| Linux (Ubuntu/Debian/RHEL-class) | **Supported** | View-only / capability-gated |
-| macOS 14+ | **Preview** | View-only / capability-gated (TCC) |
+| Windows 10/11 / Server | **Supported** | Interactive control **Supported** (opt-in Tier 3/desktop); nsl1 screen-relay + Hybrid A11y; WPF `AIBridgeClient.exe` / `AIBridgeSetup.exe` |
+| Linux (Ubuntu/Debian/RHEL-class) | **Supported** | View-only / capability-gated; Interactive Terminal Studio (`ai-bridge-linux-tui`) |
+| macOS 14+ | **Preview** | View-only / capability-gated (TCC); Terminal Studio + TCC doctor Preview |
 | Native C++ WebRTC | **Preview** | Preferred on Windows when `ai_bridge_desktop` present (`AI_BRIDGE_NATIVE_WEBRTC=auto`); not the default ops claim |
+| agent-desktop FFI / `@ref` inspector | **Preview** | Optional cross-OS release bundle |
+
+See [docs/support-matrix.md](../docs/support-matrix.md) for CI verification columns.
 
 ---
 
@@ -173,6 +181,7 @@ When docs disagree, prefer **this file + ROADMAP + release-1-verification + supp
 1. Run Windows reboot soak on a clean VM; archive logs.  
 2. Point staging URL at hosted plane; run staging gate + backup drill; archive evidence.  
 3. Prove cross-NAT TURN with an enrolled Windows host.  
-4. Confirm CI green on current HEAD; cut first signed `v*` release if shipping.  
-5. Keep macOS Preview unless a physical Mac reboot is signed off.  
-6. Rotate any tokens previously exposed; set prod env per §3; leave Tier 3/desktop off until needed.
+4. Confirm CI green on current HEAD; cut / re-cut signed `v*` release (`AIBridgeSetup.exe`, `ai-bridge-linux-tui`, optional macOS TUI).  
+5. Generate Ed25519 release key (`scripts/generate_release_signing_key.py`); set `AI_BRIDGE_RELEASE_SIGNING_KEY`; verify `release-manifest.json.sig` on clideos.us staged rings.  
+6. Keep macOS Preview unless a physical Mac reboot is signed off.  
+7. Rotate any tokens previously exposed; set prod env per §3; leave Tier 3/desktop off until needed.
