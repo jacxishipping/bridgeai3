@@ -76,6 +76,8 @@ export function normalizeBaseUrl(url: string): string {
 export class ApiClient {
   private session: AuthSession | null = null;
   private csrfToken: string | null = null;
+  /** Legacy admin tenant override for list/read endpoints (`?tenant=`). */
+  private tenantFilter: string | null = null;
 
   constructor(session?: AuthSession | null) {
     this.session = session ?? null;
@@ -84,6 +86,22 @@ export class ApiClient {
   setSession(session: AuthSession | null): void {
     this.session = session;
     this.csrfToken = null;
+  }
+
+  setTenantFilter(tenant: string | null): void {
+    const next = (tenant || "").trim();
+    this.tenantFilter = next || null;
+  }
+
+  getTenantFilter(): string | null {
+    return this.tenantFilter;
+  }
+
+  private withTenantQuery(path: string): string {
+    if (!this.tenantFilter) return path;
+    if (/[?&]tenant=/.test(path)) return path;
+    const join = path.includes("?") ? "&" : "?";
+    return `${path}${join}tenant=${encodeURIComponent(this.tenantFilter)}`;
   }
 
   resolveUrl(path: string, customBase?: string): string {
@@ -136,7 +154,8 @@ export class ApiClient {
       if (csrf) headers["X-CSRF-Token"] = csrf;
     }
 
-    let res = await fetch(this.resolveUrl(path, baseUrlOverride), {
+    const resolvedPath = this.withTenantQuery(path);
+    let res = await fetch(this.resolveUrl(resolvedPath, baseUrlOverride), {
       ...fetchOpts,
       headers,
     });
@@ -146,7 +165,7 @@ export class ApiClient {
       const freshCsrf = await this.ensureCsrfToken();
       if (freshCsrf) {
         headers["X-CSRF-Token"] = freshCsrf;
-        res = await fetch(this.resolveUrl(path, baseUrlOverride), {
+        res = await fetch(this.resolveUrl(resolvedPath, baseUrlOverride), {
           ...fetchOpts,
           headers,
         });
@@ -297,6 +316,7 @@ export class ApiClient {
     if (params?.os && params.os !== "all") qs.set("os", params.os);
     if (params?.status && params.status !== "all") qs.set("status", params.status);
     if (params?.q?.trim()) qs.set("q", params.q.trim());
+    if (this.tenantFilter) qs.set("tenant", this.tenantFilter);
     const suffix = qs.toString() ? `?${qs.toString()}` : "";
     const res = await fetch(this.resolveUrl(`/api/devices${suffix}`), {
       headers: { ...this.authHeaders() },
@@ -552,6 +572,18 @@ export class ApiClient {
     return res.templates || [];
   }
 
+  async createWorkflowTemplate(payload: {
+    name: string;
+    description?: string;
+    steps: Array<Record<string, unknown>>;
+    tenant?: string;
+  }): Promise<WorkflowTemplate> {
+    return this.request("/api/workflows/templates", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  }
+
   async listWorkflows(): Promise<WorkflowRecord[]> {
     return this.request<WorkflowRecord[]>("/api/workflows");
   }
@@ -619,6 +651,8 @@ export class ApiClient {
     interval_seconds: number;
     tool: string;
     args: Record<string, unknown>;
+    enabled?: boolean;
+    tenant?: string;
   }): Promise<unknown> {
     return this.request("/api/schedules", { method: "POST", body: JSON.stringify(payload) });
   }

@@ -402,8 +402,18 @@ def advance_handoff(conn: Any, task: Any, *, status: str, commit: bool = True) -
     if status_l == "completed":
         plan = load_custom_handoff_plan(conn, handoff_id) or supervisor_handoff_plan(goal, profile=profile)
         next_idx = step_index + 1
-        # Update shared multi-agent blackboard with completed step output
-        raw_res = task["result"] if hasattr(task, "keys") else (task.get("result") if isinstance(task, dict) else "")
+        # Update shared multi-agent blackboard with completed step output.
+        # Sweeper rows may omit `result`; tolerate missing columns on sqlite3.Row.
+        if isinstance(task, dict):
+            raw_res = task.get("result") or ""
+            tool_name = str(task.get("tool") or "")
+        elif hasattr(task, "keys"):
+            keys = set(task.keys())
+            raw_res = task["result"] if "result" in keys else ""
+            tool_name = str(task["tool"] if "tool" in keys else "")
+        else:
+            raw_res = ""
+            tool_name = ""
         step_id = str(args.get("_step_id") or f"step_{step_index + 1}")
         update_handoff_blackboard(
             conn,
@@ -411,7 +421,7 @@ def advance_handoff(conn: Any, task: Any, *, status: str, commit: bool = True) -
             step_id=step_id,
             step_index=step_index,
             role=str(args.get("_role") or ""),
-            tool=str(task["tool"] if hasattr(task, "keys") else task.get("tool") or ""),
+            tool=tool_name,
             status="completed",
             output=raw_res,
         )
@@ -528,7 +538,7 @@ def sweep_stuck_handoffs(conn: Any, *, limit: int = 50) -> dict[str, Any]:
     if not _has_handoff_columns(conn):
         return {"scanned": 0, "advanced": 0, "skipped": 0, "errors": ["handoff columns missing (migration 015 not applied)"]}
     rows = conn.execute(
-        "SELECT id, device_id, tenant, tool, args_json, status, updated_at FROM tasks "
+        "SELECT id, device_id, tenant, tool, args_json, status, updated_at, result FROM tasks "
         "WHERE handoff_id IS NOT NULL AND handoff_id != '' "
         "AND status IN ('completed', 'failed', 'timed_out', 'cancelled') "
         "ORDER BY updated_at ASC LIMIT ?",

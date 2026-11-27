@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Activity, Bell, Check, Cpu, Download, HardDrive, Monitor, Terminal } from "lucide-react";
+import { Activity, Bell, Check, Cpu, Download, HardDrive, Monitor, Terminal, Zap } from "lucide-react";
 import type { ApiClient } from "../api";
 import type {
   AuditRecord,
+  DeviceIntelligenceProfile,
   DeviceRecord,
   FleetTelemetrySummary,
   FleetTrendsReport,
@@ -12,6 +13,7 @@ import type {
 } from "../types";
 import {
   Button,
+  Chip,
   Sparkline,
   StateBanner,
   StatusBadge,
@@ -45,19 +47,54 @@ export function OverviewView({
   const [trends, setTrends] = useState<FleetTrendsReport | null>(null);
   const [incidents, setIncidents] = useState<IncidentRecord[]>([]);
   const [incBusyId, setIncBusyId] = useState<string | null>(null);
+  const [fleetIntel, setFleetIntel] = useState<{
+    fleet_health_score: number;
+    total_anomalies: number;
+    optimal_devices: number;
+    devices: DeviceIntelligenceProfile[];
+  } | null>(null);
+  const [actionBusy, setActionBusy] = useState<string | null>(null);
 
   const loadAnalyticsAndIncidents = useCallback(async () => {
-    const [tr, inc] = await Promise.all([
+    const [tr, inc, intel] = await Promise.all([
       api.getFleetTrends(14).catch(() => null),
       api.listIncidents(false).catch(() => null),
+      api.getFleetIntelligence().catch(() => null),
     ]);
     if (tr) setTrends(tr);
     if (inc) setIncidents(inc.items || []);
+    if (intel) {
+      setFleetIntel({
+        fleet_health_score: intel.fleet_health_score,
+        total_anomalies: intel.total_anomalies,
+        optimal_devices: intel.optimal_devices,
+        devices: intel.devices || [],
+      });
+    }
   }, [api]);
 
   useEffect(() => {
     void loadAnalyticsAndIncidents();
   }, [loadAnalyticsAndIncidents, tasks.length, devices.length]);
+
+  const intelByDevice = useMemo(() => {
+    const map = new Map<string, DeviceIntelligenceProfile>();
+    for (const d of fleetIntel?.devices ?? []) map.set(d.device_id, d);
+    return map;
+  }, [fleetIntel]);
+
+  async function runSuggestedAction(deviceId: string, tool: string, title: string) {
+    const key = `${deviceId}:${tool}`;
+    setActionBusy(key);
+    try {
+      await api.submitTask({ device_id: deviceId, tool, args: {} });
+      onToast(`Queued suggested action: ${title}`);
+    } catch (err) {
+      onToast(err instanceof Error ? err.message : "Failed to queue suggested action");
+    } finally {
+      setActionBusy(null);
+    }
+  }
 
   async function handleExportCsv() {
     try {
@@ -153,7 +190,19 @@ export function OverviewView({
           </p>
         </div>
 
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          {fleetIntel && (
+            <StatusBadge
+              status={
+                fleetIntel.fleet_health_score >= 80
+                  ? "ok"
+                  : fleetIntel.fleet_health_score >= 50
+                    ? "warn"
+                    : "err"
+              }
+              label={`Fleet Health ${fleetIntel.fleet_health_score}/100 · ${fleetIntel.optimal_devices} optimal · ${fleetIntel.total_anomalies} anomalies`}
+            />
+          )}
           <StatusBadge
             status={reportingNodes > 0 ? "ok" : "muted"}
             label={
@@ -357,15 +406,16 @@ export function OverviewView({
               <thead>
                 <tr>
                   <th>Node</th>
-                  <th>OS</th>
+                  <th>Health</th>
+                  <th>Transport / A11y</th>
                   <th>Status</th>
-                  <th>IP Address</th>
+                  <th>Suggested</th>
                 </tr>
               </thead>
               <tbody>
                 {devices.length === 0 ? (
                   <tr>
-                    <td colSpan={4} style={{ color: "var(--text-muted)", textAlign: "center", padding: 24 }}>
+                    <td colSpan={5} style={{ color: "var(--text-muted)", textAlign: "center", padding: 24 }}>
                       No devices enrolled yet. Enroll a node from Fleet &amp; Nodes.
                     </td>
                   </tr>
@@ -376,6 +426,8 @@ export function OverviewView({
                       : dev.status === "online"
                         ? "ok"
                         : "muted";
+                    const intel = intelByDevice.get(dev.id);
+                    const suggestion = intel?.suggested_actions?.[0];
                     return (
                       <tr
                         key={dev.id}
@@ -385,17 +437,52 @@ export function OverviewView({
                         <td>
                           <div style={{ fontWeight: 500 }}>{dev.name}</div>
                           <div className="mono" style={{ fontSize: 11, color: "var(--text-muted)" }}>
-                            {dev.id}
+                            {dev.os || "—"} · {dev.id}
                           </div>
                         </td>
-                        <td>{dev.os || "—"}</td>
+                        <td>
+                          {intel ? (
+                            <StatusBadge
+                              status={
+                                intel.health_score >= 80
+                                  ? "ok"
+                                  : intel.health_score >= 50
+                                    ? "warn"
+                                    : "err"
+                              }
+                              label={`${intel.health_score}/100`}
+                            />
+                          ) : (
+                            <span style={{ color: "var(--text-muted)" }}>—</span>
+                          )}
+                        </td>
+                        <td>
+                          <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+                            <Chip>{intel?.recommended_transport || "—"}</Chip>
+                            <Chip>{intel?.recommended_a11y_backend || "—"}</Chip>
+                          </div>
+                        </td>
                         <td>
                           <StatusBadge
                             status={st}
-                            label={dev.revoked ? "Revoked" : dev.status || "offline"}
+                            label={dev.revoked ? "Revoked" : intel?.readiness_state || dev.status || "offline"}
                           />
                         </td>
-                        <td className="mono">{dev.ip_address || "—"}</td>
+                        <td onClick={(e) => e.stopPropagation()}>
+                          {suggestion ? (
+                            <Button
+                              size="sm"
+                              disabled={actionBusy === `${dev.id}:${suggestion.tool}`}
+                              onClick={() =>
+                                void runSuggestedAction(dev.id, suggestion.tool, suggestion.title)
+                              }
+                            >
+                              <Zap size={11} /> {suggestion.title}
+                            </Button>
+                          ) : (
+                            <span style={{ color: "var(--text-muted)", fontSize: 12 }}>—</span>
+                          )}
+                        </td>
                       </tr>
                     );
                   })

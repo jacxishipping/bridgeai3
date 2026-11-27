@@ -90,4 +90,83 @@ public static class AgentMemoryService
         }
         return sb.ToString();
     }
+
+    private sealed class CloudSyncState
+    {
+        public HashSet<string> SyncedKeys { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+        public DateTimeOffset? LastPullUtc { get; set; }
+    }
+
+    private static string GetCloudSyncPath(string? filePath = null)
+    {
+        var memPath = string.IsNullOrWhiteSpace(filePath) ? GetDefaultPath() : filePath;
+        var dir = Path.GetDirectoryName(memPath);
+        return string.IsNullOrEmpty(dir)
+            ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".ai-bridge", "agent_memory_cloud_sync.json")
+            : Path.Combine(dir, "agent_memory_cloud_sync.json");
+    }
+
+    private static CloudSyncState LoadSyncState(string? filePath = null)
+    {
+        var path = GetCloudSyncPath(filePath);
+        lock (Sync)
+        {
+            try
+            {
+                if (File.Exists(path))
+                {
+                    var state = JsonSerializer.Deserialize<CloudSyncState>(File.ReadAllText(path), JsonOpts);
+                    if (state is not null)
+                    {
+                        state.SyncedKeys ??= new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                        return state;
+                    }
+                }
+            }
+            catch { }
+            return new CloudSyncState();
+        }
+    }
+
+    private static void SaveSyncState(CloudSyncState state, string? filePath = null)
+    {
+        var path = GetCloudSyncPath(filePath);
+        lock (Sync)
+        {
+            try
+            {
+                var dir = Path.GetDirectoryName(path);
+                if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+                File.WriteAllText(path, JsonSerializer.Serialize(state, JsonOpts), Encoding.UTF8);
+            }
+            catch { }
+        }
+    }
+
+    public static HashSet<string> GetSyncedCloudKeys(string? filePath = null) =>
+        new(LoadSyncState(filePath).SyncedKeys, StringComparer.OrdinalIgnoreCase);
+
+    public static void MarkCloudKeySynced(string key, string? filePath = null)
+    {
+        if (string.IsNullOrWhiteSpace(key)) return;
+        var state = LoadSyncState(filePath);
+        state.SyncedKeys.Add(key.Trim());
+        SaveSyncState(state, filePath);
+    }
+
+    public static DateTimeOffset? GetLastCloudPullUtc(string? filePath = null) =>
+        LoadSyncState(filePath).LastPullUtc;
+
+    public static void SetLastCloudPullUtc(DateTimeOffset when, string? filePath = null)
+    {
+        var state = LoadSyncState(filePath);
+        state.LastPullUtc = when;
+        SaveSyncState(state, filePath);
+    }
+
+    public static IEnumerable<KeyValuePair<string, string>> GetUnsyncedEntries(string? filePath = null)
+    {
+        var synced = GetSyncedCloudKeys(filePath);
+        return Load(filePath).Where(kv => !synced.Contains(kv.Key));
+    }
 }

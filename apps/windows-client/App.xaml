@@ -41,6 +41,8 @@
         <SolidColorBrush x:Key="BadgeGreenBg" Color="#0E2B24"/>
         <SolidColorBrush x:Key="BadgeGreenFg" Color="#34D399"/>
         <SolidColorBrush x:Key="BadgeIndigoBg" Color="#1E2248"/>
+        <SolidColorBrush x:Key="BadgeAmberBg" Color="#3D2A0A"/>
+        <SolidColorBrush x:Key="BadgeAmberFg" Color="#FBBF24"/>
         <SolidColorBrush x:Key="BadgeIndigoFg" Color="#818CF8"/>
 
         <SolidColorBrush x:Key="SuccessColor" Color="#10B981"/>

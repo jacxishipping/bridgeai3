@@ -76,6 +76,8 @@ public static class ThemeManager
             SetBrush(res, "BadgeGreenFg", 0x05, 0x96, 0x69);
             SetBrush(res, "BadgeIndigoBg", 0xEE, 0xF2, 0xFF);
             SetBrush(res, "BadgeIndigoFg", 0x4F, 0x46, 0xE5);
+            SetBrush(res, "BadgeAmberBg", 0xFF, 0xF7, 0xED);
+            SetBrush(res, "BadgeAmberFg", 0xD9, 0x77, 0x06);
         }
         else
         {
@@ -120,6 +122,8 @@ public static class ThemeManager
             SetBrush(res, "BadgeGreenFg", 0x34, 0xD3, 0x99);
             SetBrush(res, "BadgeIndigoBg", 0x1E, 0x22, 0x48);
             SetBrush(res, "BadgeIndigoFg", 0x81, 0x8C, 0xF8);
+            SetBrush(res, "BadgeAmberBg", 0x3D, 0x2A, 0x0A);
+            SetBrush(res, "BadgeAmberFg", 0xFB, 0xBF, 0x24);
         }
 
         SetBrush(res, "SuccessColor", 0x10, 0xB9, 0x81);

@@ -160,6 +160,41 @@ jobs:
             .run/linux-release/ai-bridge-linux-tui.sha256
           retention-days: 90
 
+  build-macos-terminal-app:
+    name: Build macOS Interactive Terminal Studio (ai-bridge-macos-tui)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Package executable macOS Terminal Studio bundle (zipapp + launcher)
+        run: |
+          mkdir -p .run/macos-release/pkg
+          cp -r src/ai_bridge .run/macos-release/pkg/
+          cp -r agents/common .run/macos-release/pkg/
+          cp -r agents/macos .run/macos-release/pkg/
+          cat << 'EOF' > .run/macos-release/pkg/__main__.py
+          from macos.agent_main import main
+          if __name__ == "__main__":
+              main()
+          EOF
+          python -m zipapp .run/macos-release/pkg \
+            --python="/usr/bin/env python3" \
+            --output .run/macos-release/ai-bridge-macos-tui \
+            --compress
+          chmod +x .run/macos-release/ai-bridge-macos-tui
+          rm -rf .run/macos-release/pkg
+          .run/macos-release/ai-bridge-macos-tui tui --snapshot
+          shasum -a 256 .run/macos-release/ai-bridge-macos-tui > .run/macos-release/ai-bridge-macos-tui.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-terminal-app-${{ github.ref_name }}
+          path: |
+            .run/macos-release/ai-bridge-macos-tui
+            .run/macos-release/ai-bridge-macos-tui.sha256
+          retention-days: 90
+
   bundle-agent-desktop:
     name: Bundle optional agent-desktop (${{ matrix.os }})
     if: inputs.bundle_agent_desktop == true || vars.AI_BRIDGE_BUNDLE_AGENT_DESKTOP == '1'
@@ -261,8 +296,8 @@ jobs:
 
   publish-github-release:
     name: Publish GitHub Release
-    needs: [build-sign-and-bundle, build-windows-installer, build-linux-terminal-app, bundle-agent-desktop, bundle-screen-relay]
-    if: always() && startsWith(github.ref, 'refs/tags/v') && needs.build-sign-and-bundle.result == 'success' && needs.build-windows-installer.result == 'success' && needs.build-linux-terminal-app.result == 'success'
+    needs: [build-sign-and-bundle, build-windows-installer, build-linux-terminal-app, build-macos-terminal-app, bundle-agent-desktop, bundle-screen-relay]
+    if: always() && startsWith(github.ref, 'refs/tags/v') && needs.build-sign-and-bundle.result == 'success' && needs.build-windows-installer.result == 'success' && needs.build-linux-terminal-app.result == 'success' && needs.build-macos-terminal-app.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -280,6 +315,7 @@ jobs:
             -o -name "sbom.cdx.json" -o -name "SHA256SUMS.txt" -o -name "release-evidence.json" \
             -o -name "AIBridgeSetup.exe" -o -name "AIBridgeSetup.exe.sha256" \
             -o -name "ai-bridge-linux-tui" -o -name "ai-bridge-linux-tui.sha256" \
+            -o -name "ai-bridge-macos-tui" -o -name "ai-bridge-macos-tui.sha256" \
             -o -name "agent-desktop-*" -o -name "*agent_desktop_ffi*" \
             -o -name "relay-engine-*" \
           \) -exec cp {} upload/ \;

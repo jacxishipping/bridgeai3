@@ -366,6 +366,62 @@ public sealed class TaskHistoryRecord
 
     [JsonPropertyName("result_preview")]
     public string ResultPreview { get; set; } = "";
+
+    [JsonPropertyName("handoff_id")]
+    public string HandoffId { get; set; } = "";
+}
+
+public sealed class DeviceIntelligenceResult
+{
+    public int HealthScore { get; init; }
+    public int AnomalyCount { get; init; }
+    public string ReadinessState { get; init; } = "";
+    public List<string> AnomalySummaries { get; init; } = new();
+}
+
+public sealed class HandoffTaskStepRow
+{
+    public string TaskId { get; set; } = "";
+    public int? StepIndex { get; set; }
+    public string Role { get; set; } = "";
+    public string Tool { get; set; } = "";
+    public string Status { get; set; } = "";
+    public string DagLabel => StepIndex.HasValue ? $"Step {StepIndex.Value + 1}" : TaskId;
+}
+
+public sealed class HandoffBlackboardRow
+{
+    public string StepId { get; set; } = "";
+    public int StepIndex { get; set; }
+    public string Role { get; set; } = "";
+    public string Tool { get; set; } = "";
+    public string Status { get; set; } = "";
+    public string Summary { get; set; } = "";
+    public string DagLabel => $"BB · Step {StepIndex + 1}";
+}
+
+public sealed class SupervisorHandoffSnapshot
+{
+    public string HandoffId { get; init; } = "";
+    public string Status { get; init; } = "";
+    public string Goal { get; init; } = "";
+    public string Profile { get; init; } = "";
+    public string BlockedReason { get; init; } = "";
+    public List<HandoffTaskStepRow> Tasks { get; init; } = new();
+    public List<HandoffBlackboardRow> BlackboardSteps { get; init; } = new();
+}
+
+public sealed class DeviceMemoryEpisodeItem
+{
+    public string Id { get; set; } = "";
+    public string EpisodeType { get; set; } = "";
+    public string ContextSummary { get; set; } = "";
+    public string Resolution { get; set; } = "";
+    public string Tool { get; set; } = "";
+    public string RecordedAt { get; set; } = "";
+    public string DisplayLine => string.IsNullOrWhiteSpace(Resolution)
+        ? ContextSummary
+        : $"{ContextSummary} → {Resolution}";
 }
 
 public sealed class HardwareTelemetry

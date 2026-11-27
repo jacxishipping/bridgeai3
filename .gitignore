@@ -36,3 +36,8 @@ apps/windows-client/bin/
 apps/windows-client/obj/
 apps/windows-client.Tests/bin/
 apps/windows-client.Tests/obj/
+
+# Release signing keypairs (never commit private.pem)
+keys/
+*.pem
+

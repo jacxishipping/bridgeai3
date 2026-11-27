@@ -2,7 +2,9 @@ import { useEffect, useState } from "react";
 import {
   ArrowDown,
   ArrowUp,
+  BookmarkPlus,
   Brain,
+  CalendarClock,
   Code2,
   Cpu,
   Eye,
@@ -28,7 +30,7 @@ import type {
   WorkflowRecord,
   WorkflowTemplate,
 } from "../types";
-import { Button, Chip, Modal, StatusBadge, SurfaceCard, Toggle } from "../components/ui";
+import { Button, Chip, Modal, SlideOverDrawer, StatusBadge, SurfaceCard, Toggle } from "../components/ui";
 
 const TOOL_CATALOG: Array<{ category: string; tool: string; tier: number; defaultArgs: Record<string, unknown> }> = [
   { category: "System & Telemetry", tool: "get_system_info", tier: 1, defaultArgs: {} },
@@ -134,6 +136,13 @@ export function WorkflowsView({
   ]);
   const [wfStepsJson, setWfStepsJson] = useState(() => JSON.stringify(visualSteps, null, 2));
   const [inspectedWorkflow, setInspectedWorkflow] = useState<WorkflowRecord | null>(null);
+  const [templateBusy, setTemplateBusy] = useState(false);
+  const [scheduleBusy, setScheduleBusy] = useState(false);
+  const [blackboardOpen, setBlackboardOpen] = useState(false);
+  const [blackboardHandoffId, setBlackboardHandoffId] = useState("");
+  const [blackboardState, setBlackboardState] = useState<Record<string, unknown> | null>(null);
+  const [blackboardBusy, setBlackboardBusy] = useState(false);
+  const [lastHandoffId, setLastHandoffId] = useState("");
 
   async function loadAll() {
     try {
@@ -177,6 +186,25 @@ export function WorkflowsView({
     void loadDeviceIntelligenceAndMemory(handoffDevice);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [api, handoffDevice]);
+
+  useEffect(() => {
+    if (!blackboardOpen || !blackboardHandoffId.trim()) return;
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const st = await api.getHandoffStatus(blackboardHandoffId.trim());
+        if (!cancelled) setBlackboardState(st);
+      } catch {
+        // Keep last good snapshot while handoff settles
+      }
+    };
+    void tick();
+    const id = window.setInterval(() => void tick(), 2500);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [api, blackboardOpen, blackboardHandoffId]);
 
   function syncStepsToVisual(nextSteps: WorkflowDagStep[]) {
     const normalized = nextSteps.map((s, idx) => ({
@@ -388,12 +416,17 @@ export function WorkflowsView({
               onClick={async () => {
                 setHandoffBusy(true);
                 try {
-                  await api.supervisorHandoff({
+                  const res = await api.supervisorHandoff({
                     device_id: handoffDevice,
                     goal: handoffGoal.trim(),
                     profile: handoffProfile === "auto" ? "code" : handoffProfile,
                   });
-                  onToast("Supervisor multi-agent handoff enqueued");
+                  const hid = String((res as { handoff_id?: string }).handoff_id || "");
+                  if (hid) {
+                    setLastHandoffId(hid);
+                    setBlackboardHandoffId(hid);
+                  }
+                  onToast(hid ? `Handoff enqueued (${hid})` : "Supervisor multi-agent handoff enqueued");
                   await loadAll();
                 } catch (err) {
                   onToast(err instanceof Error ? err.message : "Handoff failed");
@@ -403,6 +436,15 @@ export function WorkflowsView({
               }}
             >
               <GitBranch size={12} /> {handoffBusy ? "Dispatching..." : "Enqueue Direct Role Handoff"}
+            </Button>
+            <Button
+              size="sm"
+              onClick={() => {
+                if (lastHandoffId) setBlackboardHandoffId(lastHandoffId);
+                setBlackboardOpen(true);
+              }}
+            >
+              <Eye size={12} /> Live Blackboard
             </Button>
           </div>
         </SurfaceCard>
@@ -527,6 +569,74 @@ export function WorkflowsView({
               }}
             >
               <Code2 size={12} /> JSON Code
+            </Button>
+            <Button
+              size="sm"
+              disabled={templateBusy || visualSteps.length === 0}
+              onClick={async () => {
+                setTemplateBusy(true);
+                try {
+                  const steps = visualSteps.map((st) => ({
+                    tool: st.tool,
+                    args: st.args || {},
+                    name: st.name,
+                    role: st.role,
+                    device_id: st.device_id || wfDevice,
+                    depends_on: st.depends_on,
+                    tier: st.tier,
+                    guard: st.guard,
+                    verify: st.verify,
+                    retries: st.retries,
+                  }));
+                  await api.createWorkflowTemplate({
+                    name: wfName.trim() || "Custom DAG Template",
+                    description: `Saved from Visual Canvas (${steps.length} steps)`,
+                    steps,
+                  });
+                  onToast("Saved custom workflow template");
+                  await loadAll();
+                } catch (err) {
+                  onToast(err instanceof Error ? err.message : "Failed to save template");
+                } finally {
+                  setTemplateBusy(false);
+                }
+              }}
+            >
+              <BookmarkPlus size={12} /> {templateBusy ? "Saving..." : "Save as Custom Template"}
+            </Button>
+            <Button
+              size="sm"
+              disabled={scheduleBusy || visualSteps.length === 0}
+              onClick={async () => {
+                setScheduleBusy(true);
+                try {
+                  await api.createSchedule({
+                    name: `Scheduled: ${wfName.trim() || "DAG"}`,
+                    device_id: wfDevice || "local",
+                    interval_seconds: 3600,
+                    tool: "__workflow__",
+                    args: {
+                      name: wfName.trim() || "Scheduled DAG",
+                      steps: visualSteps.map((st) => ({
+                        tool: st.tool,
+                        args: st.args || {},
+                        name: st.name,
+                        role: st.role,
+                        device_id: st.device_id || wfDevice,
+                        depends_on: st.depends_on,
+                      })),
+                      stop_on_failure: true,
+                    },
+                  });
+                  onToast("Scheduled DAG (hourly). Manage under Fleet Ops & Cron.");
+                } catch (err) {
+                  onToast(err instanceof Error ? err.message : "Failed to schedule DAG");
+                } finally {
+                  setScheduleBusy(false);
+                }
+              }}
+            >
+              <CalendarClock size={12} /> {scheduleBusy ? "Scheduling..." : "Schedule DAG"}
             </Button>
           </div>
         </div>
@@ -1049,6 +1159,62 @@ export function WorkflowsView({
           </div>
         </div>
       </Modal>
+
+      <SlideOverDrawer
+        open={blackboardOpen}
+        title="Live Blackboard State Inspector"
+        subtitle="Planner → Computer Operator → Tester handoff outputs"
+        onClose={() => setBlackboardOpen(false)}
+      >
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          <div style={{ display: "flex", gap: 8 }}>
+            <input
+              className="field mono"
+              placeholder="handoff_id"
+              value={blackboardHandoffId}
+              onChange={(e) => setBlackboardHandoffId(e.target.value)}
+            />
+            <Button
+              size="sm"
+              variant="primary"
+              disabled={blackboardBusy || !blackboardHandoffId.trim()}
+              onClick={async () => {
+                setBlackboardBusy(true);
+                try {
+                  const st = await api.getHandoffStatus(blackboardHandoffId.trim());
+                  setBlackboardState(st);
+                } catch (err) {
+                  onToast(err instanceof Error ? err.message : "Failed to load handoff");
+                } finally {
+                  setBlackboardBusy(false);
+                }
+              }}
+            >
+              {blackboardBusy ? "Loading..." : "Refresh"}
+            </Button>
+          </div>
+          {blackboardState ? (
+            <>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                <Chip>Status: {String(blackboardState.status || "—")}</Chip>
+                <Chip>Profile: {String(blackboardState.profile || "—")}</Chip>
+                <Chip>Tasks: {String(blackboardState.count ?? "—")}</Chip>
+              </div>
+              <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>
+                Goal: {String(blackboardState.goal || "—")}
+              </div>
+              <pre className="terminal" style={{ margin: 0, maxHeight: 420, whiteSpace: "pre-wrap" }}>
+                {JSON.stringify(blackboardState.blackboard || blackboardState, null, 2)}
+              </pre>
+            </>
+          ) : (
+            <div style={{ fontSize: 12, color: "var(--text-muted)" }}>
+              Enter a handoff id (or enqueue a role handoff) and refresh to watch Planner → Operator → Tester
+              blackboard outputs in real time.
+            </div>
+          )}
+        </div>
+      </SlideOverDrawer>
     </div>
   );
 }
