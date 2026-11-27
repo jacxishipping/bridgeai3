@@ -132,6 +132,7 @@ show_help() {
     echo -e "${BOLD}Usage:${NC} $0 [command] [options]"
     echo ""
     echo -e "${BOLD}Commands:${NC}"
+    echo "  tui              Launch interactive Linux Terminal Studio (Curses TUI / REPL)"
     echo "  run              Run the agent in foreground (default when configured)"
     echo "  start            Start the agent as a systemd background service"
     echo "  stop             Stop the running background agent service"
@@ -910,6 +911,11 @@ while [[ $# -gt 0 ]]; do
             SUBCOMMAND="update"
             shift
             ;;
+        tui|console|ui)
+            SUBCOMMAND="tui"
+            shift
+            break
+            ;;
         install-service)
             SUBCOMMAND="install-service"
             shift
@@ -1033,6 +1039,11 @@ case "$SUBCOMMAND" in
         ;;
     update)
         cmd_update
+        ;;
+    tui)
+        load_existing_config
+        ensure_virtualenv
+        "$PYTHON_BIN" "$AGENT_ENTRYPOINT" tui --control-url "${CLI_CONTROL_URL:-$CFG_CONTROL_URL}" --device-token "${CLI_DEVICE_TOKEN:-$CFG_DEVICE_TOKEN}" "$@"
         ;;
     install-service)
         install_systemd_service

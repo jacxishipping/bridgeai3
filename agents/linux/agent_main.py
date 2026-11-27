@@ -209,7 +209,7 @@ def _resolve_token_and_file(explicit_token: str, explicit_file: str) -> tuple[st
     # 2. Check explicit token file
     if token_path and token_path.is_file():
         try:
-            tok = token_path.read_text(encoding="utf-8").strip()
+            tok = token_path.read_text(encoding="utf-8-sig").strip()
             if tok:
                 return tok, token_path
         except OSError:
@@ -221,7 +221,7 @@ def _resolve_token_and_file(explicit_token: str, explicit_file: str) -> tuple[st
         p = Path(env_file).expanduser().resolve()
         if p.is_file():
             try:
-                tok = p.read_text(encoding="utf-8").strip()
+                tok = p.read_text(encoding="utf-8-sig").strip()
                 if tok:
                     return tok, p
             except OSError:
@@ -235,7 +235,7 @@ def _resolve_token_and_file(explicit_token: str, explicit_file: str) -> tuple[st
     for cand in candidates:
         if cand.is_file():
             try:
-                tok = cand.read_text(encoding="utf-8").strip()
+                tok = cand.read_text(encoding="utf-8-sig").strip()
                 if tok:
                     return tok, cand
             except OSError:
@@ -1061,6 +1061,15 @@ def main() -> None:
     # Subcommand: update
     subparsers.add_parser("update", help="Update codebase to a signed release and restart service")
 
+    # Subcommand: tui (Interactive Terminal Studio)
+    p_tui = subparsers.add_parser("tui", help="Launch interactive Linux Terminal Studio (Curses TUI / REPL)")
+    p_tui.add_argument("--control-url", default=argparse.SUPPRESS)
+    p_tui.add_argument("--device-token", default=argparse.SUPPRESS)
+    p_tui.add_argument("--token-file", default=argparse.SUPPRESS)
+    p_tui.add_argument("--mode", choices=["auto", "curses", "repl"], default="auto")
+    p_tui.add_argument("--snapshot", action="store_true", help="Print a single dashboard snapshot and exit")
+    p_tui.add_argument("--json", action="store_true", help="With --snapshot, emit JSON state")
+
     args = parser.parse_args()
 
     # Legacy manifest verification check
@@ -1114,6 +1123,23 @@ def main() -> None:
     if subcmd == "update":
         update_cmd()
         return
+
+    if subcmd == "tui":
+        from linux.tui_app import launch_linux_tui
+
+        cfg = load_agent_config()
+        url = getattr(args, "control_url", "") or cfg.get("control_url", DEFAULT_CONTROL_URL)
+        tok = getattr(args, "device_token", "") or cfg.get("device_token", "")
+        tf = Path(getattr(args, "token_file", "")) if getattr(args, "token_file", "") else None
+        code = launch_linux_tui(
+            control_url=url,
+            device_token=tok,
+            token_file=tf,
+            mode=getattr(args, "mode", "auto"),
+            snapshot_only=bool(getattr(args, "snapshot", False)),
+            json_output=bool(getattr(args, "json", False)),
+        )
+        sys.exit(code)
 
     if subcmd == "policy":
         cfg = load_agent_config()

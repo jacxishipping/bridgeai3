@@ -125,6 +125,41 @@ jobs:
             .run/windows-release/AIBridgeSetup.exe.sha256
           retention-days: 90
 
+  build-linux-terminal-app:
+    name: Build Linux Interactive Terminal Studio (ai-bridge-linux-tui)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Package executable Linux Terminal Studio bundle (zipapp + launcher)
+        run: |
+          mkdir -p .run/linux-release/pkg
+          cp -r src/ai_bridge .run/linux-release/pkg/
+          cp -r agents/common .run/linux-release/pkg/
+          cp -r agents/linux .run/linux-release/pkg/
+          cat << 'EOF' > .run/linux-release/pkg/__main__.py
+          from linux.agent_main import main
+          if __name__ == "__main__":
+              main()
+          EOF
+          python -m zipapp .run/linux-release/pkg \
+            --python="/usr/bin/env python3" \
+            --output .run/linux-release/ai-bridge-linux-tui \
+            --compress
+          chmod +x .run/linux-release/ai-bridge-linux-tui
+          rm -rf .run/linux-release/pkg
+          .run/linux-release/ai-bridge-linux-tui tui --snapshot
+          (cd .run/linux-release && sha256sum ai-bridge-linux-tui > ai-bridge-linux-tui.sha256)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-terminal-app-${{ github.ref_name }}
+          path: |
+            .run/linux-release/ai-bridge-linux-tui
+            .run/linux-release/ai-bridge-linux-tui.sha256
+          retention-days: 90
+
   bundle-agent-desktop:
     name: Bundle optional agent-desktop (${{ matrix.os }})
     if: inputs.bundle_agent_desktop == true || vars.AI_BRIDGE_BUNDLE_AGENT_DESKTOP == '1'
@@ -226,8 +261,8 @@ jobs:
 
   publish-github-release:
     name: Publish GitHub Release
-    needs: [build-sign-and-bundle, build-windows-installer, bundle-agent-desktop, bundle-screen-relay]
-    if: always() && startsWith(github.ref, 'refs/tags/v') && needs.build-sign-and-bundle.result == 'success' && needs.build-windows-installer.result == 'success'
+    needs: [build-sign-and-bundle, build-windows-installer, build-linux-terminal-app, bundle-agent-desktop, bundle-screen-relay]
+    if: always() && startsWith(github.ref, 'refs/tags/v') && needs.build-sign-and-bundle.result == 'success' && needs.build-windows-installer.result == 'success' && needs.build-linux-terminal-app.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -235,7 +270,7 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: release-assets
-      - name: Create GitHub Release with signed artifacts, SBOM & Windows installer
+      - name: Create GitHub Release with signed artifacts, SBOM, Windows installer & Linux TUI
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -244,6 +279,7 @@ jobs:
             -name "*.whl" -o -name "*.tar.gz" -o -name "release-manifest.json*" \
             -o -name "sbom.cdx.json" -o -name "SHA256SUMS.txt" -o -name "release-evidence.json" \
             -o -name "AIBridgeSetup.exe" -o -name "AIBridgeSetup.exe.sha256" \
+            -o -name "ai-bridge-linux-tui" -o -name "ai-bridge-linux-tui.sha256" \
             -o -name "agent-desktop-*" -o -name "*agent_desktop_ffi*" \
             -o -name "relay-engine-*" \
           \) -exec cp {} upload/ \;
