@@ -36,7 +36,15 @@ import os
 import uuid
 from typing import Any, Callable
 
-from fastapi import HTTPException
+try:
+    from fastapi import HTTPException
+except ImportError:  # pragma: no cover - stdlib-only agent poller/TUI host fallback
+    class HTTPException(Exception):  # type: ignore[no-redef]
+        def __init__(self, status_code: int = 400, detail: Any = "", headers: Any = None) -> None:
+            self.status_code = status_code
+            self.detail = detail
+            self.headers = headers
+            super().__init__(f"HTTP {status_code}: {detail}")
 
 from ..policy import TOOL_TIERS, Policy, decide, normalize_tool_name
 from . import db as dbmod
