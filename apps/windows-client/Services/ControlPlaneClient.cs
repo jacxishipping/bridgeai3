@@ -65,7 +65,7 @@ public sealed class ControlPlaneClient : IDisposable
         return IsServerCertificateTrusted(request.RequestUri, certificate, errors);
     }
 
-    private static bool IsServerCertificateTrusted(
+    internal static bool IsServerCertificateTrusted(
         Uri? requestUri,
         X509Certificate2? certificate,
         SslPolicyErrors errors)

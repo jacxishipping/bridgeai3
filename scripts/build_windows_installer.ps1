@@ -11,6 +11,7 @@
 param(
     [string]$OutDir = "dist/windows",
     [string]$Runtime = "win-x64",
+    [string]$ScreenRelayDir = "",
     [switch]$SkipClientPublish
 )
 
@@ -55,6 +56,50 @@ if (-not $SkipClientPublish) {
 $ClientExe = Join-Path $ClientPublishDir "AIBridgeClient.exe"
 if (-not (Test-Path $ClientExe)) {
     throw "Expected published client binary at $ClientExe"
+}
+
+# Stage native C++ ai_bridge_native.dll warm fallback if compiled
+foreach ($NativeCandidate in @(
+    (Join-Path $CppBuildDir "Release\ai_bridge_native.dll"),
+    (Join-Path $CppBuildDir "ai_bridge_native.dll")
+)) {
+    if (Test-Path $NativeCandidate) {
+        Copy-Item -Force $NativeCandidate (Join-Path $ClientPublishDir "ai_bridge_native.dll")
+        Write-Host "    Bundled warm fallback native encoder: $NativeCandidate" -ForegroundColor DarkCyan
+        break
+    }
+}
+
+# Stage primary vercel-labs/screen-relay native relay-engine.exe (+ companion DLLs & viewer stub)
+$RelayCandidates = @()
+if ($ScreenRelayDir) { $RelayCandidates += $ScreenRelayDir }
+if ($env:AI_BRIDGE_SCREEN_RELAY_DIR) { $RelayCandidates += $env:AI_BRIDGE_SCREEN_RELAY_DIR }
+$RelayCandidates += (Join-Path $RepoRoot "bin")
+$RelayCandidates += (Join-Path $HOME ".ai-bridge\bin")
+
+foreach ($Dir in $RelayCandidates) {
+    if (-not $Dir -or -not (Test-Path $Dir)) { continue }
+    $RelayExe = Join-Path $Dir "relay-engine.exe"
+    if (-not (Test-Path $RelayExe)) {
+        $AltExe = Join-Path $Dir "relay-engine-windows-x64.exe"
+        if (Test-Path $AltExe) { $RelayExe = $AltExe }
+    }
+    if (Test-Path $RelayExe) {
+        Copy-Item -Force $RelayExe (Join-Path $ClientPublishDir "relay-engine.exe")
+        Get-ChildItem -Path $Dir -Filter "*.dll" -File -ErrorAction SilentlyContinue | ForEach-Object {
+            Copy-Item -Force $_.FullName (Join-Path $ClientPublishDir $_.Name)
+        }
+        $ViewerOut = Join-Path $ClientPublishDir "viewer"
+        New-Item -ItemType Directory -Force -Path $ViewerOut | Out-Null
+        if (-not (Test-Path (Join-Path $ViewerOut "index.html"))) {
+            Set-Content -Path (Join-Path $ViewerOut "index.html") -Value "<!doctype html><title>AI Bridge Screen Relay</title>" -Encoding UTF8
+        }
+        if (-not (Test-Path (Join-Path $ViewerOut "viewer.js"))) {
+            Set-Content -Path (Join-Path $ViewerOut "viewer.js") -Value "// loopback headless viewer stub" -Encoding UTF8
+        }
+        Write-Host "    Embedded primary relay-engine.exe into installer payload from $Dir" -ForegroundColor Green
+        break
+    }
 }
 
 Write-Host "==> [2/4] Packaging client payload into $PayloadZip..." -ForegroundColor Cyan

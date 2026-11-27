@@ -37,6 +37,8 @@ _loop: asyncio.AbstractEventLoop | None = None
 _CHANNEL_PREFIX = "aibridge:agent:"
 _BROADCAST_CHANNEL = _CHANNEL_PREFIX + "broadcast"
 _WEBRTC_CHANNEL_PREFIX = "aibridge:webrtc:"
+_NSL1_CHANNEL_PREFIX = "aibridge:nsl1:"
+_NSL1_IDR_KEY_PREFIX = "aibridge:nsl1:idr:"
 _WORKER_ID = uuid.uuid4().hex[:12]
 _sync_redis = None
 _sync_redis_failed_at = 0.0
@@ -44,6 +46,7 @@ _SYNC_REDIS_FAILED_COOLDOWN_SEC = 10.0
 _fanout_task: asyncio.Task | None = None
 _REDIS_UNAVAILABLE_WARNED = False
 _webrtc_fanout_handlers: list[Any] = []
+_nsl1_binary_handlers: list[Any] = []
 
 # PERF-06: per-device wake events so the next_task long-poll can await a
 # notification instead of spinning every 0.15 s with a DB check per cycle.
@@ -146,6 +149,62 @@ def register_webrtc_fanout_handler(handler: Any) -> None:
             _webrtc_fanout_handlers.append(handler)
 
 
+def register_nsl1_binary_handler(handler: Any) -> None:
+    """Register an async callback ``handler(session_id, raw_bytes, target_role)`` for cross-worker NSL1 binary relay."""
+    with _lock:
+        if handler not in _nsl1_binary_handlers:
+            _nsl1_binary_handlers.append(handler)
+
+
+def publish_nsl1_binary(session_id: str, data: bytes, *, target_role: str = "viewer", is_keyframe: bool = False) -> bool:
+    """Publish a binary NSL1 frame across Gunicorn workers via Redis pub/sub and cache latest IDR keyframe."""
+    global _sync_redis, _sync_redis_failed_at
+    try:
+        import base64
+
+        client = _get_sync_redis()
+        if client is None:
+            return False
+        b64 = base64.b64encode(data).decode("ascii")
+        if is_keyframe and target_role == "viewer":
+            client.setex(_NSL1_IDR_KEY_PREFIX + session_id, 120, b64)
+        envelope = json.dumps({"origin": _WORKER_ID, "role": target_role, "b64": b64})
+        client.publish(_NSL1_CHANNEL_PREFIX + session_id, envelope)
+        return True
+    except Exception as exc:
+        _sync_redis = None
+        _sync_redis_failed_at = time.time()
+        _note_redis_unavailable(exc)
+        log.debug("agent_channel: Redis NSL1 binary publish failed (%s)", exc)
+        return False
+
+
+def get_cached_nsl1_keyframe(session_id: str) -> bytes | None:
+    """Fetch the most recent cached NSL1 IDR keyframe packet from Redis (if available)."""
+    try:
+        import base64
+
+        client = _get_sync_redis()
+        if client is None:
+            return None
+        b64 = client.get(_NSL1_IDR_KEY_PREFIX + session_id)
+        if not b64:
+            return None
+        return base64.b64decode(b64)
+    except Exception:
+        return None
+
+
+def clear_cached_nsl1_keyframe(session_id: str) -> None:
+    """Delete any cached NSL1 IDR keyframe for a terminated session."""
+    try:
+        client = _get_sync_redis()
+        if client is not None:
+            client.delete(_NSL1_IDR_KEY_PREFIX + session_id)
+    except Exception:
+        pass
+
+
 def publish_webrtc_event(session_id: str, payload: dict[str, Any]) -> bool:
     """Publish a WebRTC signaling event to Redis pub/sub for other workers."""
     global _sync_redis, _sync_redis_failed_at
@@ -193,6 +252,30 @@ async def _handle_redis_message(channel: str, data: str) -> None:
     try:
         msg = json.loads(data)
     except Exception:
+        return
+    if channel.startswith(_NSL1_CHANNEL_PREFIX):
+        if not isinstance(msg, dict) or msg.get("origin") == _WORKER_ID:
+            return
+        session_id = channel[len(_NSL1_CHANNEL_PREFIX):]
+        b64 = msg.get("b64")
+        target_role = str(msg.get("role") or "viewer")
+        if not session_id or not isinstance(b64, str):
+            return
+        try:
+            import base64
+
+            raw_bytes = base64.b64decode(b64)
+        except Exception:
+            return
+        with _lock:
+            handlers = list(_nsl1_binary_handlers)
+        for handler in handlers:
+            try:
+                res = handler(session_id, raw_bytes, target_role=target_role)
+                if asyncio.iscoroutine(res):
+                    await res
+            except Exception:
+                pass
         return
     if isinstance(msg, dict) and "payload" in msg:
         if msg.get("origin") == _WORKER_ID:
@@ -250,6 +333,7 @@ async def _fanout_main() -> None:
             pubsub = client.pubsub()
             await pubsub.psubscribe(_CHANNEL_PREFIX + "*")
             await pubsub.psubscribe(_WEBRTC_CHANNEL_PREFIX + "*")
+            await pubsub.psubscribe(_NSL1_CHANNEL_PREFIX + "*")
             backoff = 1.0
             async for message in pubsub.listen():
                 if message.get("type") != "pmessage":

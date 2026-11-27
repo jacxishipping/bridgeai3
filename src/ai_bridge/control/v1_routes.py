@@ -291,28 +291,131 @@ def attach_v1_routes(
 
     ws_subscribers: dict[str, set[WebSocket]] = {}
     ws_roles: dict[str, dict[WebSocket, str]] = {}
+    ws_loops: dict[WebSocket, Any] = {}
     ws_control_owner: dict[str, WebSocket | None] = {}
+    ws_viewer_needs_idr: dict[WebSocket, bool] = {}
+    ws_latest_idr: dict[str, bytes] = {}
+    ws_last_idr_req_mono: dict[str, float] = {}
     ws_event_loop: dict[str, Any] = {"loop": None}
 
+    async def _send_ws_json_safe(ws: WebSocket, payload: dict[str, Any], cur_loop: Any) -> None:
+        import asyncio
+
+        target_loop = ws_loops.get(ws)
+        if target_loop is not None and target_loop is not cur_loop:
+            await asyncio.wrap_future(asyncio.run_coroutine_threadsafe(ws.send_json(payload), target_loop))
+        else:
+            await ws.send_json(payload)
+
+    async def _send_ws_bytes_safe(ws: WebSocket, payload: bytes, cur_loop: Any) -> None:
+        import asyncio
+
+        target_loop = ws_loops.get(ws)
+        if target_loop is not None and target_loop is not cur_loop:
+            await asyncio.wrap_future(asyncio.run_coroutine_threadsafe(ws.send_bytes(payload), target_loop))
+        else:
+            await ws.send_bytes(payload)
+
     async def _deliver_local_ws(session_id: str, event: dict[str, Any]) -> None:
+        import asyncio
+
+        cur_loop = asyncio.get_running_loop()
+        target_role = event.get("_target_role")
+        clean_event = {k: v for k, v in event.items() if k != "_target_role"} if target_role else event
+        role_map = ws_roles.get(session_id) or {}
         peers = list(ws_subscribers.get(session_id) or [])
         for ws in peers:
+            if target_role and role_map.get(ws) != target_role:
+                continue
             try:
-                await ws.send_json(event)
+                await _send_ws_json_safe(ws, clean_event, cur_loop)
             except Exception:
                 ws_subscribers.get(session_id, set()).discard(ws)
 
+    def _inspect_nsl1_video_flags(data: bytes) -> tuple[bool, bool]:
+        """Fast 8-byte header check returning ``(is_video, is_keyframe)`` without copying payload."""
+        if len(data) < 20 or data[:4] != b"NSL1" or data[4] != 1:
+            return False, False
+        msg_type = data[5]
+        if msg_type != 1:
+            return False, False
+        flags = (data[6] << 8) | data[7]
+        return True, bool(flags & 0x0001)
+
+    async def _request_fresh_idr_throttled(session_id: str) -> None:
+        now = time.monotonic()
+        if now - ws_last_idr_req_mono.get(session_id, 0.0) < 0.45:
+            return
+        ws_last_idr_req_mono[session_id] = now
+        try:
+            from .. import screen_relay as screen_relay_mod
+
+            local_relay = screen_relay_mod.get_relay_session(session_id)
+            if local_relay is not None:
+                local_relay.request_keyframe()
+                return
+        except Exception:
+            pass
+        await _broadcast_ws(session_id, {"type": "request_keyframe", "_target_role": "agent"})
+
     async def _deliver_local_binary(session_id: str, data: bytes, *, target_role: str = "viewer") -> None:
+        import asyncio
+
+        cur_loop = asyncio.get_running_loop()
         role_map = ws_roles.get(session_id) or {}
         peers = [ws for ws, r in list(role_map.items()) if r == target_role]
-        for ws in peers:
+        if not peers:
+            return
+        is_video, is_keyframe = _inspect_nsl1_video_flags(data)
+        if is_video and is_keyframe and target_role == "viewer":
+            ws_latest_idr[session_id] = data
+
+        lagged = False
+
+        async def _send_one(ws: WebSocket) -> None:
+            nonlocal lagged
+            if target_role == "viewer" and is_video:
+                if ws_viewer_needs_idr.get(ws, False):
+                    if not is_keyframe:
+                        return
+                    ws_viewer_needs_idr[ws] = False
+                t0 = time.monotonic()
+                try:
+                    await _send_ws_bytes_safe(ws, data, cur_loop)
+                except Exception:
+                    ws_subscribers.get(session_id, set()).discard(ws)
+                    role_map.pop(ws, None)
+                    ws_viewer_needs_idr.pop(ws, None)
+                    return
+                if not is_keyframe and (time.monotonic() - t0) > 0.12:
+                    # Viewer TCP drain is lagging; shed subsequent P-frames without corrupting WS framing
+                    ws_viewer_needs_idr[ws] = True
+                    lagged = True
+                return
             try:
-                await ws.send_bytes(data)
+                await _send_ws_bytes_safe(ws, data, cur_loop)
             except Exception:
                 ws_subscribers.get(session_id, set()).discard(ws)
                 role_map.pop(ws, None)
+                ws_viewer_needs_idr.pop(ws, None)
+
+        for ws in peers:
+            await _send_one(ws)
+        if lagged:
+            await _request_fresh_idr_throttled(session_id)
+
+    async def _broadcast_binary(session_id: str, data: bytes, *, target_role: str = "viewer") -> None:
+        is_video, is_keyframe = _inspect_nsl1_video_flags(data)
+        if is_video and is_keyframe and target_role == "viewer":
+            ws_latest_idr[session_id] = data
+        await _deliver_local_binary(session_id, data, target_role=target_role)
+        agent_channel.publish_nsl1_binary(session_id, data, target_role=target_role, is_keyframe=is_keyframe)
 
     def _emit_binary_from_thread(session_id: str, data: bytes) -> None:
+        is_video, is_keyframe = _inspect_nsl1_video_flags(data)
+        if is_video and is_keyframe:
+            ws_latest_idr[session_id] = data
+        agent_channel.publish_nsl1_binary(session_id, data, target_role="viewer", is_keyframe=is_keyframe)
         loop = ws_event_loop.get("loop") or getattr(agent_channel, "_loop", None)
         if loop is None:
             return
@@ -324,6 +427,7 @@ def attach_v1_routes(
             pass
 
     agent_channel.register_webrtc_fanout_handler(_deliver_local_ws)
+    agent_channel.register_nsl1_binary_handler(_deliver_local_binary)
 
     async def _broadcast_ws(session_id: str, event: dict[str, Any]) -> None:
         await _deliver_local_ws(session_id, event)
@@ -1016,6 +1120,9 @@ def attach_v1_routes(
             screen_relay_mod.stop_relay_session(session_id)
         except Exception:
             pass
+        ws_latest_idr.pop(session_id, None)
+        ws_last_idr_req_mono.pop(session_id, None)
+        agent_channel.clear_cached_nsl1_keyframe(session_id)
         audit(actor, device_id, "v1_terminate_session", {"session_id": session_id}, "allowed")
         await _broadcast_ws(session_id, {"type": "session_terminated", "session_id": session_id})
         return format_session_v1(sess)
@@ -1323,7 +1430,9 @@ def attach_v1_routes(
         try:
             import asyncio
 
-            ws_event_loop["loop"] = asyncio.get_running_loop()
+            _cur = asyncio.get_running_loop()
+            ws_event_loop["loop"] = _cur
+            ws_loops[websocket] = _cur
         except Exception:
             pass
         ws_role = "agent" if dev_tok else "viewer"
@@ -1337,6 +1446,12 @@ def attach_v1_routes(
             if sess is not None:
                 await websocket.send_json({"type": "session_snapshot", "session": format_session_v1(sess)})
                 if ws_role == "viewer":
+                    cached_idr = ws_latest_idr.get(session_id) or agent_channel.get_cached_nsl1_keyframe(session_id)
+                    if cached_idr:
+                        try:
+                            await websocket.send_bytes(cached_idr)
+                        except Exception:
+                            pass
                     local_relay = screen_relay_mod.get_relay_session(session_id)
                     if local_relay is not None:
                         local_relay.request_keyframe()
@@ -1348,9 +1463,9 @@ def attach_v1_routes(
                 if raw_bytes is not None:
                     data = bytes(raw_bytes)
                     if ws_role == "agent":
-                        # Downstream agent -> viewers NSL1 video/cursor broadcast
+                        # Downstream agent -> viewers NSL1 video/cursor/clipboard broadcast across all workers
                         if len(data) >= screen_relay_mod.NSL1_HEADER_SIZE and data[:4] == screen_relay_mod.NSL1_MAGIC:
-                            await _deliver_local_binary(session_id, data, target_role="viewer")
+                            await _broadcast_binary(session_id, data, target_role="viewer")
                         continue
 
                     # Upstream viewer -> agent/local NSL1 ACK/CONTROL/INPUT
@@ -1362,15 +1477,15 @@ def attach_v1_routes(
                     local_relay = screen_relay_mod.get_relay_session(session_id)
                     if frame.msg_type == screen_relay_mod.NSL1_MSG_ACK:
                         if local_relay is not None:
-                            local_relay.note_ack(frame.seq)
+                            local_relay.note_ack(frame.seq, generation=frame.generation, raw_ack=data)
                         else:
-                            await _deliver_local_binary(session_id, data, target_role="agent")
+                            await _broadcast_binary(session_id, data, target_role="agent")
                         continue
                     if frame.msg_type == screen_relay_mod.NSL1_MSG_CONTROL:
                         if local_relay is not None:
                             local_relay.request_keyframe()
                         else:
-                            await _deliver_local_binary(session_id, data, target_role="agent")
+                            await _broadcast_binary(session_id, data, target_role="agent")
                         continue
                     if frame.msg_type == screen_relay_mod.NSL1_MSG_INPUT:
                         if _ps.is_emergency_stop(conn, app.state):
@@ -1405,7 +1520,7 @@ def attach_v1_routes(
                             except Exception as exc:
                                 await websocket.send_json({"type": "input_error", "detail": str(exc)})
                         else:
-                            await _deliver_local_binary(session_id, data, target_role="agent")
+                            await _broadcast_binary(session_id, data, target_role="agent")
                         continue
                     continue
 
@@ -1449,7 +1564,7 @@ def attach_v1_routes(
                     if local_relay is not None:
                         local_relay.request_keyframe()
                     else:
-                        await _broadcast_ws(session_id, {"type": "request_keyframe"})
+                        await _broadcast_ws(session_id, {"type": "request_keyframe", "_target_role": "agent"})
                 elif mtype == "claim_control" and ws_role == "viewer":
                     mode_now = str(sess.get("mode") or "view_only").lower()
                     perms_now = sess.get("permissions") or {}
@@ -1482,6 +1597,8 @@ def attach_v1_routes(
         finally:
             ws_subscribers.get(session_id, set()).discard(websocket)
             (ws_roles.get(session_id) or {}).pop(websocket, None)
+            ws_loops.pop(websocket, None)
+            ws_viewer_needs_idr.pop(websocket, None)
             if ws_control_owner.get(session_id) is websocket:
                 ws_control_owner.pop(session_id, None)
 

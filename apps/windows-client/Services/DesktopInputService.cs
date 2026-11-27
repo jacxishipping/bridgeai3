@@ -300,6 +300,36 @@ public static class DesktopInputService
         return totalPoints;
     }
 
+    public static void MouseButton(int x, int y, string button = "left", bool down = true)
+    {
+        MoveMouseInstant(x, y);
+        var (flagDown, flagUp) = ResolveMouseButtons(button);
+        uint flag = down ? flagDown : flagUp;
+        SendInput(1, new[]
+        {
+            new Input { Type = InputMouse, U = new InputUnion { Mi = new MouseInput { DwFlags = flag } } },
+        }, Marshal.SizeOf<Input>());
+    }
+
+    public static void KeyTransition(ushort virtualKey, bool down)
+    {
+        SendInput(1, new[]
+        {
+            new Input
+            {
+                Type = InputKeyboard,
+                U = new InputUnion
+                {
+                    Ki = new KeyboardInput
+                    {
+                        WVk = virtualKey,
+                        DwFlags = down ? 0u : KeyEventKeyUp,
+                    },
+                },
+            },
+        }, Marshal.SizeOf<Input>());
+    }
+
     public static void ClickMouse(int x, int y, string button = "left", bool doubleClick = false)
     {
         MoveMouse(x, y);

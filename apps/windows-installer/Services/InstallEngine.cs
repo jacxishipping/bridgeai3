@@ -213,25 +213,28 @@ public sealed class InstallEngine
 
     private static void StopRunningClientProcesses(Action<string> log)
     {
-        foreach (var proc in Process.GetProcessesByName("AIBridgeClient"))
+        foreach (var procName in new[] { "AIBridgeClient", "relay-engine" })
         {
-            try
+            foreach (var proc in Process.GetProcessesByName(procName))
             {
-                log($"Stopping running AIBridgeClient process (PID {proc.Id})...");
-                proc.CloseMainWindow();
-                if (!proc.WaitForExit(2500))
+                try
                 {
-                    proc.Kill(entireProcessTree: true);
-                    proc.WaitForExit(2500);
+                    log($"Stopping running {procName} process (PID {proc.Id})...");
+                    proc.CloseMainWindow();
+                    if (!proc.WaitForExit(2000))
+                    {
+                        proc.Kill(entireProcessTree: true);
+                        proc.WaitForExit(2000);
+                    }
                 }
-            }
-            catch
-            {
-                // Ignore race if process already exited
-            }
-            finally
-            {
-                proc.Dispose();
+                catch
+                {
+                    // Ignore race if process already exited
+                }
+                finally
+                {
+                    proc.Dispose();
+                }
             }
         }
     }

@@ -1212,27 +1212,39 @@ await RunTest("HybridA11yService: status, redaction, STALE_REF, idempotent actio
 });
 
 // 44. ScreenRelayService: nsl1 binary codec, 16-byte input records, 8 MiB cap & policy lock
-await RunTest("ScreenRelayService: nsl1 video/input codec, 8 MiB cap, status & View-Only policy lock", () =>
+await RunTest("ScreenRelayService: nsl1 video/ack/input codec, HID mapping, 8 MiB cap & View-Only policy lock", () =>
 {
-    var annexb = new byte[] { 0x00, 0x00, 0x00, 0x01, 0x67, 0x42, 0x00, 0x1F, 0x00, 0x00, 0x00, 0x01, 0x65, 0x88 };
+    Assert(ScreenRelayService.Nsl1MsgVideo == 1 && ScreenRelayService.Nsl1MsgAck == 2 && ScreenRelayService.Nsl1MsgInput == 3 && ScreenRelayService.Nsl1MsgCursor == 6, "Upstream NSL1 message IDs mismatch");
+    Assert(ScreenRelayService.ButtonLeft == 1 && ScreenRelayService.ButtonMiddle == 2 && ScreenRelayService.ButtonRight == 3, "Upstream mouse button IDs mismatch");
+
+    var annexb = new byte[] { 0x00, 0x00, 0x00, 0x01, 0x67, 0x64, 0x00, 0x1F, 0x00, 0x00, 0x00, 0x01, 0x65, 0x88 };
     var pkt = ScreenRelayService.EncodeVideoFrame(annexb, 1920, 1080, 987654321UL, isKeyframe: true, generation: 3, sequence: 7);
     Assert(pkt.Length == ScreenRelayService.Nsl1HeaderSize + ScreenRelayService.Nsl1VideoMetaSize + annexb.Length, "Unexpected NSL1 packet length");
 
     var decoded = ScreenRelayService.DecodeFrame(pkt);
-    Assert(decoded.Version == 1 && decoded.MsgType == ScreenRelayService.Nsl1MsgVideo && decoded.IsKeyframe, "Expected valid NSL1 video keyframe");
+    Assert(decoded.Version == 1 && decoded.MsgType == ScreenRelayService.Nsl1MsgVideo && decoded.Flags == 1 && decoded.IsKeyframe, "Expected valid NSL1 video keyframe with flags==1");
     Assert(decoded.Generation == 3 && decoded.Sequence == 7, "Expected generation=3 seq=7");
 
     var (w, h, ts, nal) = ScreenRelayService.DecodeVideoPayload(decoded.Payload);
     Assert(w == 1920 && h == 1080 && ts == 987654321UL && nal.Length == annexb.Length, "Video metadata mismatch");
+
+    var ackWait = ScreenRelayService.EncodeAckFrame(7, generation: 3, viewerWaitUs: 2400);
+    var decAck = ScreenRelayService.DecodeFrame(ackWait);
+    Assert(decAck.MsgType == ScreenRelayService.Nsl1MsgAck && decAck.Payload.Length == 4, "Expected 24-byte wait ACK");
+
+    Assert(ScreenRelayService.HidUsageToVirtualKey(4) == 'A' && ScreenRelayService.HidUsageToVirtualKey(40) == 0x0D && ScreenRelayService.HidUsageToVirtualKey(224) == 0xA2, "HID usage to VK mapping mismatch");
 
     // 16-byte big-endian input record decode + View-Only policy enforcement
     var recBytes = new byte[16];
     recBytes[0] = ScreenRelayService.InputPointerMove;
     System.Buffers.Binary.BinaryPrimitives.WriteUInt16BigEndian(recBytes.AsSpan(8, 2), 32768);
     System.Buffers.Binary.BinaryPrimitives.WriteUInt16BigEndian(recBytes.AsSpan(10, 2), 16384);
+    System.Buffers.Binary.BinaryPrimitives.WriteUInt16BigEndian(recBytes.AsSpan(12, 2), 0x0001);
+    System.Buffers.Binary.BinaryPrimitives.WriteUInt16BigEndian(recBytes.AsSpan(14, 2), 0x0002);
     var recs = ScreenRelayService.DecodeInputRecords(recBytes);
     Assert(recs.Count == 1 && recs[0].Type == ScreenRelayService.InputPointerMove, "Expected 1 pointer_move record");
     Assert(Math.Abs(recs[0].XNorm - 0.5) < 0.001 && Math.Abs(recs[0].YNorm - 0.25) < 0.001, "Normalized coordinates mismatch");
+    Assert(recs[0].Buttons == 1 && recs[0].Modifiers == 2, "Buttons/modifiers mask mismatch");
 
     var viewOnlyCfg = new AgentGuiConfig { Policy = new AgentPolicyConfig { AllowDesktopControl = false } };
     int blocked = ScreenRelayService.ExecutePolicyGatedInputRecords(recs, viewOnlyCfg, 1920, 1080);

@@ -27,12 +27,22 @@ import type {
 } from "../types";
 import { Button, Chip, StateBanner, StatusBadge, SurfaceCard } from "../components/ui";
 import {
+  NSL1_MSG_CLIPBOARD,
+  NSL1_MSG_CURSOR,
   NSL1_MSG_VIDEO,
+  decodeNsl1CursorPayload,
   decodeNsl1Packet,
   decodeNsl1VideoPayload,
+  domCodeToHidUsage,
   encodeNsl1Ack,
   encodeNsl1Click,
+  encodeNsl1Key,
+  encodeNsl1MouseButton,
+  encodeNsl1PointerMove,
+  encodeNsl1ReleaseAll,
   encodeNsl1Text,
+  encodeNsl1Wheel,
+  extractH264CodecFromAnnexB,
   webCodecsSupported,
 } from "../nsl1";
 
@@ -63,6 +73,7 @@ export function DesktopView({
   const [webrtcStatus, setWebrtcStatus] = useState<string>("idle");
   const [relayStatus, setRelayStatus] = useState<string>("idle");
   const [relayFrames, setRelayFrames] = useState<number>(0);
+  const [relayCursorCss, setRelayCursorCss] = useState<string | null>(null);
   const [audioTrackActive, setAudioTrackActive] = useState(false);
   const [audioMuted, setAudioMuted] = useState(true);
   const [audioBackend, setAudioBackend] = useState<string>("");
@@ -85,6 +96,11 @@ export function DesktopView({
   const relayWsRef = useRef<WebSocket | null>(null);
   const decoderRef = useRef<VideoDecoder | null>(null);
   const relayGotKeyframeRef = useRef<boolean>(false);
+  const relayCodecRef = useRef<string>("avc1.42e01f");
+  const relayPendingAcksRef = useRef<Array<{ seq: number; gen: number; arrivedMs: number }>>([]);
+  const relayReconnectTimerRef = useRef<number | null>(null);
+  const relayStoppingRef = useRef<boolean>(false);
+  const lastPointerMoveMsRef = useRef<number>(0);
   const relaySeqRef = useRef<number>(1);
   const sessionIdRef = useRef<string | null>(null);
   const seenAgentIce = useRef(0);
@@ -478,6 +494,13 @@ export function DesktopView({
       }
     }
     const sid = sessionIdRef.current;
+    relayStoppingRef.current = true;
+    if (relayReconnectTimerRef.current !== null) {
+      window.clearTimeout(relayReconnectTimerRef.current);
+      relayReconnectTimerRef.current = null;
+    }
+    relayPendingAcksRef.current = [];
+    setRelayCursorCss(null);
     sessionIdRef.current = null;
     if (sid) {
       try {
@@ -494,20 +517,24 @@ export function DesktopView({
     if (!webCodecsSupported()) {
       throw new Error("Browser WebCodecs VideoDecoder is not supported; use WebRTC or JPEG.");
     }
+    relayStoppingRef.current = false;
     setRelayStatus("connecting");
     setRelayFrames(0);
+    setRelayCursorCss(null);
     setFrameError("");
     relayGotKeyframeRef.current = false;
+    relayPendingAcksRef.current = [];
+    relayCodecRef.current = "avc1.42e01f";
     try {
       const mode = controlArmed && !controlBlockedReason ? "ai_assisted" : "view_only";
       const sess = await api.createWebRtcSession({
         device_id: deviceId,
         mode,
         transport: "screen_relay",
-        fps: 30,
-        scale: 0.85,
+        fps: 60,
+        scale: 1.0,
         monitor_index: selectedMonitorRef.current,
-        bitrate_kbps: 3500,
+        bitrate_kbps: 4500,
       });
       const sessionId = sess.session_id;
       sessionIdRef.current = sessionId;
@@ -525,11 +552,17 @@ export function DesktopView({
             if (ctx) ctx.drawImage(frame, 0, 0);
           }
           frame.close();
+          const ackItem = relayPendingAcksRef.current.shift();
+          if (ackItem && relayWsRef.current?.readyState === WebSocket.OPEN) {
+            const waitMs = Math.max(0, performance.now() - ackItem.arrivedMs);
+            relayWsRef.current.send(encodeNsl1Ack(ackItem.seq, ackItem.gen, waitMs));
+          }
           setRelayFrames((n) => n + 1);
           setRelayStatus("streaming");
         },
         error: (err) => {
           relayGotKeyframeRef.current = false;
+          relayPendingAcksRef.current = [];
           setFrameError(`WebCodecs decode error: ${err.message}`);
           if (relayWsRef.current?.readyState === WebSocket.OPEN) {
             relayWsRef.current.send(JSON.stringify({ type: "request_keyframe" }));
@@ -537,91 +570,166 @@ export function DesktopView({
         },
       });
       decoder.configure({
-        codec: "avc1.42E01F",
+        codec: relayCodecRef.current,
         optimizeForLatency: true,
       });
       decoderRef.current = decoder;
 
-      const ws = new WebSocket(wsUrl);
-      ws.binaryType = "arraybuffer";
-      relayWsRef.current = ws;
+      let reconnectBackoffMs = 500;
+      const openRelaySocket = (targetUrl: string) => {
+        if (relayStoppingRef.current) return;
+        const ws = new WebSocket(targetUrl);
+        ws.binaryType = "arraybuffer";
+        relayWsRef.current = ws;
 
-      ws.onopen = () => {
-        setRelayStatus("connected");
-        ws.send(JSON.stringify({ type: "request_keyframe" }));
-      };
+        ws.onopen = () => {
+          reconnectBackoffMs = 500;
+          setFrameError("");
+          setRelayStatus("connected");
+          ws.send(JSON.stringify({ type: "request_keyframe" }));
+        };
 
-      ws.onmessage = (ev) => {
-        if (ev.data instanceof ArrayBuffer) {
-          const pkt = decodeNsl1Packet(ev.data);
-          if (!pkt) return;
-          if (pkt.msgType === NSL1_MSG_VIDEO) {
-            const video = decodeNsl1VideoPayload(pkt.payload);
-            if (!video) return;
-            if (!relayGotKeyframeRef.current) {
-              if (!pkt.isKeyframe) return;
-              relayGotKeyframeRef.current = true;
-            }
-            const dec = decoderRef.current;
-            if (dec && dec.state === "configured") {
-              try {
-                dec.decode(
-                  new EncodedVideoChunk({
-                    type: pkt.isKeyframe ? "key" : "delta",
-                    timestamp: video.timestampUs,
-                    data: video.annexb,
-                  }),
-                );
-              } catch {
+        ws.onmessage = (ev) => {
+          if (ev.data instanceof ArrayBuffer) {
+            const pkt = decodeNsl1Packet(ev.data);
+            if (!pkt) return;
+            if (pkt.msgType === NSL1_MSG_VIDEO) {
+              const video = decodeNsl1VideoPayload(pkt.payload);
+              if (!video) return;
+              const dec = decoderRef.current;
+              if (!dec || dec.state === "closed") return;
+
+              if (pkt.isKeyframe) {
+                const spsCodec = extractH264CodecFromAnnexB(video.annexb);
+                if (dec.state !== "configured" || spsCodec !== relayCodecRef.current) {
+                  try {
+                    dec.configure({ codec: spsCodec, optimizeForLatency: true });
+                    relayCodecRef.current = spsCodec;
+                  } catch {
+                    // Keep existing decoder configuration if profile fallback needed
+                  }
+                }
+                relayGotKeyframeRef.current = true;
+              } else if (!relayGotKeyframeRef.current) {
+                if (ws.readyState === WebSocket.OPEN) {
+                  ws.send(encodeNsl1Ack(pkt.seq, pkt.generation, 0));
+                }
+                return;
+              }
+
+              // Shed P-frame buildup if browser tab falls behind (>4 frames queued)
+              if (!pkt.isKeyframe && dec.decodeQueueSize > 4) {
                 relayGotKeyframeRef.current = false;
                 if (ws.readyState === WebSocket.OPEN) {
+                  ws.send(encodeNsl1Ack(pkt.seq, pkt.generation, 0));
                   ws.send(JSON.stringify({ type: "request_keyframe" }));
                 }
+                return;
               }
+
+              if (dec.state === "configured") {
+                try {
+                  relayPendingAcksRef.current.push({
+                    seq: pkt.seq,
+                    gen: pkt.generation,
+                    arrivedMs: performance.now(),
+                  });
+                  dec.decode(
+                    new EncodedVideoChunk({
+                      type: pkt.isKeyframe ? "key" : "delta",
+                      timestamp: video.timestampUs,
+                      data: video.annexb,
+                    }),
+                  );
+                } catch {
+                  relayPendingAcksRef.current.pop();
+                  relayGotKeyframeRef.current = false;
+                  if (ws.readyState === WebSocket.OPEN) {
+                    ws.send(encodeNsl1Ack(pkt.seq, pkt.generation, 0));
+                    ws.send(JSON.stringify({ type: "request_keyframe" }));
+                  }
+                }
+              }
+              return;
             }
-            if (ws.readyState === WebSocket.OPEN) {
-              ws.send(encodeNsl1Ack(pkt.seq, pkt.generation));
+            if (pkt.msgType === NSL1_MSG_CURSOR) {
+              const cur = decodeNsl1CursorPayload(pkt.payload);
+              if (!cur) return;
+              if (cur.defaultCursor) {
+                setRelayCursorCss(null);
+              } else if (cur.width > 0 && cur.height > 0) {
+                const off = document.createElement("canvas");
+                off.width = cur.width;
+                off.height = cur.height;
+                const octx = off.getContext("2d");
+                if (octx) {
+                  const img = new ImageData(new Uint8ClampedArray(cur.pixels), cur.width, cur.height);
+                  octx.putImageData(img, 0, 0);
+                  setRelayCursorCss(`url(${off.toDataURL("image/png")}) ${cur.hotX} ${cur.hotY}, auto`);
+                }
+              }
+              return;
+            }
+            if (pkt.msgType === NSL1_MSG_CLIPBOARD) {
+              onToast("Remote desktop clipboard updated");
+              return;
+            }
+            return;
+          }
+          if (typeof ev.data === "string") {
+            try {
+              const msg = JSON.parse(ev.data) as {
+                type?: string;
+                ok?: boolean;
+                monitor_index?: number;
+                reason?: string;
+                detail?: string;
+              };
+              if (msg.type === "monitor_switched") {
+                relayGotKeyframeRef.current = false;
+                onToast(`Screen Relay switched to Display ${msg.monitor_index ?? selectedMonitorRef.current}`);
+              } else if (msg.type === "control_denied" || msg.type === "input_denied") {
+                onToast(`Control denied: ${msg.reason || "view_only"}`);
+              } else if (msg.type === "control_revoked") {
+                setControlArmed(false);
+                onToast("Control taken by another operator — returned to View-Only");
+              } else if (msg.type === "session_terminated") {
+                relayStoppingRef.current = true;
+                setStreaming(false);
+                onToast("Screen Relay session terminated");
+              }
+            } catch {
+              // ignore
             }
           }
-          return;
-        }
-        if (typeof ev.data === "string") {
-          try {
-            const msg = JSON.parse(ev.data) as {
-              type?: string;
-              ok?: boolean;
-              monitor_index?: number;
-              reason?: string;
-              detail?: string;
-            };
-            if (msg.type === "monitor_switched") {
-              relayGotKeyframeRef.current = false;
-              onToast(`Screen Relay switched to Display ${msg.monitor_index ?? selectedMonitorRef.current}`);
-            } else if (msg.type === "control_denied" || msg.type === "input_denied") {
-              onToast(`Control denied: ${msg.reason || "view_only"}`);
-            } else if (msg.type === "control_revoked") {
-              setControlArmed(false);
-              onToast("Control taken by another operator — returned to View-Only");
-            } else if (msg.type === "session_terminated") {
-              setStreaming(false);
-              onToast("Screen Relay session terminated");
-            }
-          } catch {
-            // ignore
+        };
+
+        ws.onerror = () => {
+          if (!relayStoppingRef.current) {
+            setFrameError("Screen Relay WebSocket interrupted — reconnecting…");
           }
-        }
+        };
+
+        ws.onclose = () => {
+          if (relayWsRef.current !== ws || relayStoppingRef.current || !sessionIdRef.current) {
+            if (relayWsRef.current === ws) setRelayStatus("closed");
+            return;
+          }
+          setRelayStatus("reconnecting");
+          relayGotKeyframeRef.current = false;
+          const wait = reconnectBackoffMs;
+          reconnectBackoffMs = Math.min(8000, reconnectBackoffMs * 2);
+          relayReconnectTimerRef.current = window.setTimeout(() => {
+            if (relayStoppingRef.current || !sessionIdRef.current) return;
+            void api
+              .buildSessionWsUrl(deviceId, sessionIdRef.current)
+              .then((freshUrl) => openRelaySocket(freshUrl))
+              .catch(() => openRelaySocket(targetUrl));
+          }, wait);
+        };
       };
 
-      ws.onerror = () => {
-        setFrameError("Screen Relay WebSocket error");
-        setRelayStatus("failed");
-      };
-
-      ws.onclose = () => {
-        if (relayWsRef.current === ws) {
-          setRelayStatus("closed");
-        }
-      };
+      openRelaySocket(wsUrl);
     } catch (err) {
       setFrameError(err instanceof Error ? err.message : "Screen Relay start failed");
       setRelayStatus("failed");
@@ -730,6 +838,88 @@ export function DesktopView({
     onToast(`Click dispatched (${Math.round(nx * 100)}%, ${Math.round(ny * 100)}%)`);
     if (activeTransport === "jpeg") {
       window.setTimeout(() => void pullFrame(), 300);
+    }
+  }
+
+  function computeModifierMask(e: { ctrlKey: boolean; shiftKey: boolean; altKey: boolean; metaKey: boolean }): number {
+    return (e.ctrlKey ? 1 : 0) | (e.shiftKey ? 2 : 0) | (e.altKey ? 4 : 0) | (e.metaKey ? 8 : 0);
+  }
+
+  function normalizedCanvasCoords(e: { currentTarget: HTMLElement; clientX: number; clientY: number }): [number, number] {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const nx = Math.max(0, Math.min(1, (e.clientX - rect.left) / Math.max(1, rect.width)));
+    const ny = Math.max(0, Math.min(1, (e.clientY - rect.top) / Math.max(1, rect.height)));
+    return [nx, ny];
+  }
+
+  function handleRelayCanvasPointerDown(e: React.PointerEvent<HTMLCanvasElement>) {
+    if (!controlArmed || controlBlockedReason) return;
+    e.currentTarget.focus();
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch {
+      // ignore synthetic pointer events
+    }
+    const ws = relayWsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    const [nx, ny] = normalizedCanvasCoords(e);
+    const btn: "left" | "middle" | "right" = e.button === 2 ? "right" : e.button === 1 ? "middle" : "left";
+    const mods = computeModifierMask(e);
+    ws.send(encodeNsl1PointerMove(nx, ny, e.buttons & 0x1f, mods));
+    ws.send(encodeNsl1MouseButton(nx, ny, btn, true, e.buttons & 0x1f, mods));
+  }
+
+  function handleRelayCanvasPointerMove(e: React.PointerEvent<HTMLCanvasElement>) {
+    if (!controlArmed || controlBlockedReason) return;
+    const now = performance.now();
+    if (now - lastPointerMoveMsRef.current < 16) return;
+    lastPointerMoveMsRef.current = now;
+    const ws = relayWsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    const [nx, ny] = normalizedCanvasCoords(e);
+    ws.send(encodeNsl1PointerMove(nx, ny, e.buttons & 0x1f, computeModifierMask(e)));
+  }
+
+  function handleRelayCanvasPointerUp(e: React.PointerEvent<HTMLCanvasElement>) {
+    if (!controlArmed || controlBlockedReason) return;
+    try {
+      if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+        e.currentTarget.releasePointerCapture(e.pointerId);
+      }
+    } catch {
+      // ignore
+    }
+    const ws = relayWsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    const [nx, ny] = normalizedCanvasCoords(e);
+    const btn: "left" | "middle" | "right" = e.button === 2 ? "right" : e.button === 1 ? "middle" : "left";
+    ws.send(encodeNsl1MouseButton(nx, ny, btn, false, e.buttons & 0x1f, computeModifierMask(e)));
+  }
+
+  function handleRelayCanvasWheel(e: React.WheelEvent<HTMLCanvasElement>) {
+    if (!controlArmed || controlBlockedReason) return;
+    const ws = relayWsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    e.preventDefault();
+    const [nx, ny] = normalizedCanvasCoords(e);
+    const horiz = Math.abs(e.deltaX) > Math.abs(e.deltaY);
+    ws.send(encodeNsl1Wheel(nx, ny, horiz ? e.deltaX : e.deltaY, horiz ? "horizontal" : "vertical"));
+  }
+
+  function handleRelayCanvasKey(e: React.KeyboardEvent<HTMLCanvasElement>, down: boolean) {
+    if (!controlArmed || controlBlockedReason) return;
+    const ws = relayWsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    if (down && e.key === "Escape" && !e.ctrlKey && !e.altKey && !e.metaKey && !e.shiftKey) {
+      ws.send(encodeNsl1ReleaseAll());
+      setControlArmed(false);
+      return;
+    }
+    const hid = domCodeToHidUsage(e.code);
+    if (hid !== null) {
+      e.preventDefault();
+      e.stopPropagation();
+      ws.send(encodeNsl1Key(hid, down, computeModifierMask(e)));
     }
   }
 
@@ -1203,21 +1393,33 @@ export function DesktopView({
             <div style={{ position: "relative", display: "inline-block", maxWidth: "100%" }}>
               <canvas
                 ref={canvasRef}
+                tabIndex={controlArmed && !controlBlockedReason ? 0 : -1}
                 aria-label={`Live Screen Relay WebCodecs desktop for ${selectedDevice?.name || deviceId}`}
-                onClick={(e) => void handleImageClick(e)}
+                onPointerDown={handleRelayCanvasPointerDown}
+                onPointerMove={handleRelayCanvasPointerMove}
+                onPointerUp={handleRelayCanvasPointerUp}
+                onWheel={handleRelayCanvasWheel}
+                onKeyDown={(e) => handleRelayCanvasKey(e, true)}
+                onKeyUp={(e) => handleRelayCanvasKey(e, false)}
+                onBlur={() => {
+                  if (relayWsRef.current?.readyState === WebSocket.OPEN) {
+                    relayWsRef.current.send(encodeNsl1ReleaseAll());
+                  }
+                }}
                 onContextMenu={(e) => {
                   if (controlArmed && !controlBlockedReason) {
                     e.preventDefault();
-                    void handleImageClick(e);
                   }
                 }}
                 style={{
                   width: "100%",
                   maxHeight: "68vh",
                   objectFit: "contain",
-                  cursor: controlArmed ? "crosshair" : "default",
+                  cursor: controlArmed ? relayCursorCss || "crosshair" : "default",
                   display: "block",
                   background: "#000",
+                  outline: "none",
+                  touchAction: controlArmed ? "none" : "auto",
                 }}
               />
               {highlightBoxStyle && activeHighlightNode && (

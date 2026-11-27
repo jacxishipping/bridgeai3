@@ -106,17 +106,27 @@ jobs:
 
   build-windows-installer:
     name: Build Windows C# WPF GUI Setup (AIBridgeSetup.exe)
+    needs: [bundle-screen-relay]
+    if: always()
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: "9.0.x"
+      - name: Download built Windows relay-engine bundle (if available)
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: screen-relay-windows-x64-${{ github.ref_name }}
+          path: .run/screen-relay-win
       - name: Run C# Windows client unit tests
         run: dotnet run --project apps/windows-client.Tests/AIBridgeClient.Tests.csproj -c Release
       - name: Build single-file AIBridgeSetup.exe installer
         shell: pwsh
-        run: pwsh scripts/build_windows_installer.ps1 -OutDir .run/windows-release
+        run: |
+          $RelayBundle = if (Test-Path ".run/screen-relay-win/bundle") { ".run/screen-relay-win/bundle" } else { ".run/screen-relay-win" }
+          pwsh scripts/build_windows_installer.ps1 -OutDir .run/windows-release -ScreenRelayDir $RelayBundle
       - uses: actions/upload-artifact@v4
         with:
           name: windows-installer-${{ github.ref_name }}
@@ -247,9 +257,9 @@ jobs:
           retention-days: 90
 
   bundle-screen-relay:
-    name: Bundle optional screen-relay engine (${{ matrix.os }})
-    if: inputs.bundle_screen_relay == true || vars.AI_BRIDGE_BUNDLE_SCREEN_RELAY == '1'
-    # Upstream vercel-labs/screen-relay builds are best-effort; never block core release publish.
+    name: Bundle native screen-relay engine (${{ matrix.os }})
+    if: inputs.bundle_screen_relay != false
+    # Upstream vercel-labs/screen-relay builds never block core release publish if upstream changes transiently.
     continue-on-error: true
     strategy:
       fail-fast: false
@@ -271,26 +281,47 @@ jobs:
         with:
           repository: vercel-labs/screen-relay
           path: screen-relay-src
-      - name: Install Linux screen-relay C++ build dependencies
+      - name: Build Linux relay-engine (X11 + Wayland)
         if: matrix.os == 'ubuntu-latest'
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq cmake ninja-build pkg-config libx264-dev libwebsockets-dev libx11-dev libxdamage-dev libxfixes-dev libxtst-dev libxext-dev libwayland-dev
-      - name: Build relay-engine binary
-        working-directory: screen-relay-src
-        shell: bash
+          sudo apt-get install -y -qq --no-install-recommends build-essential pkg-config \
+            libx11-dev libxext-dev libxdamage-dev libxfixes-dev libxtst-dev \
+            libx264-dev libwebsockets-dev libavcodec-dev libavutil-dev libswscale-dev \
+            libwayland-dev libwayland-bin wayland-protocols libxkbcommon-dev
+          make -C screen-relay-src -j"$(nproc)" BACKENDS="x11 wayland" relay-engine
+      - name: Build macOS relay-engine (ScreenCaptureKit)
+        if: matrix.os == 'macos-latest'
         run: |
-          cmake -S src/engine -B build -DCMAKE_BUILD_TYPE=Release
-          cmake --build build --config Release
+          brew install pkg-config libwebsockets x264 ffmpeg openssl
+          make -C screen-relay-src -j"$(sysctl -n hw.ncpu)" relay-engine
+      - name: Setup MSYS2 UCRT64 on Windows
+        if: matrix.os == 'windows-latest'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            make diffutils
+            mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-pkgconf
+            mingw-w64-ucrt-x86_64-libwebsockets mingw-w64-ucrt-x86_64-x264 mingw-w64-ucrt-x86_64-ffmpeg
+      - name: Build Windows relay-engine.exe + stage runtime DLLs
+        if: matrix.os == 'windows-latest'
+        shell: msys2 {0}
+        run: |
+          make -C screen-relay-src -j"$(nproc)" relay-engine
+          mkdir -p out/bundle
+          cp screen-relay-src/relay-engine.exe out/bundle/relay-engine.exe
+          ldd screen-relay-src/relay-engine.exe | awk '/\/ucrt64\/bin\// {print $3}' | xargs -r -I{} cp "{}" out/bundle/
       - name: Package & checksum relay-engine binary
         shell: bash
         run: |
           mkdir -p out
-          BIN_PATH=$(find screen-relay-src/build -type f \( -name "relay-engine" -o -name "relay-engine.exe" \) | head -n 1)
+          BIN_PATH=$(find screen-relay-src -maxdepth 2 -type f \( -name "relay-engine" -o -name "relay-engine.exe" \) | head -n 1)
           if [ -n "$BIN_PATH" ]; then
             EXT=$([[ "${{ matrix.os }}" == "windows-latest" ]] && echo ".exe" || echo "")
             cp "$BIN_PATH" "out/relay-engine-${{ matrix.target }}${EXT}"
-            (cd out && sha256sum * > "relay-engine-${{ matrix.target }}.sha256")
+            (cd out && sha256sum relay-engine-* > "relay-engine-${{ matrix.target }}.sha256")
           fi
       - uses: actions/upload-artifact@v4
         with:
