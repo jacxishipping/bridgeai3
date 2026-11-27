@@ -26,7 +26,10 @@ import threading
 import time
 from typing import Any
 
-import httpx
+try:
+    import httpx
+except ImportError:  # pragma: no cover - optional on stdlib-only polling/TUI hosts
+    httpx = None  # type: ignore[assignment]
 
 logger = logging.getLogger("ai_bridge.webrtc")
 
